@@ -7,18 +7,22 @@ Lauscht auf Port 5000 (bind 0.0.0.0) und zeigt Systemmetriken an:
 - Temperatur
 - Uptime
 - Festplattenbelegung
-Mit automatischem Refresh alle 5 Sekunden.
+- 24h In-Memory-Verlaufsgraph (Temperatur & CPU-Auslastung) mit Throttling-Markierungen
+Mit automatischem Refresh alle 5 Sekunden (Verlauf alle 10s).
 """
 
-import sys
-import os
-import time
-import glob
-import socket
-import platform
 import datetime
-import subprocess
+import glob
 import json
+import os
+import platform
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+from collections import deque
 
 # Automatische Installation von psutil falls nicht vorhanden
 try:
@@ -33,9 +37,16 @@ except ImportError:
         print(f"[WARN] Installation von psutil fehlgeschlagen: {e}. Verwende Fallback-Metriken.")
         psutil = None
 
+# Baseline CPU Initialisierung
+if psutil:
+    try:
+        psutil.cpu_percent(interval=None)
+    except Exception:
+        pass
+
 # Flask Import mit Fallback zu http.server falls nicht installiert
 try:
-    from flask import Flask, jsonify, render_template_string
+    from flask import Flask, jsonify, render_template_string, request
     USE_FLASK = True
 except ImportError:
     print("[INFO] Flask nicht installiert, verwende Python Standardbibliothek (http.server).")
@@ -70,13 +81,29 @@ def get_temperature():
 
     # 3. Raspberry Pi vcgencmd
     try:
-        out = subprocess.check_output(["vcgencmd", "measure_temp"], text=True)
+        out = subprocess.check_output(["vcgencmd", "measure_temp"], text=True, timeout=2)
         val = float(out.replace("temp=", "").replace("'C", "").strip())
         return round(val, 1), f"{val:.1f} °C"
     except Exception:
         pass
 
     return None, "N/A"
+
+
+def get_throttled_status():
+    """Liest den Throttling-Status via 'vcgencmd get_throttled' auf dem Raspberry Pi aus.
+    Bit 0x1 = Under-voltage / aktives Throttling.
+    Gibt ein Tupel (is_throttled: bool, raw_hex: str) zurück.
+    """
+    try:
+        out = subprocess.check_output(["vcgencmd", "get_throttled"], text=True, timeout=2).strip()
+        if "=" in out:
+            val = int(out.split("=")[1], 16)
+            is_throttled = bool(val & 0x1)
+            return is_throttled, hex(val)
+    except Exception:
+        pass
+    return False, "0x0"
 
 
 def format_uptime(seconds):
@@ -219,7 +246,132 @@ def get_system_stats():
         except Exception:
             stats["uptime"] = {"seconds": 0, "display": "N/A", "boot_time": "N/A"}
 
+    # Throttling-Status ermitteln (Pi vcgencmd)
+    is_throttled, throttled_raw = get_throttled_status()
+    stats["throttled"] = {
+        "active": is_throttled,
+        "raw": throttled_raw,
+    }
+
     return stats
+
+
+RANGE_MAP = {
+    "10m": 600,
+    "10min": 600,
+    "30m": 1800,
+    "30min": 1800,
+    "1h": 3600,
+    "12h": 43200,
+    "24h": 86400,
+}
+
+
+def parse_range_param(val):
+    """Parst den range-Parameter und liefert (range_label, seconds)."""
+    if not val:
+        return "1h", 3600
+    val_clean = str(val).strip().lower()
+    if val_clean in RANGE_MAP:
+        return val_clean, RANGE_MAP[val_clean]
+    import re
+    m = re.match(r"^(\d+)\s*(m|min|h|d)?$", val_clean)
+    if m:
+        num = int(m.group(1))
+        unit = m.group(2) or "m"
+        if unit in ("m", "min"):
+            return val_clean, num * 60
+        elif unit == "h":
+            return val_clean, num * 3600
+        elif unit == "d":
+            return val_clean, num * 86400
+    return "1h", 3600
+
+
+class MetricsHistory:
+    """In-Memory-History-Store mit 24h Retention und Thread-Safety.
+    Erfasst kontinuierlich Metriken (Temperatur, CPU-Last, Throttling).
+    """
+
+    def __init__(self, retention_seconds=86400, sample_interval=10):
+        self.retention_seconds = retention_seconds
+        self.sample_interval = sample_interval
+        self.lock = threading.RLock()
+        self.samples = deque()
+        self._running = False
+        self._thread = None
+
+    def record_current(self):
+        temp_val, _ = get_temperature()
+        if psutil:
+            try:
+                cpu_val = psutil.cpu_percent(interval=None)
+            except Exception:
+                cpu_val = 0.0
+        else:
+            try:
+                cores = os.cpu_count() or 1
+                cpu_val = round(min(100.0, (os.getloadavg()[0] / cores) * 100), 1)
+            except Exception:
+                cpu_val = 0.0
+
+        is_throttled, throttled_raw = get_throttled_status()
+        now_dt = datetime.datetime.now()
+        now_ts = time.time()
+
+        sample = {
+            "timestamp": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "time": now_dt.strftime("%H:%M:%S"),
+            "time_short": now_dt.strftime("%H:%M"),
+            "epoch": now_ts,
+            "cpu": cpu_val,
+            "temperature": temp_val,
+            "throttled": is_throttled,
+            "throttled_raw": throttled_raw,
+        }
+        with self.lock:
+            self.samples.append(sample)
+            cutoff = now_ts - self.retention_seconds
+            while self.samples and self.samples[0]["epoch"] < cutoff:
+                self.samples.popleft()
+        return sample
+
+    def get_samples(self, range_seconds=3600):
+        cutoff = time.time() - range_seconds
+        with self.lock:
+            return [dict(s) for s in self.samples if s["epoch"] >= cutoff]
+
+    def _worker(self):
+        while self._running:
+            for _ in range(self.sample_interval * 2):
+                if not self._running:
+                    return
+                time.sleep(0.5)
+            if not self._running:
+                return
+            try:
+                self.record_current()
+            except Exception as e:
+                print(f"[WARN] Fehler bei History-Sampling: {e}", file=sys.stderr)
+
+    def start(self):
+        with self.lock:
+            if not self._running:
+                self._running = True
+                try:
+                    self.record_current()
+                except Exception as e:
+                    print(f"[WARN] Initiales Sampling fehlgeschlagen: {e}", file=sys.stderr)
+                self._thread = threading.Thread(target=self._worker, name="MetricsHistoryWorker", daemon=True)
+                self._thread.start()
+
+    def stop(self):
+        self._running = False
+
+
+# Globaler In-Memory History Store
+history_store = MetricsHistory(retention_seconds=86400, sample_interval=10)
+history_store.start()
 
 
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -229,6 +381,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>System Dashboard - {{ stats.hostname }}</title>
   <noscript><meta http-equiv="refresh" content="5"></noscript>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
       --bg: #0f172a;
@@ -380,7 +533,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .fill-ram { background: #818cf8; }
     .fill-disk { background: #a855f7; }
     .fill-temp { background: #f97316; }
-    
+
     .badge-temp {
       display: inline-block;
       padding: 0.2rem 0.6rem;
@@ -389,6 +542,91 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-weight: 600;
       margin-top: 0.5rem;
     }
+
+    /* History Graph Styles */
+    .history-card {
+      grid-column: 1 / -1;
+    }
+    .history-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+    .range-btn-group {
+      display: inline-flex;
+      background: var(--bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 3px;
+      gap: 3px;
+    }
+    .btn-range {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 0.35rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .btn-range:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .btn-range.active {
+      background: var(--primary);
+      color: #0f172a;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    }
+    .chart-container {
+      position: relative;
+      height: 320px;
+      width: 100%;
+    }
+    .history-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 0.85rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      padding-top: 0.65rem;
+    }
+    .history-legend-badges {
+      display: flex;
+      gap: 1.25rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .legend-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .legend-line {
+      width: 14px;
+      height: 3px;
+      border-radius: 2px;
+      display: inline-block;
+    }
+    .legend-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      display: inline-block;
+      border: 1.5px solid #ffffff;
+      background: #ef4444;
+      box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
+    }
+
     footer {
       margin-top: 2rem;
       color: var(--text-muted);
@@ -480,6 +718,50 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div class="progress-bar-bg">
           <div class="progress-bar-fill fill-temp" id="tempBar" style="width: {% if stats.temperature.value %}{{ [stats.temperature.value, 100]|min }}{% else %}0{% endif %}%;"></div>
+        </div>
+      </div>
+
+      <!-- VERLAUFSGRAPH -->
+      <div class="card history-card">
+        <div>
+          <div class="history-header">
+            <div>
+              <div class="card-title" style="display: flex; align-items: center; gap: 0.5rem;">
+                <span>📈</span>
+                <span>System-Verlauf (Temperatur & CPU)</span>
+              </div>
+              <div class="card-subtitle" style="margin-bottom: 0; margin-top: 0.25rem;">
+                Kombinierter Verlauf mit dualer Achse &bull; Rote Markierungen = Throttling aktiv
+              </div>
+            </div>
+            <div class="range-btn-group" role="group" aria-label="Zeitraum auswählen">
+              <button type="button" class="btn-range" data-range="10min">10min</button>
+              <button type="button" class="btn-range" data-range="30min">30min</button>
+              <button type="button" class="btn-range active" data-range="1h">1h</button>
+              <button type="button" class="btn-range" data-range="12h">12h</button>
+              <button type="button" class="btn-range" data-range="24h">24h</button>
+            </div>
+          </div>
+          <div class="chart-container">
+            <canvas id="historyChart"></canvas>
+          </div>
+          <div class="history-footer">
+            <div class="history-legend-badges">
+              <span class="legend-badge">
+                <span class="legend-line" style="background: #f97316;"></span>
+                <span>Temperatur (°C, links)</span>
+              </span>
+              <span class="legend-badge">
+                <span class="legend-line" style="background: #38bdf8;"></span>
+                <span>CPU (%) (rechts)</span>
+              </span>
+              <span class="legend-badge">
+                <span class="legend-dot"></span>
+                <span>Throttling aktiv (Bit 0x1)</span>
+              </span>
+            </div>
+            <div id="historyStatus">Lade Verlauf...</div>
+          </div>
         </div>
       </div>
 
@@ -577,20 +859,272 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    // Progress bar animation for 5 second interval
+    // --- Verlaufsgraph (Chart.js) Logik ---
+    let currentRange = '1h';
+    let currentHistorySamples = [];
+    let historyChart = null;
+
+    function initHistoryChart() {
+      const canvas = document.getElementById('historyChart');
+      if (!canvas) return;
+      if (typeof Chart === 'undefined') {
+        setTimeout(initHistoryChart, 100);
+        return;
+      }
+      const ctx = canvas.getContext('2d');
+      historyChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [
+            {
+              label: 'Temperatur (°C)',
+              data: [],
+              borderColor: '#f97316',
+              backgroundColor: 'rgba(249, 115, 22, 0.08)',
+              yAxisID: 'yTemp',
+              tension: 0.25,
+              borderWidth: 2,
+              pointRadius: [],
+              pointBackgroundColor: [],
+              pointBorderColor: [],
+              pointBorderWidth: [],
+              fill: false,
+              spanGaps: true
+            },
+            {
+              label: 'CPU-Auslastung (%)',
+              data: [],
+              borderColor: '#38bdf8',
+              backgroundColor: 'rgba(56, 189, 248, 0.08)',
+              yAxisID: 'yCpu',
+              tension: 0.25,
+              borderWidth: 2,
+              pointRadius: 2,
+              pointHoverRadius: 5,
+              pointBackgroundColor: '#38bdf8',
+              fill: false,
+              spanGaps: true
+            },
+            {
+              label: 'Throttling aktiv (Bit 0x1)',
+              data: [],
+              yAxisID: 'yTemp',
+              showLine: false,
+              pointRadius: 7,
+              pointHoverRadius: 9,
+              pointBackgroundColor: '#ef4444',
+              pointBorderColor: '#ffffff',
+              pointBorderWidth: 2,
+              pointStyle: 'circle'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: {
+            duration: 250
+          },
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          plugins: {
+            legend: {
+              position: 'top',
+              labels: {
+                color: '#94a3b8',
+                font: { size: 12 },
+                usePointStyle: true,
+                boxWidth: 8,
+                boxHeight: 8
+              }
+            },
+            tooltip: {
+              backgroundColor: '#1e293b',
+              titleColor: '#f8fafc',
+              bodyColor: '#cbd5e1',
+              borderColor: '#475569',
+              borderWidth: 1,
+              padding: 10,
+              callbacks: {
+                label: function(context) {
+                  if (context.datasetIndex === 2) return null;
+                  const label = context.dataset.label || '';
+                  const unit = context.datasetIndex === 0 ? ' °C' : ' %';
+                  const val = context.parsed.y !== null ? context.parsed.y + unit : 'N/A';
+                  return ' ' + label + ': ' + val;
+                },
+                afterBody: function(tooltipItems) {
+                  if (!tooltipItems || !tooltipItems.length) return '';
+                  const idx = tooltipItems[0].dataIndex;
+                  const s = currentHistorySamples[idx];
+                  if (s && s.throttled) {
+                    return '⚠️ THROTTLING AKTIV! (Bit 0x1 / under-voltage)';
+                  }
+                  return '';
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: {
+                color: 'rgba(255, 255, 255, 0.05)'
+              },
+              ticks: {
+                color: '#94a3b8',
+                maxTicksLimit: 10,
+                maxRotation: 0
+              }
+            },
+            yTemp: {
+              type: 'linear',
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Temperatur (°C)',
+                color: '#f97316',
+                font: { size: 12, weight: '600' }
+              },
+              grid: {
+                color: 'rgba(255, 255, 255, 0.06)'
+              },
+              ticks: {
+                color: '#f97316',
+                callback: function(val) { return val + ' °C'; }
+              },
+              suggestedMin: 25,
+              suggestedMax: 80
+            },
+            yCpu: {
+              type: 'linear',
+              position: 'right',
+              title: {
+                display: true,
+                text: 'CPU (%)',
+                color: '#38bdf8',
+                font: { size: 12, weight: '600' }
+              },
+              grid: {
+                drawOnChartArea: false
+              },
+              ticks: {
+                color: '#38bdf8',
+                callback: function(val) { return val + ' %'; }
+              },
+              min: 0,
+              max: 100
+            }
+          }
+        }
+      });
+
+      fetchHistory(currentRange);
+    }
+
+    async function fetchHistory(range) {
+      const r = range || currentRange;
+      try {
+        const response = await fetch('/api/history?range=' + encodeURIComponent(r));
+        if (!response.ok) return;
+        const data = await response.json();
+        const samples = Array.isArray(data) ? data : (data.samples || []);
+        currentHistorySamples = samples;
+        updateChart(samples, r);
+      } catch (err) {
+        console.error('Fehler beim Abrufen der History-Daten:', err);
+        const statusEl = document.getElementById('historyStatus');
+        if (statusEl) statusEl.textContent = 'Fehler beim Laden';
+      }
+    }
+
+    function updateChart(samples, range) {
+      if (!historyChart) return;
+
+      const labels = samples.map(function(s) {
+        return s.time || (s.timestamp ? s.timestamp.split(' ')[1] : '');
+      });
+      const temps = samples.map(function(s) { return s.temperature; });
+      const cpus = samples.map(function(s) { return s.cpu; });
+      const throttledData = samples.map(function(s) {
+        return s.throttled ? (s.temperature !== null ? s.temperature : s.cpu) : null;
+      });
+
+      const isMany = samples.length > 60;
+      const tempPointRadius = samples.map(function(s) {
+        return s.throttled ? 6 : (isMany ? 0 : 2);
+      });
+      const tempPointBg = samples.map(function(s) {
+        return s.throttled ? '#ef4444' : '#f97316';
+      });
+      const tempPointBorder = samples.map(function(s) {
+        return s.throttled ? '#ffffff' : '#f97316';
+      });
+      const tempPointWidth = samples.map(function(s) {
+        return s.throttled ? 2 : 1;
+      });
+
+      historyChart.data.labels = labels;
+      historyChart.data.datasets[0].data = temps;
+      historyChart.data.datasets[0].pointRadius = tempPointRadius;
+      historyChart.data.datasets[0].pointBackgroundColor = tempPointBg;
+      historyChart.data.datasets[0].pointBorderColor = tempPointBorder;
+      historyChart.data.datasets[0].pointBorderWidth = tempPointWidth;
+
+      historyChart.data.datasets[1].data = cpus;
+      historyChart.data.datasets[1].pointRadius = isMany ? 0 : 2;
+
+      historyChart.data.datasets[2].data = throttledData;
+
+      historyChart.update('none');
+
+      const statusEl = document.getElementById('historyStatus');
+      if (statusEl) {
+        const throttledCount = samples.filter(function(s) { return s.throttled; }).length;
+        let text = samples.length + ' Datenpunkte (' + range + ')';
+        if (throttledCount > 0) {
+          text += ' &bull; <span style="color:#ef4444;font-weight:700;">⚠️ ' + throttledCount + ' Throttling-Ereignis(se)</span>';
+        } else {
+          text += ' &bull; <span style="color:#10b981;">✓ Kein Throttling</span>';
+        }
+        statusEl.innerHTML = text;
+      }
+    }
+
+    // Range-Buttons Listener
+    document.querySelectorAll('.btn-range').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        document.querySelectorAll('.btn-range').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        currentRange = btn.getAttribute('data-range');
+        fetchHistory(currentRange);
+      });
+    });
+
+    // Refresh-Balken & periodisches Update
     let progress = 0;
     const intervalMs = 5000;
     const stepMs = 100;
     const bar = document.getElementById('refreshBar');
+    let historyCycle = 0;
 
     setInterval(() => {
       progress += (stepMs / intervalMs) * 100;
       if (progress >= 100) {
         progress = 0;
         fetchStats();
+        historyCycle++;
+        if (historyCycle % 2 === 0) {
+          fetchHistory(currentRange);
+        }
       }
       bar.style.width = progress + '%';
     }, stepMs);
+
+    // Initialisiere Verlaufschart
+    initHistoryChart();
   </script>
 </body>
 </html>
@@ -603,23 +1137,23 @@ def render_html_fallback(stats):
     temp_min_100 = min(temp_val, 100)
     html = DASHBOARD_HTML
     replacements = {
-      "{{ stats.hostname }}": str(stats["hostname"]),
-      "{{ stats.platform }}": str(stats["platform"]),
-      "{{ stats.cpu.percent }}": str(stats["cpu"]["percent"]),
-      "{{ stats.cpu.cores }}": str(stats["cpu"]["cores"]),
-      "{{ stats.ram.percent }}": str(stats["ram"]["percent"]),
-      "{{ stats.ram.used_gb }}": str(stats["ram"]["used_gb"]),
-      "{{ stats.ram.total_gb }}": str(stats["ram"]["total_gb"]),
-      "{{ stats.disk.percent }}": str(stats["disk"]["percent"]),
-      "{{ stats.disk.used_gb }}": str(stats["disk"]["used_gb"]),
-      "{{ stats.disk.total_gb }}": str(stats["disk"]["total_gb"]),
-      "{{ stats.disk.free_gb }}": str(stats["disk"]["free_gb"]),
-      "{{ stats.temperature.display }}": str(stats["temperature"]["display"]),
-      "{{ stats.temperature.value or 'null' }}": str(stats["temperature"]["value"] if stats["temperature"]["value"] is not None else "null"),
-      "{% if stats.temperature.value %}{{ [stats.temperature.value, 100]|min }}{% else %}0{% endif %}": str(temp_min_100),
-      "{{ stats.uptime.display }}": str(stats["uptime"]["display"]),
-      "{{ stats.uptime.boot_time }}": str(stats["uptime"]["boot_time"]),
-      "{{ stats.timestamp }}": str(stats["timestamp"]),
+        "{{ stats.hostname }}": str(stats["hostname"]),
+        "{{ stats.platform }}": str(stats["platform"]),
+        "{{ stats.cpu.percent }}": str(stats["cpu"]["percent"]),
+        "{{ stats.cpu.cores }}": str(stats["cpu"]["cores"]),
+        "{{ stats.ram.percent }}": str(stats["ram"]["percent"]),
+        "{{ stats.ram.used_gb }}": str(stats["ram"]["used_gb"]),
+        "{{ stats.ram.total_gb }}": str(stats["ram"]["total_gb"]),
+        "{{ stats.disk.percent }}": str(stats["disk"]["percent"]),
+        "{{ stats.disk.used_gb }}": str(stats["disk"]["used_gb"]),
+        "{{ stats.disk.total_gb }}": str(stats["disk"]["total_gb"]),
+        "{{ stats.disk.free_gb }}": str(stats["disk"]["free_gb"]),
+        "{{ stats.temperature.display }}": str(stats["temperature"]["display"]),
+        "{{ stats.temperature.value or 'null' }}": str(stats["temperature"]["value"] if stats["temperature"]["value"] is not None else "null"),
+        "{% if stats.temperature.value %}{{ [stats.temperature.value, 100]|min }}{% else %}0{% endif %}": str(temp_min_100),
+        "{{ stats.uptime.display }}": str(stats["uptime"]["display"]),
+        "{{ stats.uptime.boot_time }}": str(stats["uptime"]["boot_time"]),
+        "{{ stats.timestamp }}": str(stats["timestamp"]),
     }
     for key, val in replacements.items():
         html = html.replace(key, val)
@@ -639,16 +1173,45 @@ if USE_FLASK:
         stats = get_system_stats()
         return jsonify(stats)
 
+    @app.route("/api/history")
+    def api_history():
+        range_param = request.args.get("range", "1h")
+        range_label, seconds = parse_range_param(range_param)
+        samples = history_store.get_samples(range_seconds=seconds)
+        return jsonify({
+            "range": range_param,
+            "seconds": seconds,
+            "count": len(samples),
+            "samples": samples,
+        })
+
     def run_server():
-        print("[START] Starte Flask Dashboard Server auf http://0.0.0.0:5000 ...")
+        print("[START] Starte Flask Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
         app.run(host="0.0.0.0", port=5000, debug=False)
 
 else:
     class DashboardHTTPHandler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path == "/api/stats":
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/api/stats":
                 stats = get_system_stats()
                 data = json.dumps(stats).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/history":
+                query = urllib.parse.parse_qs(parsed.query)
+                range_param = query.get("range", ["1h"])[0]
+                range_label, seconds = parse_range_param(range_param)
+                samples = history_store.get_samples(range_seconds=seconds)
+                data = json.dumps({
+                    "range": range_param,
+                    "seconds": seconds,
+                    "count": len(samples),
+                    "samples": samples,
+                }).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
@@ -670,7 +1233,7 @@ else:
     def run_server():
         server_address = ("0.0.0.0", 5000)
         httpd = HTTPServer(server_address, DashboardHTTPHandler)
-        print("[START] Starte Standard-HTTP Dashboard Server auf http://0.0.0.0:5000 ...")
+        print("[START] Starte Standard-HTTP Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
         httpd.serve_forever()
 
 
