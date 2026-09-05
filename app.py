@@ -394,21 +394,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       --warning: #f59e0b;
       --danger: #ef4444;
       --bar-bg: #334155;
+      --purple: #c084fc;
     }
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-tap-highlight-color: transparent;
     }
     body {
       background: var(--bg);
       color: var(--text-main);
       min-height: 100vh;
-      padding: 2rem 1rem;
+      padding: 1.5rem 1rem;
       display: flex;
       flex-direction: column;
       align-items: center;
+      -webkit-font-smoothing: antialiased;
     }
     .container {
       width: 100%;
@@ -418,7 +421,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 2rem;
+      margin-bottom: 1.5rem;
       flex-wrap: wrap;
       gap: 1rem;
       border-bottom: 1px solid var(--card-border);
@@ -434,8 +437,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .title-group p {
       color: var(--text-muted);
-      font-size: 0.9rem;
+      font-size: 0.88rem;
       margin-top: 0.25rem;
+      word-break: break-word;
     }
     .status-badge {
       display: inline-flex;
@@ -446,8 +450,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       color: #34d399;
       padding: 0.4rem 0.85rem;
       border-radius: 9999px;
-      font-size: 0.85rem;
+      font-size: 0.82rem;
       font-weight: 600;
+      white-space: nowrap;
     }
     .dot {
       width: 8px;
@@ -475,16 +480,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       width: 0%;
       transition: width 0.1s linear;
     }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 1.25rem;
-    }
+
+    /* Cards Base */
     .card {
       background: var(--card-bg);
       border: 1px solid var(--card-border);
       border-radius: 12px;
-      padding: 1.5rem;
+      padding: 1.35rem;
       box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
       display: flex;
       flex-direction: column;
@@ -494,10 +496,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 1rem;
+      margin-bottom: 0.85rem;
     }
     .card-title {
-      font-size: 0.95rem;
+      font-size: 0.9rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--text-muted);
@@ -507,15 +509,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-size: 1.3rem;
     }
     .card-value {
-      font-size: 2.2rem;
+      font-size: 2.1rem;
       font-weight: 700;
-      margin-bottom: 0.5rem;
+      margin-bottom: 0.45rem;
       color: #fff;
+      line-height: 1.2;
+    }
+    .card-value-sm {
+      font-size: 1.75rem;
     }
     .card-subtitle {
       font-size: 0.85rem;
       color: var(--text-muted);
-      margin-bottom: 1rem;
+      margin-bottom: 0.9rem;
     }
     .progress-bar-bg {
       background: var(--bar-bg);
@@ -540,20 +546,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       border-radius: 6px;
       font-size: 0.8rem;
       font-weight: 600;
-      margin-top: 0.5rem;
+      margin-top: 0.25rem;
     }
 
-    /* History Graph Styles */
+    /* 1. History Graph (Ganz oben prominent) */
     .history-card {
-      grid-column: 1 / -1;
+      margin-bottom: 1.5rem;
+      padding: 1.35rem;
     }
     .history-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
       flex-wrap: wrap;
-      gap: 0.75rem;
-      margin-bottom: 0.75rem;
+      gap: 0.85rem;
+      margin-bottom: 0.85rem;
+    }
+    .history-title-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+    .history-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .history-subtitle {
+      font-size: 0.82rem;
+      color: var(--text-muted);
     }
     .range-btn-group {
       display: inline-flex;
@@ -567,12 +591,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background: transparent;
       border: none;
       color: var(--text-muted);
-      padding: 0.35rem 0.75rem;
+      padding: 0.4rem 0.8rem;
       border-radius: 6px;
       font-size: 0.82rem;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.2s ease;
+      min-height: 38px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: manipulation;
     }
     .btn-range:hover {
       color: var(--text-main);
@@ -596,13 +625,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-size: 0.8rem;
       color: var(--text-muted);
       flex-wrap: wrap;
-      gap: 0.5rem;
+      gap: 0.6rem;
       border-top: 1px solid rgba(255, 255, 255, 0.06);
-      padding-top: 0.65rem;
+      padding-top: 0.75rem;
     }
     .history-legend-badges {
       display: flex;
-      gap: 1.25rem;
+      gap: 1rem;
       align-items: center;
       flex-wrap: wrap;
     }
@@ -627,10 +656,202 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
     }
 
-    footer {
-      margin-top: 2rem;
+    /* 2. Status Grid (Darunter) */
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.25rem;
+      margin-bottom: 2rem;
+    }
+    .card-uptime {
+      grid-column: 1 / -1;
+    }
+
+    /* 3. Web-Services & Schnellzugriff-Links */
+    .services-section {
+      margin-bottom: 2rem;
+    }
+    .services-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding-bottom: 0.75rem;
+    }
+    .services-title-group {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .services-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .services-network-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      color: var(--primary);
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.78rem;
+    }
+    .services-network-badge code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: #e0f2fe;
+      font-weight: 600;
+      font-size: 0.8rem;
+    }
+    .ts-dot {
+      width: 7px;
+      height: 7px;
+      background-color: var(--primary);
+      border-radius: 50%;
+      box-shadow: 0 0 6px var(--primary);
+    }
+    .services-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+    .service-tile {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 1.1rem 1.15rem;
+      text-decoration: none;
+      color: inherit;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 0.75rem;
+      min-height: 94px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+      touch-action: manipulation;
+    }
+    .service-tile:hover {
+      border-color: var(--primary);
+      background: #243248;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 16px -2px rgba(56, 189, 248, 0.18);
+    }
+    .service-tile:active {
+      transform: scale(0.98);
+      background: #1a2333;
+    }
+    .service-tile-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .service-tile-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      min-width: 0;
+    }
+    .service-tile-icon {
+      font-size: 1.35rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      flex-shrink: 0;
+    }
+    .icon-xdcc {
+      background: rgba(192, 132, 252, 0.12);
+      border-color: rgba(192, 132, 252, 0.3);
+    }
+    .icon-dash {
+      background: rgba(56, 189, 248, 0.12);
+      border-color: rgba(56, 189, 248, 0.3);
+    }
+    .icon-lan {
+      background: rgba(16, 185, 129, 0.12);
+      border-color: rgba(16, 185, 129, 0.3);
+    }
+    .service-tile-name {
+      font-weight: 700;
+      font-size: 1rem;
+      color: #fff;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .service-tile-route {
+      font-size: 0.78rem;
       color: var(--text-muted);
-      font-size: 0.85rem;
+      margin-top: 2px;
+    }
+    .badge-port {
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 0.25rem 0.55rem;
+      border-radius: 6px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .badge-port-3000 {
+      background: rgba(192, 132, 252, 0.18);
+      color: #c084fc;
+      border: 1px solid rgba(192, 132, 252, 0.35);
+    }
+    .badge-port-5000 {
+      background: rgba(56, 189, 248, 0.18);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+    .badge-port-lan {
+      background: rgba(16, 185, 129, 0.18);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+    .service-tile-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(15, 23, 42, 0.65);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 0.45rem 0.75rem;
+      border-radius: 8px;
+    }
+    .service-tile-url {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.78rem;
+      color: #cbd5e1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .service-tile-arrow {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--primary);
+      flex-shrink: 0;
+      transition: transform 0.15s ease;
+    }
+    .service-tile:hover .service-tile-arrow {
+      transform: translate(2px, -2px);
+    }
+
+    footer {
+      margin-top: 1.5rem;
+      color: var(--text-muted);
+      font-size: 0.82rem;
       display: flex;
       justify-content: space-between;
       flex-wrap: wrap;
@@ -638,6 +859,146 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       border-top: 1px solid var(--card-border);
       padding-top: 1rem;
       width: 100%;
+    }
+
+    /* Mobile Breakpoints (< 640px) */
+    @media (max-width: 640px) {
+      body {
+        padding: 0.75rem 0.5rem;
+      }
+      header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.6rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.75rem;
+      }
+      .title-group h1 {
+        font-size: 1.35rem;
+      }
+      .title-group p {
+        font-size: 0.78rem;
+      }
+      .status-badge {
+        font-size: 0.75rem;
+        padding: 0.3rem 0.65rem;
+      }
+      .refresh-bar-container {
+        margin-bottom: 1rem;
+      }
+      .history-card {
+        padding: 0.85rem;
+        margin-bottom: 1rem;
+        border-radius: 10px;
+      }
+      .history-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.65rem;
+      }
+      .history-title {
+        font-size: 0.95rem;
+      }
+      .history-subtitle {
+        font-size: 0.75rem;
+      }
+      .range-btn-group {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+      }
+      .btn-range {
+        flex: 1;
+        min-height: 42px;
+        padding: 0.4rem 0.15rem;
+        font-size: 0.78rem;
+      }
+      .chart-container {
+        height: 230px;
+      }
+      .history-footer {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.45rem;
+        font-size: 0.74rem;
+        padding-top: 0.5rem;
+      }
+      .history-legend-badges {
+        gap: 0.7rem;
+      }
+      .status-grid {
+        grid-template-columns: 1fr;
+        gap: 0.75rem;
+        margin-bottom: 1.25rem;
+      }
+      .card {
+        padding: 1rem;
+        border-radius: 10px;
+      }
+      .card-title {
+        font-size: 0.82rem;
+      }
+      .card-value {
+        font-size: 1.8rem;
+        margin-bottom: 0.3rem;
+      }
+      .card-value-sm {
+        font-size: 1.5rem;
+      }
+      .card-subtitle {
+        font-size: 0.78rem;
+        margin-bottom: 0.7rem;
+      }
+      .services-section {
+        margin-bottom: 1.25rem;
+      }
+      .services-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+      }
+      .services-title {
+        font-size: 1.05rem;
+      }
+      .services-network-badge {
+        width: 100%;
+        box-sizing: border-box;
+        font-size: 0.72rem;
+        padding: 0.35rem 0.55rem;
+      }
+      .services-network-badge code {
+        font-size: 0.72rem;
+      }
+      .services-grid {
+        grid-template-columns: 1fr;
+        gap: 0.75rem;
+      }
+      .service-tile {
+        padding: 0.9rem 1rem;
+        min-height: 86px;
+        border-radius: 10px;
+      }
+      footer {
+        font-size: 0.75rem;
+        margin-top: 1rem;
+      }
+    }
+
+    /* Small Mobile Screen (< 400px) */
+    @media (max-width: 400px) {
+      body {
+        padding: 0.5rem 0.35rem;
+      }
+      .chart-container {
+        height: 200px;
+      }
+      .btn-range {
+        font-size: 0.72rem;
+        min-height: 40px;
+      }
+      .card-value {
+        font-size: 1.6rem;
+      }
     }
   </style>
 </head>
@@ -658,8 +1019,53 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="refresh-bar" id="refreshBar"></div>
     </div>
 
-    <div class="grid">
-      <!-- CPU -->
+    <!-- 1. GANZ OBEN: VERLAUFSGRAPH FÜR CPU & TEMPERATUR (KOMBINIERTER CHART) PROMINENT PLATZIERT -->
+    <div class="card history-card">
+      <div>
+        <div class="history-header">
+          <div class="history-title-group">
+            <div class="history-title">
+              <span>📈</span>
+              <span>System-Verlauf (Temperatur & CPU)</span>
+            </div>
+            <div class="history-subtitle">
+              Kombinierter 24h-Verlauf &bull; Duale Achse &bull; Throttling-Markierungen
+            </div>
+          </div>
+          <div class="range-btn-group" role="group" aria-label="Zeitraum auswählen">
+            <button type="button" class="btn-range" data-range="10min">10min</button>
+            <button type="button" class="btn-range" data-range="30min">30min</button>
+            <button type="button" class="btn-range active" data-range="1h">1h</button>
+            <button type="button" class="btn-range" data-range="12h">12h</button>
+            <button type="button" class="btn-range" data-range="24h">24h</button>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="historyChart"></canvas>
+        </div>
+        <div class="history-footer">
+          <div class="history-legend-badges">
+            <span class="legend-badge">
+              <span class="legend-line" style="background: #f97316;"></span>
+              <span>Temperatur (°C, links)</span>
+            </span>
+            <span class="legend-badge">
+              <span class="legend-line" style="background: #38bdf8;"></span>
+              <span>CPU (%) (rechts)</span>
+            </span>
+            <span class="legend-badge">
+              <span class="legend-dot"></span>
+              <span>Throttling aktiv (Bit 0x1)</span>
+            </span>
+          </div>
+          <div id="historyStatus">Lade Verlauf...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. DARUNTER: DIE STATUS-KARTEN (CPU, TEMPERATUR, RAM, DISK, UPTIME) -->
+    <div class="status-grid">
+      <!-- 1. CPU-Auslastung -->
       <div class="card">
         <div>
           <div class="card-header">
@@ -674,37 +1080,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- RAM -->
-      <div class="card">
-        <div>
-          <div class="card-header">
-            <span class="card-title">Arbeitsspeicher (RAM)</span>
-            <span class="card-icon">🧠</span>
-          </div>
-          <div class="card-value" id="ramPercent">{{ stats.ram.percent }}%</div>
-          <div class="card-subtitle" id="ramDetails">{{ stats.ram.used_gb }} GB / {{ stats.ram.total_gb }} GB verwendet</div>
-        </div>
-        <div class="progress-bar-bg">
-          <div class="progress-bar-fill fill-ram" id="ramBar" style="width: {{ stats.ram.percent }}%;"></div>
-        </div>
-      </div>
-
-      <!-- DISK -->
-      <div class="card">
-        <div>
-          <div class="card-header">
-            <span class="card-title">Festplatte (/)</span>
-            <span class="card-icon">💾</span>
-          </div>
-          <div class="card-value" id="diskPercent">{{ stats.disk.percent }}%</div>
-          <div class="card-subtitle" id="diskDetails">{{ stats.disk.used_gb }} GB / {{ stats.disk.total_gb }} GB ({{ stats.disk.free_gb }} GB frei)</div>
-        </div>
-        <div class="progress-bar-bg">
-          <div class="progress-bar-fill fill-disk" id="diskBar" style="width: {{ stats.disk.percent }}%;"></div>
-        </div>
-      </div>
-
-      <!-- TEMPERATUR -->
+      <!-- 2. CPU-Temperatur -->
       <div class="card">
         <div>
           <div class="card-header">
@@ -721,62 +1097,154 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- VERLAUFSGRAPH -->
-      <div class="card history-card">
+      <!-- 3. Arbeitsspeicher (RAM) -->
+      <div class="card">
         <div>
-          <div class="history-header">
-            <div>
-              <div class="card-title" style="display: flex; align-items: center; gap: 0.5rem;">
-                <span>📈</span>
-                <span>System-Verlauf (Temperatur & CPU)</span>
-              </div>
-              <div class="card-subtitle" style="margin-bottom: 0; margin-top: 0.25rem;">
-                Kombinierter Verlauf mit dualer Achse &bull; Rote Markierungen = Throttling aktiv
-              </div>
-            </div>
-            <div class="range-btn-group" role="group" aria-label="Zeitraum auswählen">
-              <button type="button" class="btn-range" data-range="10min">10min</button>
-              <button type="button" class="btn-range" data-range="30min">30min</button>
-              <button type="button" class="btn-range active" data-range="1h">1h</button>
-              <button type="button" class="btn-range" data-range="12h">12h</button>
-              <button type="button" class="btn-range" data-range="24h">24h</button>
-            </div>
+          <div class="card-header">
+            <span class="card-title">Arbeitsspeicher (RAM)</span>
+            <span class="card-icon">🧠</span>
           </div>
-          <div class="chart-container">
-            <canvas id="historyChart"></canvas>
-          </div>
-          <div class="history-footer">
-            <div class="history-legend-badges">
-              <span class="legend-badge">
-                <span class="legend-line" style="background: #f97316;"></span>
-                <span>Temperatur (°C, links)</span>
-              </span>
-              <span class="legend-badge">
-                <span class="legend-line" style="background: #38bdf8;"></span>
-                <span>CPU (%) (rechts)</span>
-              </span>
-              <span class="legend-badge">
-                <span class="legend-dot"></span>
-                <span>Throttling aktiv (Bit 0x1)</span>
-              </span>
-            </div>
-            <div id="historyStatus">Lade Verlauf...</div>
-          </div>
+          <div class="card-value" id="ramPercent">{{ stats.ram.percent }}%</div>
+          <div class="card-subtitle" id="ramDetails">{{ stats.ram.used_gb }} GB / {{ stats.ram.total_gb }} GB verwendet</div>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill fill-ram" id="ramBar" style="width: {{ stats.ram.percent }}%;"></div>
         </div>
       </div>
 
-      <!-- UPTIME -->
-      <div class="card" style="grid-column: 1 / -1;">
+      <!-- 4. Festplatte (/) -->
+      <div class="card">
+        <div>
+          <div class="card-header">
+            <span class="card-title">Festplatte (/)</span>
+            <span class="card-icon">💾</span>
+          </div>
+          <div class="card-value" id="diskPercent">{{ stats.disk.percent }}%</div>
+          <div class="card-subtitle" id="diskDetails">{{ stats.disk.used_gb }} GB / {{ stats.disk.total_gb }} GB ({{ stats.disk.free_gb }} GB frei)</div>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill fill-disk" id="diskBar" style="width: {{ stats.disk.percent }}%;"></div>
+        </div>
+      </div>
+
+      <!-- 5. System Uptime -->
+      <div class="card card-uptime">
         <div>
           <div class="card-header">
             <span class="card-title">System Uptime</span>
             <span class="card-icon">⏱️</span>
           </div>
-          <div class="card-value" style="font-size: 1.8rem;" id="uptimeDisplay">{{ stats.uptime.display }}</div>
+          <div class="card-value card-value-sm" id="uptimeDisplay">{{ stats.uptime.display }}</div>
           <div class="card-subtitle" id="bootTime">Systemstart: {{ stats.uptime.boot_time }}</div>
         </div>
       </div>
     </div>
+
+    <!-- 3. WEB-SERVICES & SCHNELLZUGRIFF-LINKS -->
+    <section class="services-section" aria-label="Web-Services und Schnellzugriff">
+      <div class="services-header">
+        <div class="services-title-group">
+          <span style="font-size: 1.25rem;">🌐</span>
+          <h2 class="services-title">Web-Services & Schnellzugriff</h2>
+        </div>
+        <div class="services-network-badge">
+          <span class="ts-dot"></span>
+          <span>Tailscale: <code>100.88.215.98</code> &bull; <code>pimmel.tail3a782b.ts.net</code></span>
+        </div>
+      </div>
+
+      <div class="services-grid">
+        <!-- Service 1: xdcc-load-cast Domain -->
+        <a href="http://pimmel.tail3a782b.ts.net:3000" target="_blank" rel="noopener noreferrer" class="service-tile">
+          <div class="service-tile-top">
+            <div class="service-tile-brand">
+              <span class="service-tile-icon icon-xdcc">🚀</span>
+              <div>
+                <div class="service-tile-name">xdcc-load-cast</div>
+                <div class="service-tile-route">Tailscale Domain</div>
+              </div>
+            </div>
+            <span class="badge-port badge-port-3000">Port 3000</span>
+          </div>
+          <div class="service-tile-bottom">
+            <span class="service-tile-url">pimmel.tail3a782b.ts.net:3000</span>
+            <span class="service-tile-arrow">↗</span>
+          </div>
+        </a>
+
+        <!-- Service 2: xdcc-load-cast Tailscale IP -->
+        <a href="http://100.88.215.98:3000" target="_blank" rel="noopener noreferrer" class="service-tile">
+          <div class="service-tile-top">
+            <div class="service-tile-brand">
+              <span class="service-tile-icon icon-xdcc">⚡</span>
+              <div>
+                <div class="service-tile-name">xdcc-load-cast</div>
+                <div class="service-tile-route">Tailscale IP</div>
+              </div>
+            </div>
+            <span class="badge-port badge-port-3000">Port 3000</span>
+          </div>
+          <div class="service-tile-bottom">
+            <span class="service-tile-url">100.88.215.98:3000</span>
+            <span class="service-tile-arrow">↗</span>
+          </div>
+        </a>
+
+        <!-- Service 3: xdcc-load-cast Lokales LAN -->
+        <a id="lanTileXdcc" href="http://localhost:3000" target="_blank" rel="noopener noreferrer" class="service-tile">
+          <div class="service-tile-top">
+            <div class="service-tile-brand">
+              <span class="service-tile-icon icon-lan">🏠</span>
+              <div>
+                <div class="service-tile-name">xdcc-load-cast</div>
+                <div class="service-tile-route">Lokales LAN / Host</div>
+              </div>
+            </div>
+            <span class="badge-port badge-port-lan">Port 3000</span>
+          </div>
+          <div class="service-tile-bottom">
+            <span class="service-tile-url" id="lanUrlXdcc">Aktueller Host :3000</span>
+            <span class="service-tile-arrow">↗</span>
+          </div>
+        </a>
+
+        <!-- Service 4: Dashboard Domain -->
+        <a href="http://pimmel.tail3a782b.ts.net:5000" target="_blank" rel="noopener noreferrer" class="service-tile">
+          <div class="service-tile-top">
+            <div class="service-tile-brand">
+              <span class="service-tile-icon icon-dash">📊</span>
+              <div>
+                <div class="service-tile-name">System Dashboard</div>
+                <div class="service-tile-route">Tailscale Domain</div>
+              </div>
+            </div>
+            <span class="badge-port badge-port-5000">Port 5000</span>
+          </div>
+          <div class="service-tile-bottom">
+            <span class="service-tile-url">pimmel.tail3a782b.ts.net:5000</span>
+            <span class="service-tile-arrow">↗</span>
+          </div>
+        </a>
+
+        <!-- Service 5: Dashboard Tailscale IP -->
+        <a href="http://100.88.215.98:5000" target="_blank" rel="noopener noreferrer" class="service-tile">
+          <div class="service-tile-top">
+            <div class="service-tile-brand">
+              <span class="service-tile-icon icon-dash">📈</span>
+              <div>
+                <div class="service-tile-name">System Dashboard</div>
+                <div class="service-tile-route">Tailscale IP</div>
+              </div>
+            </div>
+            <span class="badge-port badge-port-5000">Port 5000</span>
+          </div>
+          <div class="service-tile-bottom">
+            <span class="service-tile-url">100.88.215.98:5000</span>
+            <span class="service-tile-arrow">↗</span>
+          </div>
+        </a>
+      </div>
+    </section>
 
     <footer>
       <span>Port: 5000 (bind 0.0.0.0)</span>
@@ -935,10 +1403,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               position: 'top',
               labels: {
                 color: '#94a3b8',
-                font: { size: 12 },
+                font: { size: window.innerWidth <= 640 ? 10 : 12 },
                 usePointStyle: true,
-                boxWidth: 8,
-                boxHeight: 8
+                boxWidth: window.innerWidth <= 640 ? 6 : 8,
+                boxHeight: window.innerWidth <= 640 ? 6 : 8,
+                padding: window.innerWidth <= 640 ? 6 : 12
               }
             },
             tooltip: {
@@ -947,7 +1416,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               bodyColor: '#cbd5e1',
               borderColor: '#475569',
               borderWidth: 1,
-              padding: 10,
+              padding: window.innerWidth <= 640 ? 8 : 10,
               callbacks: {
                 label: function(context) {
                   if (context.datasetIndex === 2) return null;
@@ -975,25 +1444,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               },
               ticks: {
                 color: '#94a3b8',
-                maxTicksLimit: 10,
-                maxRotation: 0
+                maxTicksLimit: window.innerWidth <= 640 ? 5 : 10,
+                maxRotation: 0,
+                font: { size: window.innerWidth <= 640 ? 9 : 11 }
               }
             },
             yTemp: {
               type: 'linear',
               position: 'left',
               title: {
-                display: true,
+                display: window.innerWidth > 640,
                 text: 'Temperatur (°C)',
                 color: '#f97316',
-                font: { size: 12, weight: '600' }
+                font: { size: 11, weight: '600' }
               },
               grid: {
                 color: 'rgba(255, 255, 255, 0.06)'
               },
               ticks: {
                 color: '#f97316',
-                callback: function(val) { return val + ' °C'; }
+                font: { size: window.innerWidth <= 640 ? 9 : 11 },
+                callback: function(val) { return window.innerWidth <= 640 ? val + '°' : val + ' °C'; }
               },
               suggestedMin: 25,
               suggestedMax: 80
@@ -1002,16 +1473,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               type: 'linear',
               position: 'right',
               title: {
-                display: true,
+                display: window.innerWidth > 640,
                 text: 'CPU (%)',
                 color: '#38bdf8',
-                font: { size: 12, weight: '600' }
+                font: { size: 11, weight: '600' }
               },
               grid: {
                 drawOnChartArea: false
               },
               ticks: {
                 color: '#38bdf8',
+                font: { size: window.innerWidth <= 640 ? 9 : 11 },
                 callback: function(val) { return val + ' %'; }
               },
               min: 0,
@@ -1125,6 +1597,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     // Initialisiere Verlaufschart
     initHistoryChart();
+
+    // Responsives Verhalten bei Bildschirmdrehung & Größenänderung
+    window.addEventListener('resize', () => {
+      if (!historyChart) return;
+      const isMobile = window.innerWidth <= 640;
+      historyChart.options.scales.x.ticks.maxTicksLimit = isMobile ? 5 : 10;
+      historyChart.options.scales.x.ticks.font = { size: isMobile ? 9 : 11 };
+      historyChart.options.scales.yTemp.title.display = !isMobile;
+      historyChart.options.scales.yTemp.ticks.font = { size: isMobile ? 9 : 11 };
+      historyChart.options.scales.yCpu.title.display = !isMobile;
+      historyChart.options.scales.yCpu.ticks.font = { size: isMobile ? 9 : 11 };
+      historyChart.options.plugins.legend.labels.font = { size: isMobile ? 10 : 12 };
+      historyChart.update('none');
+    });
+
+    // Dynamischen lokalen LAN-Link für aktuellen Hostnamen setzen
+    (function setupLanLinks() {
+      try {
+        const currentHost = window.location.hostname || 'localhost';
+        const lanTile = document.getElementById('lanTileXdcc');
+        const lanUrl = document.getElementById('lanUrlXdcc');
+        if (lanTile && lanUrl) {
+          lanTile.href = 'http://' + currentHost + ':3000';
+          lanUrl.textContent = currentHost + ':3000';
+        }
+      } catch (err) {
+        console.error('Fehler bei LAN-Link Setup:', err);
+      }
+    })();
   </script>
 </body>
 </html>
