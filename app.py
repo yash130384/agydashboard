@@ -121,6 +121,30 @@ def format_uptime(seconds):
     return " ".join(parts)
 
 
+def get_cloudflared_urls():
+    """Liest die aktuellen Quick-Tunnel URLs von cloudflared aus ~/.cloudflared-urls/."""
+    urls = {"dashboard": None, "xdcc": None}
+    dash_file = "/home/yash/.cloudflared-urls/dash.url"
+    xdcc_file = "/home/yash/.cloudflared-urls/xdcc.url"
+    try:
+        if os.path.exists(dash_file):
+            with open(dash_file, "r") as f:
+                val = f.read().strip()
+                if val.startswith("https://"):
+                    urls["dashboard"] = val
+    except Exception:
+        pass
+    try:
+        if os.path.exists(xdcc_file):
+            with open(xdcc_file, "r") as f:
+                val = f.read().strip()
+                if val.startswith("https://"):
+                    urls["xdcc"] = val
+    except Exception:
+        pass
+    return urls
+
+
 def get_system_stats():
     """Sammelt alle Systemmetriken."""
     stats = {
@@ -252,6 +276,9 @@ def get_system_stats():
         "active": is_throttled,
         "raw": throttled_raw,
     }
+
+    # Cloudflare Quick-Tunnel URLs
+    stats["cloudflared"] = get_cloudflared_urls()
 
     return stats
 
@@ -782,6 +809,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(16, 185, 129, 0.12);
       border-color: rgba(16, 185, 129, 0.3);
     }
+    .icon-cf {
+      background: rgba(249, 115, 22, 0.15);
+      border-color: rgba(249, 115, 22, 0.35);
+    }
     .service-tile-name {
       font-weight: 700;
       font-size: 1rem;
@@ -818,6 +849,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(16, 185, 129, 0.18);
       color: #34d399;
       border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+    .badge-port-cf {
+      background: rgba(249, 115, 22, 0.18);
+      color: #fb923c;
+      border: 1px solid rgba(249, 115, 22, 0.35);
     }
     .service-tile-bottom {
       display: flex;
@@ -1243,6 +1279,42 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="service-tile-arrow">↗</span>
           </div>
         </a>
+
+        <!-- Service 6: Dashboard Cloudflare Tunnel -->
+        <a id="cfTileDash" href="{% if stats.cloudflared and stats.cloudflared.dashboard %}{{ stats.cloudflared.dashboard }}{% else %}#{% endif %}" target="_blank" rel="noopener noreferrer" class="service-tile">
+          <div class="service-tile-top">
+            <div class="service-tile-brand">
+              <span class="service-tile-icon icon-cf">☁️</span>
+              <div>
+                <div class="service-tile-name">Dashboard (Cloudflare)</div>
+                <div class="service-tile-route">Global Public Tunnel</div>
+              </div>
+            </div>
+            <span class="badge-port badge-port-cf">Quick Tunnel</span>
+          </div>
+          <div class="service-tile-bottom">
+            <span class="service-tile-url" id="cfUrlDash">{% if stats.cloudflared and stats.cloudflared.dashboard %}{{ stats.cloudflared.dashboard }}{% else %}Verbinde Tunnel...{% endif %}</span>
+            <span class="service-tile-arrow">↗</span>
+          </div>
+        </a>
+
+        <!-- Service 7: xdcc Cloudflare Tunnel -->
+        <a id="cfTileXdcc" href="{% if stats.cloudflared and stats.cloudflared.xdcc %}{{ stats.cloudflared.xdcc }}{% else %}#{% endif %}" target="_blank" rel="noopener noreferrer" class="service-tile">
+          <div class="service-tile-top">
+            <div class="service-tile-brand">
+              <span class="service-tile-icon icon-cf">☁️</span>
+              <div>
+                <div class="service-tile-name">xdcc (Cloudflare)</div>
+                <div class="service-tile-route">Global Public Tunnel</div>
+              </div>
+            </div>
+            <span class="badge-port badge-port-cf">Quick Tunnel</span>
+          </div>
+          <div class="service-tile-bottom">
+            <span class="service-tile-url" id="cfUrlXdcc">{% if stats.cloudflared and stats.cloudflared.xdcc %}{{ stats.cloudflared.xdcc }}{% else %}Verbinde Tunnel...{% endif %}</span>
+            <span class="service-tile-arrow">↗</span>
+          </div>
+        </a>
       </div>
     </section>
 
@@ -1322,6 +1394,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         document.getElementById('hostname').textContent = data.hostname;
         document.getElementById('platform').textContent = data.platform;
         document.getElementById('lastUpdated').textContent = 'Stand: ' + data.timestamp;
+
+        // Cloudflare Quick-Tunnel URLs live aktualisieren
+        if (data.cloudflared) {
+          const dashTile = document.getElementById('cfTileDash');
+          const dashUrl = document.getElementById('cfUrlDash');
+          if (dashTile && dashUrl && data.cloudflared.dashboard) {
+            dashTile.href = data.cloudflared.dashboard;
+            dashUrl.textContent = data.cloudflared.dashboard.replace('https://', '');
+          }
+          const xdccTile = document.getElementById('cfTileXdcc');
+          const xdccUrl = document.getElementById('cfUrlXdcc');
+          if (xdccTile && xdccUrl && data.cloudflared.xdcc) {
+            xdccTile.href = data.cloudflared.xdcc;
+            xdccUrl.textContent = data.cloudflared.xdcc.replace('https://', '');
+          }
+        }
       } catch (err) {
         console.error('Fehler beim Abrufen der Systemstatistiken:', err);
       }
@@ -1655,6 +1743,10 @@ def render_html_fallback(stats):
         "{{ stats.uptime.display }}": str(stats["uptime"]["display"]),
         "{{ stats.uptime.boot_time }}": str(stats["uptime"]["boot_time"]),
         "{{ stats.timestamp }}": str(stats["timestamp"]),
+        "{% if stats.cloudflared and stats.cloudflared.dashboard %}{{ stats.cloudflared.dashboard }}{% else %}#{% endif %}": str(stats.get("cloudflared", {}).get("dashboard") or "#"),
+        "{% if stats.cloudflared and stats.cloudflared.dashboard %}{{ stats.cloudflared.dashboard }}{% else %}Verbinde Tunnel...{% endif %}": str(stats.get("cloudflared", {}).get("dashboard") or "Verbinde Tunnel..."),
+        "{% if stats.cloudflared and stats.cloudflared.xdcc %}{{ stats.cloudflared.xdcc }}{% else %}#{% endif %}": str(stats.get("cloudflared", {}).get("xdcc") or "#"),
+        "{% if stats.cloudflared and stats.cloudflared.xdcc %}{{ stats.cloudflared.xdcc }}{% else %}Verbinde Tunnel...{% endif %}": str(stats.get("cloudflared", {}).get("xdcc") or "Verbinde Tunnel..."),
     }
     for key, val in replacements.items():
         html = html.replace(key, val)
