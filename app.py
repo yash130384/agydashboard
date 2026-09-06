@@ -56,6 +56,65 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Service-Registry für Web-Services & Schnellzugriff
+# ---------------------------------------------------------------------------
+SERVICE_REGISTRY = {
+    "dashboard": {
+        "name": "agydashboard",
+        "title": "System Dashboard",
+        "icon": "📟",
+        "icon_class": "icon-dash",
+        "port": 5000,
+        "badge_class": "badge-port-5000",
+        "description": "Flask Dashboard (Eigenes)",
+        "allow_external": True,
+        "cf_key": "dashboard",
+        "tailscale_url": "http://pimmel.tail3a782b.ts.net:5000",
+        "lan_url": "http://192.168.31.210:5000",
+    },
+    "telemetry": {
+        "name": "TelemetryVault",
+        "title": "TelemetryVault",
+        "icon": "🏎️",
+        "icon_class": "icon-telemetry",
+        "port": 8000,
+        "badge_class": "badge-port-8000",
+        "description": "ACC Telemetry (uvicorn)",
+        "allow_external": True,
+        "cf_key": None,
+        "tailscale_url": "http://pimmel.tail3a782b.ts.net:8000",
+        "lan_url": "http://192.168.31.210:8000",
+    },
+    "xdcc": {
+        "name": "xdcc-load-cast",
+        "title": "xdcc-load-cast",
+        "icon": "🚀",
+        "icon_class": "icon-xdcc",
+        "port": 3000,
+        "badge_class": "badge-port-3000",
+        "description": "node server.js",
+        "allow_external": True,
+        "cf_key": "xdcc",
+        "tailscale_url": "http://pimmel.tail3a782b.ts.net:3000",
+        "lan_url": "http://192.168.31.210:3000",
+    },
+    "postgres": {
+        "name": "PostgreSQL 17",
+        "title": "PostgreSQL 17",
+        "icon": "🗄️",
+        "icon_class": "icon-postgres",
+        "port": 5432,
+        "badge_class": "badge-port-5432",
+        "description": "PostgreSQL 17 (nur localhost)",
+        "allow_external": False,
+        "cf_key": None,
+        "tailscale_url": None,
+        "lan_url": None,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # Formatierungs-Helper
 # ---------------------------------------------------------------------------
 def format_tokens(n):
@@ -718,12 +777,14 @@ def get_system_stats():
     stats["cloudflared"] = get_cloudflared_urls()
 
     # Web-Services Status
-    stats["services"] = {
-        "telemetry": {
-            "online": check_service_status(8000),
-            "port": 8000,
+    services_status = {}
+    for svc_key, svc_info in SERVICE_REGISTRY.items():
+        services_status[svc_key] = {
+            "name": svc_info["name"],
+            "port": svc_info["port"],
+            "online": check_service_status(port=svc_info["port"]),
         }
-    }
+    stats["services"] = services_status
 
     # KI-Agenten: Budgets & Spendings
     stats["openrouter"] = openrouter_manager.get_budget()
@@ -1440,6 +1501,44 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       border-bottom: 1px solid rgba(255, 255, 255, 0.06);
       padding-bottom: 0.75rem;
     }
+    .services-header-controls {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+    .services-tabs {
+      display: inline-flex;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 3px;
+      gap: 3px;
+    }
+    .service-tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 0.35rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      touch-action: manipulation;
+    }
+    .service-tab-btn:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .service-tab-btn.active {
+      background: var(--primary);
+      color: #0b1120;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    }
     .services-title-group {
       display: flex;
       align-items: center;
@@ -1551,6 +1650,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(244, 63, 94, 0.12);
       border-color: rgba(244, 63, 94, 0.3);
     }
+    .icon-postgres {
+      background: rgba(59, 130, 246, 0.12);
+      border-color: rgba(59, 130, 246, 0.3);
+    }
     .service-tile-name {
       font-weight: 700;
       font-size: 1rem;
@@ -1597,6 +1700,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(244, 63, 94, 0.18);
       color: #fb7185;
       border: 1px solid rgba(244, 63, 94, 0.35);
+    }
+    .badge-port-5432 {
+      background: rgba(59, 130, 246, 0.18);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.35);
+    }
+    .badge-port-muted {
+      background: rgba(100, 116, 139, 0.18);
+      color: #94a3b8;
+      border: 1px solid rgba(100, 116, 139, 0.35);
+    }
+    .service-tile-static {
+      cursor: default;
+    }
+    .service-tile-static:hover {
+      transform: none;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+      border-color: var(--card-border);
+      background: var(--card-bg);
     }
     .service-tile-badges {
       display: flex;
@@ -1803,7 +1925,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       .services-header {
         flex-direction: column;
         align-items: flex-start;
+        gap: 0.75rem;
+      }
+      .services-header-controls {
+        width: 100%;
+        flex-direction: column;
+        align-items: flex-start;
         gap: 0.5rem;
+      }
+      .services-tabs {
+        width: 100%;
+        display: flex;
+        box-sizing: border-box;
+      }
+      .service-tab-btn {
+        flex: 1;
+        justify-content: center;
+        padding: 0.4rem 0.5rem;
+        font-size: 0.75rem;
       }
       .services-title {
         font-size: 1.05rem;
@@ -2159,161 +2298,117 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <span style="font-size: 1.25rem;">🌐</span>
           <h2 class="services-title">Web-Services &amp; Schnellzugriff</h2>
         </div>
-        <div class="services-network-badge">
-          <span class="ts-dot"></span>
-          <span>Tailscale: <code>100.88.215.98</code> &bull; <code>pimmel.tail3a782b.ts.net</code></span>
+        <div class="services-header-controls">
+          <div class="services-tabs" role="tablist" aria-label="Netzwerk-Adresse auswählen">
+            <button type="button" class="service-tab-btn active" role="tab" aria-selected="true" data-tab="tailscale">
+              <span>Tailscale</span>
+            </button>
+            <button type="button" class="service-tab-btn" role="tab" aria-selected="false" data-tab="lan">
+              <span>LAN</span>
+            </button>
+            <button type="button" class="service-tab-btn" role="tab" aria-selected="false" data-tab="cloudflare">
+              <span>Cloudflare-Tunnel</span>
+            </button>
+          </div>
+          <div class="services-network-badge">
+            <span class="ts-dot"></span>
+            <span>Tailscale: <code>100.88.215.98</code> &bull; <code>pimmel.tail3a782b.ts.net</code></span>
+          </div>
         </div>
       </div>
 
-      <div class="services-grid">
-        <!-- Service 1: xdcc-load-cast Domain -->
-        <a href="http://pimmel.tail3a782b.ts.net:3000" target="_blank" rel="noopener noreferrer" class="service-tile">
+      <div class="services-grid" id="servicesGrid">
+        <!-- Service 1: agydashboard -->
+        <a id="svcTile_dashboard" href="http://pimmel.tail3a782b.ts.net:5000" target="_blank" rel="noopener noreferrer" class="service-tile">
           <div class="service-tile-top">
             <div class="service-tile-brand">
-              <span class="service-tile-icon icon-xdcc">🚀</span>
+              <span class="service-tile-icon icon-dash">📟</span>
               <div>
-                <div class="service-tile-name">xdcc-load-cast</div>
-                <div class="service-tile-route">Tailscale Domain</div>
+                <div class="service-tile-name">agydashboard</div>
+                <div class="service-tile-route">Flask Dashboard (Eigenes)</div>
               </div>
             </div>
-            <span class="badge-port badge-port-3000">Port 3000</span>
+            <div class="service-tile-badges">
+              <span id="svcStatus_dashboard" class="service-status-badge {% if stats.services and stats.services.dashboard and stats.services.dashboard.online %}status-badge-online{% else %}status-badge-offline{% endif %}" title="Dienst-Status">
+                <span class="status-dot-sm"></span>{% if stats.services and stats.services.dashboard and stats.services.dashboard.online %}Online{% else %}Offline{% endif %}
+              </span>
+              <span class="badge-port badge-port-5000">Port 5000</span>
+            </div>
           </div>
           <div class="service-tile-bottom">
-            <span class="service-tile-url">pimmel.tail3a782b.ts.net:3000</span>
-            <span class="service-tile-arrow">↗</span>
+            <span class="service-tile-url" id="svcUrl_dashboard">pimmel.tail3a782b.ts.net:5000</span>
+            <span class="service-tile-arrow" id="svcArrow_dashboard">↗</span>
           </div>
         </a>
 
         <!-- Service 2: TelemetryVault -->
-        <a href="http://pimmel.tail3a782b.ts.net:8000" target="_blank" rel="noopener noreferrer" class="service-tile">
+        <a id="svcTile_telemetry" href="http://pimmel.tail3a782b.ts.net:8000" target="_blank" rel="noopener noreferrer" class="service-tile">
           <div class="service-tile-top">
             <div class="service-tile-brand">
               <span class="service-tile-icon icon-telemetry">🏎️</span>
               <div>
                 <div class="service-tile-name">TelemetryVault</div>
-                <div class="service-tile-route">ACC Telemetry Dashboard</div>
+                <div class="service-tile-route">ACC Telemetry (uvicorn)</div>
               </div>
             </div>
             <div class="service-tile-badges">
-              <span id="telemetryStatus" class="service-status-badge {% if stats.services and stats.services.telemetry and stats.services.telemetry.online %}status-badge-online{% else %}status-badge-offline{% endif %}" title="Dienst-Status">
+              <span id="svcStatus_telemetry" class="service-status-badge {% if stats.services and stats.services.telemetry and stats.services.telemetry.online %}status-badge-online{% else %}status-badge-offline{% endif %}" title="Dienst-Status">
                 <span class="status-dot-sm"></span>{% if stats.services and stats.services.telemetry and stats.services.telemetry.online %}Online{% else %}Offline{% endif %}
               </span>
               <span class="badge-port badge-port-8000">Port 8000</span>
             </div>
           </div>
           <div class="service-tile-bottom">
-            <span class="service-tile-url">pimmel.tail3a782b.ts.net:8000</span>
-            <span class="service-tile-arrow">↗</span>
+            <span class="service-tile-url" id="svcUrl_telemetry">pimmel.tail3a782b.ts.net:8000</span>
+            <span class="service-tile-arrow" id="svcArrow_telemetry">↗</span>
           </div>
         </a>
 
-        <!-- Service 3: xdcc-load-cast Tailscale IP -->
-        <a href="http://100.88.215.98:3000" target="_blank" rel="noopener noreferrer" class="service-tile">
+        <!-- Service 3: xdcc-load-cast -->
+        <a id="svcTile_xdcc" href="http://pimmel.tail3a782b.ts.net:3000" target="_blank" rel="noopener noreferrer" class="service-tile">
           <div class="service-tile-top">
             <div class="service-tile-brand">
-              <span class="service-tile-icon icon-xdcc">⚡</span>
+              <span class="service-tile-icon icon-xdcc">🚀</span>
               <div>
                 <div class="service-tile-name">xdcc-load-cast</div>
-                <div class="service-tile-route">Tailscale IP</div>
+                <div class="service-tile-route">node server.js</div>
               </div>
             </div>
-            <span class="badge-port badge-port-3000">Port 3000</span>
+            <div class="service-tile-badges">
+              <span id="svcStatus_xdcc" class="service-status-badge {% if stats.services and stats.services.xdcc and stats.services.xdcc.online %}status-badge-online{% else %}status-badge-offline{% endif %}" title="Dienst-Status">
+                <span class="status-dot-sm"></span>{% if stats.services and stats.services.xdcc and stats.services.xdcc.online %}Online{% else %}Offline{% endif %}
+              </span>
+              <span class="badge-port badge-port-3000">Port 3000</span>
+            </div>
           </div>
           <div class="service-tile-bottom">
-            <span class="service-tile-url">100.88.215.98:3000</span>
-            <span class="service-tile-arrow">↗</span>
+            <span class="service-tile-url" id="svcUrl_xdcc">pimmel.tail3a782b.ts.net:3000</span>
+            <span class="service-tile-arrow" id="svcArrow_xdcc">↗</span>
           </div>
         </a>
 
-        <!-- Service 3: xdcc-load-cast Lokales LAN -->
-        <a id="lanTileXdcc" href="http://localhost:3000" target="_blank" rel="noopener noreferrer" class="service-tile">
+        <!-- Service 4: PostgreSQL 17 -->
+        <div id="svcTile_postgres" class="service-tile service-tile-static">
           <div class="service-tile-top">
             <div class="service-tile-brand">
-              <span class="service-tile-icon icon-lan">🏠</span>
+              <span class="service-tile-icon icon-postgres">🗄️</span>
               <div>
-                <div class="service-tile-name">xdcc-load-cast</div>
-                <div class="service-tile-route">Lokales LAN / Host</div>
+                <div class="service-tile-name">PostgreSQL 17</div>
+                <div class="service-tile-route">PostgreSQL 17 (nur localhost)</div>
               </div>
             </div>
-            <span class="badge-port badge-port-lan">Port 3000</span>
-          </div>
-          <div class="service-tile-bottom">
-            <span class="service-tile-url" id="lanUrlXdcc">Aktueller Host :3000</span>
-            <span class="service-tile-arrow">↗</span>
-          </div>
-        </a>
-
-        <!-- Service 4: Dashboard Domain -->
-        <a href="http://pimmel.tail3a782b.ts.net:5000" target="_blank" rel="noopener noreferrer" class="service-tile">
-          <div class="service-tile-top">
-            <div class="service-tile-brand">
-              <span class="service-tile-icon icon-dash">📊</span>
-              <div>
-                <div class="service-tile-name">System Dashboard</div>
-                <div class="service-tile-route">Tailscale Domain</div>
-              </div>
+            <div class="service-tile-badges">
+              <span id="svcStatus_postgres" class="service-status-badge {% if stats.services and stats.services.postgres and stats.services.postgres.online %}status-badge-online{% else %}status-badge-offline{% endif %}" title="Dienst-Status">
+                <span class="status-dot-sm"></span>{% if stats.services and stats.services.postgres and stats.services.postgres.online %}Online{% else %}Offline{% endif %}
+              </span>
+              <span class="badge-port badge-port-5432">Port 5432</span>
             </div>
-            <span class="badge-port badge-port-5000">Port 5000</span>
           </div>
           <div class="service-tile-bottom">
-            <span class="service-tile-url">pimmel.tail3a782b.ts.net:5000</span>
-            <span class="service-tile-arrow">↗</span>
+            <span class="service-tile-url" id="svcUrl_postgres">nur localhost</span>
+            <span class="badge-port badge-port-muted" id="svcBadge_postgres">Lokal</span>
           </div>
-        </a>
-
-        <!-- Service 5: Dashboard Tailscale IP -->
-        <a href="http://100.88.215.98:5000" target="_blank" rel="noopener noreferrer" class="service-tile">
-          <div class="service-tile-top">
-            <div class="service-tile-brand">
-              <span class="service-tile-icon icon-dash">📈</span>
-              <div>
-                <div class="service-tile-name">System Dashboard</div>
-                <div class="service-tile-route">Tailscale IP</div>
-              </div>
-            </div>
-            <span class="badge-port badge-port-5000">Port 5000</span>
-          </div>
-          <div class="service-tile-bottom">
-            <span class="service-tile-url">100.88.215.98:5000</span>
-            <span class="service-tile-arrow">↗</span>
-          </div>
-        </a>
-
-        <!-- Service 6: Dashboard Cloudflare Tunnel -->
-        <a id="cfTileDash" href="{% if stats.cloudflared and stats.cloudflared.dashboard %}{{ stats.cloudflared.dashboard }}{% else %}#{% endif %}" target="_blank" rel="noopener noreferrer" class="service-tile">
-          <div class="service-tile-top">
-            <div class="service-tile-brand">
-              <span class="service-tile-icon icon-cf">☁️</span>
-              <div>
-                <div class="service-tile-name">Dashboard (Cloudflare)</div>
-                <div class="service-tile-route">Global Public Tunnel</div>
-              </div>
-            </div>
-            <span class="badge-port badge-port-cf">Quick Tunnel</span>
-          </div>
-          <div class="service-tile-bottom">
-            <span class="service-tile-url" id="cfUrlDash">{% if stats.cloudflared and stats.cloudflared.dashboard %}{{ stats.cloudflared.dashboard }}{% else %}Verbinde Tunnel...{% endif %}</span>
-            <span class="service-tile-arrow">↗</span>
-          </div>
-        </a>
-
-        <!-- Service 7: xdcc Cloudflare Tunnel -->
-        <a id="cfTileXdcc" href="{% if stats.cloudflared and stats.cloudflared.xdcc %}{{ stats.cloudflared.xdcc }}{% else %}#{% endif %}" target="_blank" rel="noopener noreferrer" class="service-tile">
-          <div class="service-tile-top">
-            <div class="service-tile-brand">
-              <span class="service-tile-icon icon-cf">☁️</span>
-              <div>
-                <div class="service-tile-name">xdcc (Cloudflare)</div>
-                <div class="service-tile-route">Global Public Tunnel</div>
-              </div>
-            </div>
-            <span class="badge-port badge-port-cf">Quick Tunnel</span>
-          </div>
-          <div class="service-tile-bottom">
-            <span class="service-tile-url" id="cfUrlXdcc">{% if stats.cloudflared and stats.cloudflared.xdcc %}{{ stats.cloudflared.xdcc }}{% else %}Verbinde Tunnel...{% endif %}</span>
-            <span class="service-tile-arrow">↗</span>
-          </div>
-        </a>
+        </div>
       </div>
     </section>
 
@@ -2572,21 +2667,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (data.platform) document.getElementById('platform').textContent = data.platform;
       if (data.timestamp) document.getElementById('lastUpdated').textContent = 'Stand: ' + data.timestamp;
 
-      // Cloudflare Quick-Tunnel URLs
-      if (data.cloudflared) {
-        const dashTile = document.getElementById('cfTileDash');
-        const dashUrl = document.getElementById('cfUrlDash');
-        if (dashTile && dashUrl && data.cloudflared.dashboard) {
-          dashTile.href = data.cloudflared.dashboard;
-          dashUrl.textContent = data.cloudflared.dashboard.replace('https://', '');
-        }
-        const xdccTile = document.getElementById('cfTileXdcc');
-        const xdccUrl = document.getElementById('cfUrlXdcc');
-        if (xdccTile && xdccUrl && data.cloudflared.xdcc) {
-          xdccTile.href = data.cloudflared.xdcc;
-          xdccUrl.textContent = data.cloudflared.xdcc.replace('https://', '');
-        }
-      }
+
 
       // OpenRouter & Antigravity
       renderOpenRouter(data.openrouter);
@@ -2595,15 +2676,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       // Hermes Agent
       renderHermes(data.hermes);
 
-      // Web-Services Status
-      if (data.services && data.services.telemetry) {
-        const telBadge = document.getElementById('telemetryStatus');
-        if (telBadge) {
-          const isOnline = !!data.services.telemetry.online;
-          telBadge.className = 'service-status-badge ' + (isOnline ? 'status-badge-online' : 'status-badge-offline');
-          telBadge.innerHTML = '<span class="status-dot-sm"></span>' + (isOnline ? 'Online' : 'Offline');
-        }
-      }
+      // Web-Services Status & URLs
+      updateServicesView(data);
     }
 
     // Initialer Render aus serverseitig übergebenem JSON
@@ -3012,20 +3086,89 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     });
 
-    // Dynamischen lokalen LAN-Link für aktuellen Hostnamen setzen
-    (function setupLanLinks() {
-      try {
-        const currentHost = window.location.hostname || 'localhost';
-        const lanTile = document.getElementById('lanTileXdcc');
-        const lanUrl = document.getElementById('lanUrlXdcc');
-        if (lanTile && lanUrl) {
-          lanTile.href = 'http://' + currentHost + ':3000';
-          lanUrl.textContent = currentHost + ':3000';
+    // --- Web-Services & Schnellzugriff Tab- & Tile-Logik ---
+    let currentServiceTab = 'tailscale';
+    let lastServicesData = null;
+
+    const SERVICE_DEFINITIONS = [
+      { key: 'dashboard', name: 'agydashboard', port: 5000, desc: 'Flask Dashboard (Eigenes)', cfKey: 'dashboard', isStatic: false },
+      { key: 'telemetry', name: 'TelemetryVault', port: 8000, desc: 'ACC Telemetry (uvicorn)', cfKey: null, isStatic: false },
+      { key: 'xdcc', name: 'xdcc-load-cast', port: 3000, desc: 'node server.js', cfKey: 'xdcc', isStatic: false },
+      { key: 'postgres', name: 'PostgreSQL 17', port: 5432, desc: 'PostgreSQL 17 (nur localhost)', cfKey: null, isStatic: true }
+    ];
+
+    function updateServicesView(data) {
+      if (data) lastServicesData = data;
+      const currentData = lastServicesData || initialStats || {};
+      const services = currentData.services || {};
+      const cloudflared = currentData.cloudflared || {};
+
+      SERVICE_DEFINITIONS.forEach(function(svc) {
+        // Status Pill Update
+        const statusEl = document.getElementById('svcStatus_' + svc.key);
+        if (statusEl) {
+          const isOnline = !!(services[svc.key] && services[svc.key].online);
+          statusEl.className = 'service-status-badge ' + (isOnline ? 'status-badge-online' : 'status-badge-offline');
+          statusEl.innerHTML = '<span class="status-dot-sm"></span>' + (isOnline ? 'Online' : 'Offline');
         }
-      } catch (err) {
-        console.error('Fehler bei LAN-Link Setup:', err);
-      }
-    })();
+
+        // Tab-spezifische URL & Link Darstellung
+        const tileEl = document.getElementById('svcTile_' + svc.key);
+        const urlEl = document.getElementById('svcUrl_' + svc.key);
+        const arrowEl = document.getElementById('svcArrow_' + svc.key);
+
+        if (!tileEl || !urlEl) return;
+
+        if (svc.key === 'postgres') {
+          // PostgreSQL ist immer nur localhost
+          urlEl.textContent = 'nur localhost';
+          tileEl.removeAttribute('href');
+          tileEl.classList.add('service-tile-static');
+          return;
+        }
+
+        if (currentServiceTab === 'tailscale') {
+          const url = 'http://pimmel.tail3a782b.ts.net:' + svc.port;
+          tileEl.href = url;
+          tileEl.classList.remove('service-tile-static');
+          urlEl.textContent = 'pimmel.tail3a782b.ts.net:' + svc.port;
+          if (arrowEl) arrowEl.style.display = 'inline';
+        } else if (currentServiceTab === 'lan') {
+          const url = 'http://192.168.31.210:' + svc.port;
+          tileEl.href = url;
+          tileEl.classList.remove('service-tile-static');
+          urlEl.textContent = '192.168.31.210:' + svc.port;
+          if (arrowEl) arrowEl.style.display = 'inline';
+        } else if (currentServiceTab === 'cloudflare') {
+          if (svc.cfKey && cloudflared[svc.cfKey]) {
+            const cfUrl = cloudflared[svc.cfKey];
+            tileEl.href = cfUrl;
+            tileEl.classList.remove('service-tile-static');
+            urlEl.textContent = cfUrl.replace('https://', '').replace('http://', '');
+            if (arrowEl) arrowEl.style.display = 'inline';
+          } else {
+            tileEl.removeAttribute('href');
+            tileEl.classList.add('service-tile-static');
+            urlEl.textContent = 'kein Tunnel';
+            if (arrowEl) arrowEl.style.display = 'none';
+          }
+        }
+      });
+    }
+
+    // Service-Tabs Listener
+    document.querySelectorAll('.service-tab-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        document.querySelectorAll('.service-tab-btn').forEach(function(b) {
+          b.classList.remove('active');
+          b.setAttribute('aria-selected', 'false');
+        });
+        btn.classList.add('active');
+        btn.setAttribute('aria-selected', 'true');
+        currentServiceTab = btn.getAttribute('data-tab');
+        updateServicesView();
+      });
+    });
   </script>
 </body>
 </html>
@@ -3037,9 +3180,7 @@ def render_html_fallback(stats):
     temp_val = stats["temperature"]["value"] or 0
     temp_min_100 = min(temp_val, 100)
     stats_json = json.dumps(stats)
-    is_tel_online = bool(stats.get("services", {}).get("telemetry", {}).get("online", False))
-    tel_class = "status-badge-online" if is_tel_online else "status-badge-offline"
-    tel_text = "Online" if is_tel_online else "Offline"
+    services = stats.get("services", {})
     html = DASHBOARD_HTML
     replacements = {
         "{{ stats_json | safe }}": stats_json,
@@ -3060,13 +3201,16 @@ def render_html_fallback(stats):
         "{{ stats.uptime.display }}": str(stats.get("uptime", {}).get("display", "N/A")),
         "{{ stats.uptime.boot_time }}": str(stats.get("uptime", {}).get("boot_time", "N/A")),
         "{{ stats.timestamp }}": str(stats.get("timestamp", "")),
-        "{% if stats.cloudflared and stats.cloudflared.dashboard %}{{ stats.cloudflared.dashboard }}{% else %}#{% endif %}": str(stats.get("cloudflared", {}).get("dashboard") or "#"),
-        "{% if stats.cloudflared and stats.cloudflared.dashboard %}{{ stats.cloudflared.dashboard }}{% else %}Verbinde Tunnel...{% endif %}": str(stats.get("cloudflared", {}).get("dashboard") or "Verbinde Tunnel..."),
-        "{% if stats.cloudflared and stats.cloudflared.xdcc %}{{ stats.cloudflared.xdcc }}{% else %}#{% endif %}": str(stats.get("cloudflared", {}).get("xdcc") or "#"),
-        "{% if stats.cloudflared and stats.cloudflared.xdcc %}{{ stats.cloudflared.xdcc }}{% else %}Verbinde Tunnel...{% endif %}": str(stats.get("cloudflared", {}).get("xdcc") or "Verbinde Tunnel..."),
-        "{% if stats.services and stats.services.telemetry and stats.services.telemetry.online %}status-badge-online{% else %}status-badge-offline{% endif %}": tel_class,
-        "{% if stats.services and stats.services.telemetry and stats.services.telemetry.online %}Online{% else %}Offline{% endif %}": tel_text,
     }
+
+    # Status-Badges für alle Services in render_html_fallback
+    for svc_key in ["dashboard", "telemetry", "xdcc", "postgres"]:
+        is_online = bool(services.get(svc_key, {}).get("online", False))
+        cls_macro = f"{{% if stats.services and stats.services.{svc_key} and stats.services.{svc_key}.online %}}status-badge-online{{% else %}}status-badge-offline{{% endif %}}"
+        txt_macro = f"{{% if stats.services and stats.services.{svc_key} and stats.services.{svc_key}.online %}}Online{{% else %}}Offline{{% endif %}}"
+        replacements[cls_macro] = "status-badge-online" if is_online else "status-badge-offline"
+        replacements[txt_macro] = "Online" if is_online else "Offline"
+
     for key, val in replacements.items():
         html = html.replace(key, val)
     return html
