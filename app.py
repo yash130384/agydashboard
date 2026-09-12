@@ -1315,6 +1315,16 @@ def get_9router_stats():
             "prompt_formatted": "0",
             "completion_formatted": "0",
             "cached_formatted": "0",
+            "saved_tokens": 0,
+            "saved_tokens_formatted": "0",
+            "cache_hit_rate": 0.0,
+            "cache_hit_rate_formatted": "0.0%",
+            "saved_cost": 0.0,
+            "saved_cost_formatted": "$0.00",
+            "saved_cost_pct": 0.0,
+            "saved_cost_pct_formatted": "0.0%",
+            "uncached_cost": 0.0,
+            "uncached_cost_formatted": "$0.00",
         },
         "by_provider": {},
         "by_model": {},
@@ -1479,6 +1489,31 @@ def get_9router_stats():
 
             total_tokens = total_prompt_tokens + total_completion_tokens
 
+            # Ersparnis durch Context/Prompt Caching ermitteln
+            uncached_cost = 0.0
+            try:
+                c.execute("SELECT model, promptTokens, completionTokens, cost, tokens FROM usageHistory;")
+                history_all = c.fetchall()
+                for u_model, u_pt, u_ct, u_c, u_tok in history_all:
+                    u_pt = u_pt or 0
+                    u_ct = u_ct or 0
+                    rate = 0.0000005
+                    if "high" in (u_model or "").lower():
+                        rate = 0.0000025
+                    comp_rate = 0.000003
+                    if "high" in (u_model or "").lower():
+                        comp_rate = 0.000010
+                    uncached_cost += (u_pt * rate + u_ct * comp_rate)
+            except Exception:
+                pass
+
+            if uncached_cost <= 0.0 and total_cached_tokens > 0:
+                uncached_cost = total_cost + (total_cached_tokens * 0.00000045)
+
+            estimated_saved_cost = max(0.0, uncached_cost - total_cost)
+            cache_hit_rate = round((total_cached_tokens / total_prompt_tokens * 100), 1) if total_prompt_tokens > 0 else 0.0
+            saved_cost_pct = round((estimated_saved_cost / uncached_cost * 100), 1) if uncached_cost > 0 else 0.0
+
             def fmt_num(n):
                 if n >= 1_000_000:
                     return f"{n/1_000_000:.2f}M"
@@ -1493,6 +1528,7 @@ def get_9router_stats():
                     "prompt_tokens": total_prompt_tokens,
                     "completion_tokens": total_completion_tokens,
                     "cached_tokens": total_cached_tokens,
+                    "saved_tokens": total_cached_tokens,
                     "total_tokens": total_tokens,
                     "cost": round(total_cost, 6),
                     "cost_formatted": f"${total_cost:.4f}",
@@ -1500,6 +1536,15 @@ def get_9router_stats():
                     "prompt_formatted": fmt_num(total_prompt_tokens),
                     "completion_formatted": fmt_num(total_completion_tokens),
                     "cached_formatted": fmt_num(total_cached_tokens),
+                    "saved_tokens_formatted": fmt_num(total_cached_tokens),
+                    "cache_hit_rate": cache_hit_rate,
+                    "cache_hit_rate_formatted": f"{cache_hit_rate:.1f}%",
+                    "saved_cost": round(estimated_saved_cost, 4),
+                    "saved_cost_formatted": f"${estimated_saved_cost:.4f}",
+                    "saved_cost_pct": saved_cost_pct,
+                    "saved_cost_pct_formatted": f"{saved_cost_pct:.1f}%",
+                    "uncached_cost": round(uncached_cost, 4),
+                    "uncached_cost_formatted": f"${uncached_cost:.4f}",
                 },
                 "by_provider": aggregated_by_provider,
                 "by_model": aggregated_by_model,
@@ -3425,8 +3470,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
               <div class="card-metric" id="nrTotalTokens">{{ (stats.nine_router.totals.tokens_formatted if stats.nine_router else '0') }}</div>
               <div class="card-metric-sub" id="nrPromptComplTokens">Prompt: {{ (stats.nine_router.totals.prompt_formatted if stats.nine_router else '0') }} | Compl: {{ (stats.nine_router.totals.completion_formatted if stats.nine_router else '0') }}</div>
-              <div class="card-metric-sub" id="nrCachedTokens" style="color:var(--c-blue);">Cached: {{ (stats.nine_router.totals.cached_formatted if stats.nine_router else '0') }}</div>
+              <div class="card-metric-sub" id="nrCachedTokens" style="color:var(--c-blue);">Cached: {{ (stats.nine_router.totals.cached_formatted if stats.nine_router else '0') }}{% if stats.nine_router and stats.nine_router.totals.cache_hit_rate %} ({{ stats.nine_router.totals.cache_hit_rate }}% Quote){% endif %}</div>
               <div class="badge-status badge-online">PROMPT & CACHE TELEMETRIE</div>
+            </div>
+
+            <!-- 9Router Ersparnis durch Prompt Caching -->
+            <div class="lcars-card card-blue">
+              <div class="card-head">
+                <span class="card-head-title">CACHE-ERSPARNIS</span>
+                <span class="card-head-icon">🛡️</span>
+              </div>
+              <div class="card-metric" id="nrSavingsRate" style="color:var(--c-blue);">{{ (stats.nine_router.totals.cache_hit_rate_formatted if stats.nine_router else '0.0%') }}</div>
+              <div class="card-metric-sub" id="nrSavedTokens">Tokens gespart: {{ (stats.nine_router.totals.saved_tokens_formatted if stats.nine_router else '0') }}</div>
+              <div class="card-metric-sub" id="nrSavedCost" style="color:var(--c-accent);">Kosten gespart: ~{{ (stats.nine_router.totals.saved_cost_formatted if stats.nine_router else '$0.00') }}{% if stats.nine_router and stats.nine_router.totals.saved_cost_pct %} (-{{ stats.nine_router.totals.saved_cost_pct }}%){% endif %}</div>
+              <div class="badge-status badge-online">PROMPT CACHE EFFIZIENZ</div>
             </div>
 
             <!-- 9Router Total Cost -->
@@ -3436,8 +3493,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <span class="card-head-icon">💳</span>
               </div>
               <div class="card-metric" id="nrTotalCost">{{ (stats.nine_router.totals.cost_formatted if stats.nine_router else '$0.00') }}</div>
-              <div class="card-metric-sub">Aggregierte Modell-Kosten</div>
-              <div class="card-metric-sub">Präzise 9Router Abrechnung</div>
+              <div class="card-metric-sub" id="nrUncachedCost">Ohne Cache: ~{{ (stats.nine_router.totals.uncached_cost_formatted if stats.nine_router else '$0.00') }}</div>
+              <div class="card-metric-sub" id="nrCostSavingsSub">Ersparnis: ~{{ (stats.nine_router.totals.saved_cost_formatted if stats.nine_router else '$0.00') }}</div>
               <div class="badge-status badge-online">ROUTING SPENDINGS</div>
             </div>
 
@@ -4525,11 +4582,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     const cachedEl = document.getElementById('nrCachedTokens');
     if (cachedEl) {
-      cachedEl.textContent = `Cached: ${totals.cached_formatted || totals.cached_tokens || '0'}`;
+      const rateStr = totals.cache_hit_rate ? ` (${totals.cache_hit_rate}% Quote)` : '';
+      cachedEl.textContent = `Cached: ${totals.cached_formatted || totals.cached_tokens || '0'}${rateStr}`;
+    }
+
+    const savingsRateEl = document.getElementById('nrSavingsRate');
+    if (savingsRateEl) {
+      savingsRateEl.textContent = totals.cache_hit_rate_formatted || (totals.cache_hit_rate ? `${totals.cache_hit_rate}%` : '0.0%');
+    }
+
+    const savedTokensEl = document.getElementById('nrSavedTokens');
+    if (savedTokensEl) {
+      savedTokensEl.textContent = `Tokens gespart: ${totals.saved_tokens_formatted || totals.saved_tokens || '0'}`;
+    }
+
+    const savedCostEl = document.getElementById('nrSavedCost');
+    if (savedCostEl) {
+      const pct = totals.saved_cost_pct ? ` (-${totals.saved_cost_pct}%)` : '';
+      savedCostEl.textContent = `Kosten gespart: ~${totals.saved_cost_formatted || '$0.00'}${pct}`;
     }
 
     const costEl = document.getElementById('nrTotalCost');
     if (costEl) costEl.textContent = totals.cost_formatted || `$${Number(totals.cost || 0).toFixed(4)}`;
+
+    const uncachedCostEl = document.getElementById('nrUncachedCost');
+    if (uncachedCostEl) {
+      uncachedCostEl.textContent = `Ohne Cache: ~${totals.uncached_cost_formatted || '$0.00'}`;
+    }
+
+    const costSavingsSubEl = document.getElementById('nrCostSavingsSub');
+    if (costSavingsSubEl) {
+      costSavingsSubEl.textContent = `Ersparnis: ~${totals.saved_cost_formatted || '$0.00'}`;
+    }
 
     const connCountEl = document.getElementById('nrActiveConnCount');
     if (connCountEl) {
