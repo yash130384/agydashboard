@@ -12,12 +12,14 @@ Lauscht auf Port 5000 (bind 0.0.0.0) und bietet:
 - 5-Minuten Hintergrund-Scanner für alle laufenden Prozesse mit LAN-, Tailscale- und Cloudflared-Adressen
 """
 
+import atexit
 import datetime
 import glob
 import json
 import os
 import platform
 import re
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -50,7 +52,7 @@ if psutil:
 
 # Flask Import mit Fallback zu http.server
 try:
-    from flask import Flask, jsonify, render_template_string, request
+    from flask import Flask, jsonify, render_template_string, request, send_from_directory
     USE_FLASK = True
 except ImportError:
     print("[INFO] Flask nicht installiert, verwende Python Standardbibliothek (http.server).")
@@ -302,9 +304,19 @@ def get_lan_ip():
         s.connect(("1.1.1.1", 80))
         ip = s.getsockname()[0]
         s.close()
-        return ip
+        if ip and not ip.startswith("127."):
+            return ip
     except Exception:
-        return "127.0.0.1"
+        pass
+    try:
+        out = subprocess.check_output(["hostname", "-I"], text=True, timeout=1).strip()
+        for ip_part in out.split():
+            if ip_part.startswith("192.168.") or ip_part.startswith("10.") or ip_part.startswith("172."):
+                return ip_part
+    except Exception:
+        pass
+    return "192.168.31.210"
+
 
 
 def get_tailscale_info():
@@ -380,6 +392,159 @@ def check_service_status(port=8000, host="127.0.0.1", timeout=0.25, max_age=4.0)
 
 
 # ---------------------------------------------------------------------------
+# Automatischer Cloudflared-Quick-Tunnel-Manager
+# ---------------------------------------------------------------------------
+class CloudflaredTunnelManager:
+    """Verwaltet Cloudflared-Quick-Tunnels für entdeckte Webdienste.
+    Legt automatisch einen trycloudflare.com Tunnel an, falls ein Dienst noch keinen hat.
+    """
+    def __init__(self, binary_path="/home/yash/bin/cloudflared", url_dir="/home/yash/.cloudflared-urls"):
+        self.binary_path = binary_path if (os.path.isfile(binary_path) and os.access(binary_path, os.X_OK)) else (shutil.which("cloudflared") or "cloudflared")
+        self.url_dir = url_dir
+        os.makedirs(self.url_dir, exist_ok=True)
+        self._tunnels = {}  # port -> {"proc": Popen, "log": str, "url": str, "created_at": float}
+        self._lock = threading.Lock()
+        self._running = True
+        self._watcher_thread = threading.Thread(target=self._watcher_loop, daemon=True)
+        self._watcher_thread.start()
+
+    def get_url(self, port: int) -> str | None:
+        with self._lock:
+            t = self._tunnels.get(port)
+            if t and t.get("url"):
+                return t["url"]
+
+        for pattern in [f"port_{port}.url", f"{port}.url"]:
+            p_file = os.path.join(self.url_dir, pattern)
+            if os.path.isfile(p_file):
+                try:
+                    with open(p_file, "r", encoding="utf-8") as f:
+                        u = f.read().strip()
+                        if u.startswith("https://"):
+                            with self._lock:
+                                if port not in self._tunnels:
+                                    self._tunnels[port] = {"proc": None, "log": f"/tmp/cloudflared_{port}.log", "url": u, "created_at": time.time()}
+                            return u
+                except Exception:
+                    pass
+
+        log_file = f"/tmp/cloudflared_{port}.log"
+        if os.path.isfile(log_file):
+            try:
+                with open(log_file, "r", errors="ignore") as f:
+                    urls = re.findall(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com", f.read())
+                    if urls:
+                        u = urls[-1]
+                        with self._lock:
+                            if port in self._tunnels:
+                                self._tunnels[port]["url"] = u
+                            else:
+                                self._tunnels[port] = {"proc": None, "log": log_file, "url": u, "created_at": time.time()}
+                        return u
+            except Exception:
+                pass
+        return None
+
+    def get_all_urls(self) -> dict:
+        result = {}
+        with self._lock:
+            for p, t in self._tunnels.items():
+                if t.get("url"):
+                    result[p] = t["url"]
+        return result
+
+    def ensure_tunnel(self, port: int):
+        existing_url = self.get_url(port)
+        if existing_url:
+            return existing_url
+
+        with self._lock:
+            if port in self._tunnels:
+                t = self._tunnels[port]
+                if t.get("proc") and t["proc"].poll() is None:
+                    return t.get("url")
+
+            log_file = f"/tmp/cloudflared_{port}.log"
+            try:
+                if os.path.exists(log_file):
+                    os.remove(log_file)
+            except Exception:
+                pass
+
+            try:
+                cmd = [
+                    self.binary_path,
+                    "tunnel",
+                    "--url", f"http://127.0.0.1:{port}",
+                    "--logfile", log_file,
+                    "--no-autoupdate",
+                ]
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._tunnels[port] = {
+                    "proc": proc,
+                    "log": log_file,
+                    "url": None,
+                    "created_at": time.time(),
+                }
+                print(f"[CLOUDFLARED AUTO] Neuer Quick-Tunnel für Port {port} gestartet (PID {proc.pid}).", flush=True)
+            except Exception as e:
+                print(f"[CLOUDFLARED AUTO] Fehler beim Starten für Port {port}: {e}", file=sys.stderr)
+        return None
+
+    def _watcher_loop(self):
+        while self._running:
+            try:
+                with self._lock:
+                    ports = list(self._tunnels.keys())
+
+                for p in ports:
+                    with self._lock:
+                        t = self._tunnels.get(p)
+                    if not t:
+                        continue
+
+                    if not t.get("url"):
+                        log_file = t.get("log", f"/tmp/cloudflared_{p}.log")
+                        if os.path.exists(log_file):
+                            try:
+                                with open(log_file, "r", errors="ignore") as f:
+                                    matches = re.findall(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com", f.read())
+                                    if matches:
+                                        found_url = matches[-1]
+                                        t["url"] = found_url
+                                        print(f"[CLOUDFLARED AUTO] Port {p} Tunnel aktiv: {found_url}", flush=True)
+                                        try:
+                                            with open(os.path.join(self.url_dir, f"port_{p}.url"), "w", encoding="utf-8") as uf:
+                                                uf.write(found_url + "\n")
+                                        except Exception:
+                                            pass
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+            time.sleep(2)
+
+    def stop_all(self):
+        self._running = False
+        with self._lock:
+            for p, t in self._tunnels.items():
+                proc = t.get("proc")
+                if proc and proc.poll() is None:
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=1)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+
+
+cf_tunnel_manager = CloudflaredTunnelManager()
+atexit.register(cf_tunnel_manager.stop_all)
+
+
+# ---------------------------------------------------------------------------
 # 5-Minuten Automatischer Webserver-Erkennungs-Dienst
 # ---------------------------------------------------------------------------
 class WebserverDiscoveryScanner:
@@ -387,9 +552,9 @@ class WebserverDiscoveryScanner:
     Sucht alle 5 Minuten (300 Sekunden) nach allen lauschenden Prozessen und ermittelt
     für jeden Dienst:
     - Port, PID, Prozessname, Befehlszeile
-    - Lokale LAN-Adresse (z.B. http://192.168.31.210:PORT)
+    - Lokale LAN-Adresse (z.B. http://192.168.31.210:PORT) - NIEMALS 127.0.0.1
     - Tailscale-Adresse (z.B. http://pimmel.tail3a782b.ts.net:PORT)
-    - Cloudflared-Quick-Tunnel-Adresse (falls vorhanden)
+    - Cloudflared-Quick-Tunnel-Adresse (automatisch angelegt falls fehlend)
     """
 
     def __init__(self, interval_seconds=300):
@@ -422,10 +587,19 @@ class WebserverDiscoveryScanner:
                             u = f.read().strip()
                             if u.startswith("https://"):
                                 p = port_file_map.get(fname.lower())
+                                if not p:
+                                    m_p = re.search(r"(\d+)", fname)
+                                    if m_p:
+                                        p = int(m_p.group(1))
                                 if p:
                                     cf_map[p] = u
             except Exception:
                 pass
+
+        # URLs aus dem TunnelManager
+        for p, u in cf_tunnel_manager.get_all_urls().items():
+            if u:
+                cf_map[p] = u
 
         for log_path, p in [("/tmp/cloudflared_dash.log", 5000), ("/tmp/cloudflared_xdcc.log", 3000)]:
             if p not in cf_map and os.path.exists(log_path):
@@ -526,18 +700,23 @@ class WebserverDiscoveryScanner:
                 except Exception:
                     pass
 
-            web_procs = ["node", "python", "python3", "uvicorn", "gunicorn", "headroom", "agy", "caddy", "nginx", "apache2"]
-            if not is_http and any(wp in pname.lower() for wp in web_procs):
+            web_procs = ["node", "python", "python3", "uvicorn", "gunicorn", "headroom", "caddy", "nginx", "apache2"]
+            if not is_http and any(wp in pname.lower() for wp in web_procs) and port < 32768:
                 is_http = True
                 http_status = 200
 
             if not is_http:
                 continue
 
-            is_loopback = info["ip"] in ["127.0.0.1", "::1"]
-            lan_url = f"http://{lan_ip}:{port}" if not is_loopback else f"http://127.0.0.1:{port}"
-            ts_url = f"http://{ts_host}:{port}" if not is_loopback else None
+            # GRUNDSATZ: NIEMALS 127.0.0.1 anzeigen - immer netzwerkfähige Adressen
+            lan_url = f"http://{lan_ip}:{port}"
+            ts_url = f"http://{ts_host}:{port}"
             cf_url = cf_map.get(port)
+
+            # Automatisch Cloudflared Tunnel anlegen, falls noch keiner existiert
+            if not cf_url and port < 32768:
+                cf_tunnel_manager.ensure_tunnel(port)
+                cf_url = cf_tunnel_manager.get_url(port)
 
             title = f"{pname.capitalize()} (Port {port})"
             icon = "🌐"
@@ -599,6 +778,26 @@ class WebserverDiscoveryScanner:
                 "status": "online",
                 "last_seen": datetime.datetime.now().strftime("%H:%M:%S"),
             })
+
+        # Kurz abwarten falls neue Tunnel gerade gestartet wurden, um URLs direkt zu erfassen
+        pending = [d for d in discovered if not d.get("cloudflared_url") and d.get("port", 99999) < 32768]
+        if pending:
+            t_end = time.time() + 3.0
+            while time.time() < t_end:
+                time.sleep(0.5)
+                resolved = True
+                for d in pending:
+                    if not d.get("cloudflared_url"):
+                        u = cf_tunnel_manager.get_url(d["port"])
+                        if u:
+                            d["cloudflared_url"] = u
+                            for reg_key, reg_val in SERVICE_REGISTRY.items():
+                                if reg_val["port"] == d["port"]:
+                                    reg_val["cf_url"] = u
+                        else:
+                            resolved = False
+                if resolved:
+                    break
 
         now_ts = time.time()
         with self._lock:
@@ -1093,6 +1292,9 @@ def get_system_stats():
         "interval_seconds": webserver_scanner.interval,
     }
 
+    stats["lan_ip"] = get_lan_ip()
+    stats["history_samples"] = history_store.get_samples(range_seconds=3600) if "history_store" in globals() else []
+
     return stats
 
 
@@ -1224,7 +1426,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Bebas+Neue&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="/static/chart.umd.min.js"></script>
+  <script>
+    if (typeof Chart === 'undefined') {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"><' + '/script>');
+    }
+  </script>
   <style>
     /* ==========================================================================
        LCARS THEME PALETTES & CSS VARIABLES
@@ -2164,7 +2371,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
               <div style="font-size: 1.15rem; color:#fff; margin-bottom: 0.25rem;">{{ stats.hostname }}</div>
               <div class="card-metric-sub">{{ stats.platform }}</div>
-              <div class="card-metric-sub">LAN IP: <span id="sysLanIp">192.168.31.210</span></div>
+              <div class="card-metric-sub">LAN IP: <span id="sysLanIp">{{ stats.lan_ip or '192.168.31.210' }}</span></div>
             </div>
           </div>
 
@@ -2497,6 +2704,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
      ========================================================================== -->
 <script>
   const initialStats = {{ stats_json | safe }};
+  var historyChart = null;
+  var hermesChart = null;
+  var activeRange = '1h';
+  var currentHistorySamples = initialStats?.history_samples || [];
+  var visibleDatasets = [true, true, true, false]; // 0: Temp, 1: CPU, 2: Throttle, 3: RAM
 
   // Sound Engine (Web Audio API Synthesizer)
   let audioContext = null;
@@ -2612,24 +2824,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       banner.textContent = CATEGORY_NAMES[catId];
     }
 
-    // Chart Resizing & Nachladen
-    if (catId === 'system' && historyChart) {
+    // Chart Resizing & Re-Render
+    if (catId === 'system') {
       setTimeout(() => {
-        historyChart.resize();
-        historyChart.update('none');
-      }, 50);
+        if (historyChart) {
+          historyChart.resize();
+          historyChart.update('none');
+        } else {
+          initHistoryChart();
+        }
+      }, 60);
     }
     if (catId === 'agents') {
-      ensureChart(() => {
-        if (!hermesChart) {
-          initHermesChart();
-        } else {
-          setTimeout(() => {
-            hermesChart.resize();
-            hermesChart.update('none');
-          }, 50);
-        }
-      });
+      setTimeout(() => {
+        initHermesChart();
+      }, 60);
     }
   }
 
@@ -2714,6 +2923,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       updateServicesCards(data.discovered_servers);
     }
 
+    // LAN IP
+    if (data.lan_ip) {
+      const el = document.getElementById('sysLanIp');
+      if (el) el.textContent = data.lan_ip;
+    }
+
     // Timestamp
     if (data.timestamp) {
       document.getElementById('footerTimestamp').textContent = data.timestamp;
@@ -2724,15 +2939,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   function updateServicesCards(servers) {
     const grid = document.getElementById('servicesGrid');
     if (!grid || !servers) return;
+    const lanIp = initialStats?.lan_ip || '192.168.31.210';
     let html = '';
     servers.forEach(s => {
-      const tailscaleBtn = s.tailscale_url
-        ? `<a href="${s.tailscale_url}" target="_blank" class="url-chip-btn chip-ts"><span>🌐</span> <span>TS: ${s.tailscale_url}</span></a>`
-        : `<span style="font-size:0.75rem; color:rgba(255,255,255,0.4); padding-left:0.2rem;">🌐 Localhost only</span>`;
+      // Grundsatz: NIEMALS 127.0.0.1 anzeigen
+      const cleanLanUrl = s.lan_url ? s.lan_url.replace("127.0.0.1", lanIp) : `http://${lanIp}:${s.port}`;
+      const cleanTsUrl = s.tailscale_url ? s.tailscale_url.replace("127.0.0.1", lanIp) : '';
+
+      const tailscaleBtn = cleanTsUrl
+        ? `<a href="${cleanTsUrl}" target="_blank" class="url-chip-btn chip-ts"><span>🌐</span> <span>TS: ${cleanTsUrl}</span></a>`
+        : '';
 
       const cfBtn = s.cloudflared_url
         ? `<a href="${s.cloudflared_url}" target="_blank" class="url-chip-btn chip-cf"><span>☁️</span> <span>CF: ${s.cloudflared_url}</span></a>`
-        : `<span style="font-size:0.75rem; color:rgba(255,255,255,0.4); padding-left:0.2rem;">☁️ Kein Cloudflare-Tunnel</span>`;
+        : `<span style="font-size:0.75rem; color:var(--c-gold); padding-left:0.2rem;">☁️ Tunnel wird initialisiert...</span>`;
 
       html += `
         <div class="lcars-card">
@@ -2749,8 +2969,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             PID ${s.pid || 'N/A'} [${s.process_name || 'N/A'}] // ${s.cmdline || ''}
           </div>
           <div class="card-action-links">
-            <a href="${s.lan_url}" target="_blank" class="url-chip-btn">
-              <span>🏠</span> <span>LAN: ${s.lan_url}</span>
+            <a href="${cleanLanUrl}" target="_blank" class="url-chip-btn">
+              <span>🏠</span> <span>LAN: ${cleanLanUrl}</span>
             </a>
             ${tailscaleBtn}
             ${cfBtn}
@@ -2810,122 +3030,281 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   refreshTimer = setInterval(() => fetchLiveStats(false), refreshIntervalMs);
 
   // ---------------------------------------------------------------------------
-  // CHART.JS HELPER & INITIALISIERUNG
+  // CHART ENGINE: DUAL CHART.JS + NATIVES LCARS CANVAS (100% GARANTIE)
   // ---------------------------------------------------------------------------
-  let historyChart = null;
-  let hermesChart = null;
-  let activeRange = '1h';
-
-  function ensureChart(cb, attempts = 50) {
+  function ensureChart(cb, attempts = 30) {
     if (typeof Chart !== 'undefined') {
       try { cb(); } catch (e) { console.error('Chart init exception:', e); }
       return;
     }
     if (attempts > 0) {
-      setTimeout(() => ensureChart(cb, attempts - 1), 60);
+      setTimeout(() => ensureChart(cb, attempts - 1), 50);
     } else {
-      console.warn('Chart.js konnte nicht innerhalb des Timeouts geladen werden.');
+      console.warn('Chart.js nicht verfügbar - aktiviere nativen LCARS Canvas Renderer.');
+      try { cb(); } catch (e) { console.error('Fallback exception:', e); }
     }
   }
 
+  // 1. Systemverlauf (Line Chart)
   function initHistoryChart() {
     const canvas = document.getElementById('historyChart');
-    if (!canvas || typeof Chart === 'undefined') return;
-    const ctx = canvas.getContext('2d');
+    if (!canvas) return;
 
-    historyChart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: [],
-        datasets: [
-          {
-            label: 'Temperatur (°C)',
-            data: [],
-            borderColor: '#eb943a',
-            backgroundColor: 'rgba(235, 148, 58, 0.1)',
-            borderWidth: 2,
-            tension: 0.25,
-            pointRadius: 4,
-            pointHoverRadius: 6,
-            pointBackgroundColor: '#eb943a',
-            fill: false,
-            yAxisID: 'yTemp'
-          },
-          {
-            label: 'CPU-Auslastung (%)',
-            data: [],
-            borderColor: '#8899ff',
-            backgroundColor: 'rgba(136, 153, 255, 0.1)',
-            borderWidth: 2,
-            tension: 0.25,
-            pointRadius: 4,
-            pointHoverRadius: 6,
-            pointBackgroundColor: '#8899ff',
-            fill: false,
-            yAxisID: 'yPercent'
-          },
-          {
-            label: 'Throttling Aktiv',
-            data: [],
-            borderColor: '#cf4f4f',
-            backgroundColor: '#cf4f4f',
-            showLine: false,
-            pointRadius: 6,
-            yAxisID: 'yTemp'
-          },
-          {
-            label: 'RAM (%)',
-            data: [],
-            borderColor: '#baa4e5',
-            backgroundColor: 'rgba(186, 164, 229, 0.1)',
-            borderWidth: 2,
-            tension: 0.25,
-            pointRadius: 4,
-            pointHoverRadius: 6,
-            pointBackgroundColor: '#baa4e5',
-            fill: false,
-            hidden: true,
-            yAxisID: 'yPercent'
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: '#000',
-            borderColor: '#eb943a',
-            borderWidth: 1,
-            titleFont: { family: 'Antonio', size: 14 },
-            bodyFont: { family: 'Share Tech Mono', size: 13 }
-          }
-        },
-        scales: {
-          x: {
-            grid: { color: 'rgba(255, 255, 255, 0.08)' },
-            ticks: { color: '#aaa', font: { family: 'Share Tech Mono' } }
-          },
-          yPercent: {
-            position: 'left',
-            min: 0,
-            max: 100,
-            grid: { color: 'rgba(255, 255, 255, 0.08)' },
-            ticks: { color: '#8899ff', font: { family: 'Share Tech Mono' }, callback: v => v + '%' }
-          },
-          yTemp: {
-            position: 'right',
-            min: 20,
-            max: 85,
-            grid: { drawOnChartArea: false },
-            ticks: { color: '#eb943a', font: { family: 'Share Tech Mono' }, callback: v => v + '°C' }
-          }
+    if (historyChart) {
+      try { historyChart.destroy(); } catch (e) {}
+      historyChart = null;
+    }
+
+    const samples = currentHistorySamples;
+    const labels = samples.map(s => s.time || '');
+    const temps = samples.map(s => s.temp);
+    const cpus = samples.map(s => s.cpu);
+    const throttles = samples.map(s => s.throttled ? s.temp : null);
+    const rams = samples.map(s => s.ram);
+
+    if (typeof Chart !== 'undefined') {
+      try {
+        const existingChart = Chart.getChart(canvas);
+        if (existingChart) {
+          try { existingChart.destroy(); } catch (e) {}
         }
-      }
-    });
+        historyChart = new Chart(canvas, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: 'Temperatur (°C)',
+                data: temps,
+                borderColor: '#eb943a',
+                backgroundColor: 'rgba(235, 148, 58, 0.12)',
+                borderWidth: 2,
+                tension: 0.25,
+                pointRadius: labels.length > 40 ? 2 : 4,
+                pointHoverRadius: 6,
+                pointBackgroundColor: '#eb943a',
+                fill: false,
+                yAxisID: 'yTemp'
+              },
+              {
+                label: 'CPU-Auslastung (%)',
+                data: cpus,
+                borderColor: '#8899ff',
+                backgroundColor: 'rgba(136, 153, 255, 0.12)',
+                borderWidth: 2,
+                tension: 0.25,
+                pointRadius: labels.length > 40 ? 2 : 4,
+                pointHoverRadius: 6,
+                pointBackgroundColor: '#8899ff',
+                fill: false,
+                yAxisID: 'yPercent'
+              },
+              {
+                label: 'Throttling Aktiv',
+                data: throttles,
+                borderColor: '#cf4f4f',
+                backgroundColor: '#cf4f4f',
+                showLine: false,
+                pointRadius: 6,
+                yAxisID: 'yTemp'
+              },
+              {
+                label: 'RAM (%)',
+                data: rams,
+                borderColor: '#baa4e5',
+                backgroundColor: 'rgba(186, 164, 229, 0.12)',
+                borderWidth: 2,
+                tension: 0.25,
+                pointRadius: labels.length > 40 ? 2 : 4,
+                pointHoverRadius: 6,
+                pointBackgroundColor: '#baa4e5',
+                fill: false,
+                hidden: !visibleDatasets[3],
+                yAxisID: 'yPercent'
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 350 },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#000',
+                borderColor: '#eb943a',
+                borderWidth: 1,
+                titleFont: { family: 'Antonio', size: 14 },
+                bodyFont: { family: 'Share Tech Mono', size: 13 }
+              }
+            },
+            scales: {
+              x: {
+                grid: { color: 'rgba(255, 255, 255, 0.08)' },
+                ticks: { color: '#aaa', font: { family: 'Share Tech Mono' }, maxRotation: 0 }
+              },
+              yPercent: {
+                position: 'left',
+                min: 0,
+                max: 100,
+                grid: { color: 'rgba(255, 255, 255, 0.08)' },
+                ticks: { color: '#8899ff', font: { family: 'Share Tech Mono' }, callback: v => v + '%' }
+              },
+              yTemp: {
+                position: 'right',
+                min: 20,
+                max: 85,
+                grid: { drawOnChartArea: false },
+                ticks: { color: '#eb943a', font: { family: 'Share Tech Mono' }, callback: v => v + '°C' }
+              }
+            }
+          }
+        });
 
-    fetchHistoryData(activeRange);
+        if (samples.length === 0) {
+          fetchHistoryData(activeRange);
+        }
+        return;
+      } catch (e) {
+        console.error('Chart.js history init error:', e);
+      }
+    }
+
+    // Nativer Canvas Fallback
+    renderNativeHistoryChart(canvas, samples);
+    if (samples.length === 0) {
+      fetchHistoryData(activeRange);
+    }
+  }
+
+  // Nativer HTML5 2D Canvas Fallback für History-Graph
+  function renderNativeHistoryChart(canvas, samples) {
+    if (!canvas) return;
+    const parent = canvas.parentElement;
+    const w = parent ? parent.clientWidth : 600;
+    const h = parent ? parent.clientHeight : 320;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    if (!samples || samples.length === 0) {
+      ctx.fillStyle = '#eb943a';
+      ctx.font = '14px "Share Tech Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('ODN DATENBANK: LADEN...', w / 2, h / 2);
+      return;
+    }
+
+    const padLeft = 45;
+    const padRight = 50;
+    const padTop = 20;
+    const padBottom = 28;
+    const plotW = Math.max(10, w - padLeft - padRight);
+    const plotH = Math.max(10, h - padTop - padBottom);
+
+    // Gitterlinien
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = padTop + (plotH / 4) * i;
+      ctx.beginPath();
+      ctx.moveTo(padLeft, y);
+      ctx.lineTo(padLeft + plotW, y);
+      ctx.stroke();
+
+      const pct = Math.round(100 - i * 25);
+      ctx.fillStyle = '#8899ff';
+      ctx.font = '11px "Share Tech Mono", monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(pct + '%', padLeft - 6, y + 4);
+
+      const tempVal = Math.round(85 - i * (65 / 4));
+      ctx.fillStyle = '#eb943a';
+      ctx.textAlign = 'left';
+      ctx.fillText(tempVal + '°C', padLeft + plotW + 6, y + 4);
+    }
+
+    const n = samples.length;
+    const getX = (idx) => padLeft + (n > 1 ? (idx / (n - 1)) * plotW : plotW / 2);
+    const getYPercent = (val) => padTop + plotH - ((val || 0) / 100) * plotH;
+    const getYTemp = (val) => padTop + plotH - (((val || 20) - 20) / 65) * plotH;
+
+    // Zeitstempel unten
+    ctx.fillStyle = '#888';
+    ctx.font = '10px "Share Tech Mono", monospace';
+    ctx.textAlign = 'center';
+    const step = Math.max(1, Math.floor(n / 6));
+    for (let i = 0; i < n; i += step) {
+      if (samples[i] && samples[i].time) {
+        ctx.fillText(samples[i].time, getX(i), h - 8);
+      }
+    }
+
+    // Dataset 0: Temperatur (Orange)
+    if (visibleDatasets[0]) {
+      ctx.beginPath();
+      ctx.strokeStyle = '#eb943a';
+      ctx.lineWidth = 2.5;
+      samples.forEach((s, i) => {
+        const x = getX(i);
+        const y = getYTemp(s.temp);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.fillStyle = '#eb943a';
+      samples.forEach((s, i) => {
+        ctx.beginPath();
+        ctx.arc(getX(i), getYTemp(s.temp), 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // Dataset 1: CPU (Blau)
+    if (visibleDatasets[1]) {
+      ctx.beginPath();
+      ctx.strokeStyle = '#8899ff';
+      ctx.lineWidth = 2;
+      samples.forEach((s, i) => {
+        const x = getX(i);
+        const y = getYPercent(s.cpu);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.fillStyle = '#8899ff';
+      samples.forEach((s, i) => {
+        ctx.beginPath();
+        ctx.arc(getX(i), getYPercent(s.cpu), 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // Dataset 2: Throttling (Rot)
+    if (visibleDatasets[2]) {
+      ctx.fillStyle = '#cf4f4f';
+      samples.forEach((s, i) => {
+        if (s.throttled) {
+          ctx.beginPath();
+          ctx.arc(getX(i), getYTemp(s.temp), 5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+    }
+
+    // Dataset 3: RAM (Lila)
+    if (visibleDatasets[3]) {
+      ctx.beginPath();
+      ctx.strokeStyle = '#baa4e5';
+      ctx.lineWidth = 2;
+      samples.forEach((s, i) => {
+        const x = getX(i);
+        const y = getYPercent(s.ram);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
   }
 
   async function fetchHistoryData(range) {
@@ -2933,96 +3312,208 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const resp = await fetch(`/api/history?range=${range}`);
       if (!resp.ok) return;
       const data = await resp.json();
-      if (!historyChart || !data.samples) return;
+      if (!data.samples) return;
 
+      currentHistorySamples = data.samples;
       const labels = data.samples.map(s => s.time);
       const temps = data.samples.map(s => s.temp);
       const cpus = data.samples.map(s => s.cpu);
       const throttles = data.samples.map(s => s.throttled ? s.temp : null);
       const rams = data.samples.map(s => s.ram);
 
-      historyChart.data.labels = labels;
-      historyChart.data.datasets[0].data = temps;
-      historyChart.data.datasets[1].data = cpus;
-      historyChart.data.datasets[2].data = throttles;
-      historyChart.data.datasets[3].data = rams;
-      historyChart.update();
+      if (historyChart) {
+        historyChart.data.labels = labels;
+        historyChart.data.datasets[0].data = temps;
+        historyChart.data.datasets[1].data = cpus;
+        historyChart.data.datasets[2].data = throttles;
+        historyChart.data.datasets[3].data = rams;
+        historyChart.update();
+      } else {
+        const canvas = document.getElementById('historyChart');
+        if (canvas) renderNativeHistoryChart(canvas, data.samples);
+      }
     } catch (e) {
       console.warn("History Fetch Fehler:", e);
     }
   }
 
-  function setChartRange(range) {
+  function setChartRange(range, btnElem) {
     playLcarsBeep(1100, 1600);
     activeRange = range;
     document.querySelectorAll('.range-btn').forEach(btn => btn.classList.remove('active-range'));
+    if (btnElem) {
+      btnElem.classList.add('active-range');
+    }
     fetchHistoryData(range);
   }
 
   function toggleDataset(idx) {
-    if (!historyChart) return;
+    visibleDatasets[idx] = !visibleDatasets[idx];
     playLcarsBeep(880, 1320);
-    const visible = historyChart.isDatasetVisible(idx);
-    historyChart.setDatasetVisibility(idx, !visible);
-    historyChart.update();
+
     const btn = document.getElementById('dsBtn' + idx);
     if (btn) {
-      btn.style.opacity = !visible ? '1' : '0.4';
+      btn.style.opacity = visibleDatasets[idx] ? '1' : '0.35';
+    }
+
+    if (historyChart) {
+      historyChart.setDatasetVisibility(idx, visibleDatasets[idx]);
+      historyChart.update();
+    } else {
+      const canvas = document.getElementById('historyChart');
+      if (canvas) renderNativeHistoryChart(canvas, currentHistorySamples);
     }
   }
 
-  // Hermes Donut Chart
+  // 2. Hermes Donut Chart (Modell Token-Verteilung)
   function initHermesChart() {
     const canvas = document.getElementById('hermesChart');
-    if (!canvas || typeof Chart === 'undefined') return;
-    const ctx = canvas.getContext('2d');
-
-    const models = initialStats?.hermes?.models || [];
-    const labels = models.map(m => m.model);
-    const data = models.map(m => m.total_tokens);
-    const palette = ['#eb943a', '#baa4e5', '#8899ff', '#ea9c72', '#edb378', '#cf4f4f', '#10b981'];
+    if (!canvas) return;
 
     if (hermesChart) {
-      hermesChart.destroy();
+      try { hermesChart.destroy(); } catch (e) {}
+      hermesChart = null;
     }
 
-    hermesChart = new Chart(ctx, {
-      type: 'doughnut',
-      data: {
-        labels: labels,
-        datasets: [{
-          data: data,
-          backgroundColor: palette.slice(0, labels.length),
-          borderColor: '#000000',
-          borderWidth: 2
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        cutout: '68%',
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: '#000',
-            borderColor: '#baa4e5',
-            borderWidth: 1,
-            titleFont: { family: 'Antonio', size: 14 },
-            bodyFont: { family: 'Share Tech Mono', size: 12 }
-          }
+    const models = initialStats?.hermes?.models || [];
+    let labels = models.map(m => m.model);
+    let data = models.map(m => m.total_tokens);
+    const palette = ['#eb943a', '#baa4e5', '#8899ff', '#ea9c72', '#edb378', '#cf4f4f', '#10b981'];
+
+    if (!data.length || data.every(v => v === 0)) {
+      labels = ['Keine Daten'];
+      data = [1];
+    }
+
+    if (typeof Chart !== 'undefined') {
+      try {
+        const existingChart = Chart.getChart(canvas);
+        if (existingChart) {
+          try { existingChart.destroy(); } catch (e) {}
         }
+        hermesChart = new Chart(canvas, {
+          type: 'doughnut',
+          data: {
+            labels: labels,
+            datasets: [{
+              data: data,
+              backgroundColor: palette.slice(0, labels.length),
+              borderColor: '#000000',
+              borderWidth: 2
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '68%',
+            animation: { duration: 350 },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#000',
+                borderColor: '#baa4e5',
+                borderWidth: 1,
+                titleFont: { family: 'Antonio', size: 14 },
+                bodyFont: { family: 'Share Tech Mono', size: 12 }
+              }
+            }
+          }
+        });
+        return;
+      } catch (e) {
+        console.error('Hermes Chart.js error:', e);
       }
-    });
+    }
+
+    // Nativer Canvas Fallback
+    renderNativeDonutChart(canvas, models);
   }
 
-  // Initialer Render nach Laden
-  window.addEventListener('DOMContentLoaded', () => {
+  function renderNativeDonutChart(canvas, models) {
+    if (!canvas) return;
+    const parent = canvas.parentElement;
+    const size = Math.min(parent ? parent.clientWidth : 260, parent ? parent.clientHeight : 260) || 260;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, size, size);
+
+    const cx = size / 2;
+    const cy = size / 2;
+    const outerR = size * 0.46;
+    const innerR = size * 0.32;
+
+    const palette = ['#eb943a', '#baa4e5', '#8899ff', '#ea9c72', '#edb378', '#cf4f4f', '#10b981'];
+    const total = (models || []).reduce((acc, m) => acc + (m.total_tokens || 0), 0) || 1;
+
+    let startAngle = -Math.PI / 2;
+    if (models && models.length > 0) {
+      models.forEach((m, idx) => {
+        const slice = ((m.total_tokens || 0) / total) * Math.PI * 2;
+        if (slice <= 0) return;
+        const endAngle = startAngle + slice;
+        ctx.beginPath();
+        ctx.arc(cx, cy, outerR, startAngle, endAngle);
+        ctx.arc(cx, cy, innerR, endAngle, startAngle, true);
+        ctx.closePath();
+        ctx.fillStyle = palette[idx % palette.length];
+        ctx.fill();
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        startAngle = endAngle;
+      });
+    } else {
+      ctx.beginPath();
+      ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+      ctx.arc(cx, cy, innerR, Math.PI * 2, 0, true);
+      ctx.closePath();
+      ctx.fillStyle = '#333333';
+      ctx.fill();
+    }
+
+    // Zentrierte LCARS Beschriftung
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 15px "Antonio", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('TOKENS', cx, cy - 8);
+
+    ctx.fillStyle = '#eb943a';
+    ctx.font = '12px "Share Tech Mono", monospace';
+    const totalStr = total > 1000000 ? (total / 1000000).toFixed(1) + 'M' : (total / 1000).toFixed(0) + 'k';
+    ctx.fillText(totalStr, cx, cy + 10);
+  }
+
+  // Window Resize Listener
+  window.addEventListener('resize', () => {
+    if (historyChart) historyChart.resize();
+    else {
+      const c = document.getElementById('historyChart');
+      if (c) renderNativeHistoryChart(c, currentHistorySamples);
+    }
+    if (hermesChart) hermesChart.resize();
+    else {
+      const c = document.getElementById('hermesChart');
+      if (c) renderNativeDonutChart(c, initialStats?.hermes?.models || []);
+    }
+  });
+
+  // Initialer Boot-Ablauf
+  function bootDashboard() {
     renderStats(initialStats);
     ensureChart(() => {
       initHistoryChart();
-      initHermesChart();
     });
-  });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootDashboard);
+  } else {
+    bootDashboard();
+  }
 </script>
 
 </body>
@@ -3045,7 +3536,15 @@ def render_html_fallback(stats):
 # Server Initialisierung & Routes
 # ---------------------------------------------------------------------------
 if USE_FLASK:
-    app = Flask(__name__)
+    app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+    @app.route("/static/<path:filename>")
+    def serve_static(filename):
+        return send_from_directory("static", filename)
+
+    @app.route("/chart.umd.min.js")
+    def serve_chart_root():
+        return send_from_directory("static", "chart.umd.min.js")
 
     @app.route("/")
     def index():
