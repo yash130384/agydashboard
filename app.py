@@ -1518,6 +1518,155 @@ history_store.start()
 
 
 # ---------------------------------------------------------------------------
+# KI-Agenten & 9Router Proxy Integration
+# ---------------------------------------------------------------------------
+def get_9router_api_key():
+    """Ermittelt den API-Key für den lokalen 9Router Proxy (Port 20128)."""
+    env_key = os.environ.get("ROUTER_API_KEY") or os.environ.get("NINEROUTER_API_KEY") or os.environ.get("HERMES_API_KEY")
+    if env_key:
+        return env_key
+    db_path = os.path.expanduser("~/.9router/db/data.sqlite")
+    if os.path.exists(db_path):
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+            c = conn.cursor()
+            c.execute("SELECT key FROM apiKeys ORDER BY rowid ASC LIMIT 1;")
+            row = c.fetchone()
+            conn.close()
+            if row and row[0]:
+                return row[0]
+        except Exception:
+            pass
+    return "sk-a83b72936d0528ea-bhpytf-49c7be05"
+
+
+def fetch_chat_models():
+    """Fragt verfügbare Modelle vom lokalen Proxy (Port 20128) ab mit Fallback."""
+    fallback_models = ['ag/gemini-3.8-flash-high', 'qwen2.5:7b']
+    api_key = get_9router_api_key()
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        req = urllib.request.Request("http://127.0.0.1:20128/v1/models", headers=headers)
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = [m["id"] for m in data.get("data", []) if "id" in m]
+            if models:
+                return {
+                    "models": models,
+                    "data": models,
+                    "status": "online"
+                }
+    except Exception as e:
+        print(f"[WARN] 9Router Models Abfrage fehlgeschlagen ({e}), verwende Fallback.", file=sys.stderr)
+    return {
+        "models": fallback_models,
+        "data": fallback_models,
+        "status": "offline"
+    }
+
+
+def parse_sse_completion(text):
+    """Parst SSE-Stream Datenzeilen und setzt den finalen Assistant-Text zusammen."""
+    content_parts = []
+    model_name = ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("data: "):
+            payload = line[6:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                chunk = json.loads(payload)
+                if "model" in chunk and not model_name:
+                    model_name = chunk["model"]
+                choices = chunk.get("choices", [])
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    if "content" in delta and delta["content"]:
+                        content_parts.append(delta["content"])
+            except Exception:
+                pass
+    full_content = "".join(content_parts)
+    return {
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": full_content}, "finish_reason": "stop"}],
+        "model": model_name
+    }
+
+
+def forward_chat_completion(model, messages, auth_header=None):
+    """Leitet Chat Completion Requests an den lokalen Proxy weiter."""
+    if not auth_header:
+        key = get_9router_api_key()
+        if key:
+            auth_header = f"Bearer {key}"
+
+    headers = {
+        "Content-Type": "application/json"
+    }
+    if auth_header:
+        headers["Authorization"] = auth_header
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False
+    }
+
+    req = urllib.request.Request(
+        "http://127.0.0.1:20128/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            resp_bytes = resp.read()
+            resp_text = resp_bytes.decode("utf-8", errors="replace")
+            try:
+                res_json = json.loads(resp_text)
+            except Exception:
+                res_json = parse_sse_completion(resp_text)
+
+            choices = res_json.get("choices", [])
+            assistant_msg = choices[0].get("message") if choices else None
+            if not assistant_msg:
+                delta = choices[0].get("delta", {}) if choices else {}
+                assistant_msg = {"role": "assistant", "content": delta.get("content", "")}
+
+            return {
+                "message": assistant_msg,
+                "content": assistant_msg.get("content", ""),
+                "role": assistant_msg.get("role", "assistant"),
+                "model": res_json.get("model", model),
+                "choices": choices,
+                "usage": res_json.get("usage", {}),
+                "raw": res_json
+            }, 200
+
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        try:
+            err_json = json.loads(err_body)
+        except Exception:
+            err_json = {"error": err_body}
+        return {
+            "error": f"Upstream proxy HTTP error: {e.code}",
+            "message": {"role": "assistant", "content": f"[LCARS FEHLER] Der KI-Proxy meldet Fehler {e.code}."},
+            "details": err_json
+        }, e.code
+
+    except Exception as e:
+        return {
+            "error": "Upstream proxy offline or unreachable",
+            "message": {"role": "assistant", "content": f"[LCARS FEHLER] Verbindung zum KI-Proxy fehlgeschlagen: {str(e)}"},
+            "details": str(e)
+        }, 502
+
+
+# ---------------------------------------------------------------------------
 # Star Trek LCARS Fullscreen Dashboard UI (HTML, CSS & JavaScript)
 # Vorlage: https://www.thelcars.com/
 # ---------------------------------------------------------------------------
@@ -2261,7 +2410,293 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       transition: filter 0.15s ease, transform 0.1s ease;
     }
     .btn-scan-trigger:hover { filter: brightness(1.25); }
-    .btn-scan-trigger:active { transform: scale(0.98); }
+    /* ==========================================================================
+       LCARS AI AGENT CHAT TERMINAL
+       ========================================================================== */
+    .lcars-chat-card {
+      background: var(--c-card-bg);
+      border: 2px solid var(--c-card-border);
+      border-left: 8px solid var(--c-primary);
+      border-radius: 12px;
+      padding: 1.1rem;
+      margin-top: 1.25rem;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    }
+    .lcars-select-wrap {
+      position: relative;
+      display: inline-block;
+      max-width: 100%;
+    }
+    .lcars-chat-select {
+      background: #000;
+      border: 2px solid var(--c-primary);
+      color: #fff;
+      font-family: var(--mono-family);
+      font-size: 0.85rem;
+      font-weight: 700;
+      padding: 0.35rem 0.8rem;
+      border-radius: 100vmax;
+      outline: none;
+      cursor: pointer;
+      max-width: 260px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      overflow: hidden;
+      transition: all 0.2s ease;
+    }
+    .lcars-chat-select:focus {
+      box-shadow: 0 0 10px var(--c-primary);
+    }
+    .lcars-chat-select option {
+      background: #11141f;
+      color: #fff;
+    }
+    .lcars-chat-log {
+      height: 380px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      padding: 0.9rem;
+      background: rgba(10, 12, 18, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      margin: 0.75rem 0;
+      scroll-behavior: smooth;
+    }
+    .lcars-chat-log::-webkit-scrollbar {
+      width: 6px;
+    }
+    .lcars-chat-log::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.4);
+    }
+    .lcars-chat-log::-webkit-scrollbar-thumb {
+      background: var(--c-primary);
+      border-radius: 3px;
+    }
+    .lcars-msg {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      padding: 0.65rem 0.85rem;
+      border-radius: 6px;
+      max-width: 88%;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      box-sizing: border-box;
+      animation: lcarsMsgFadeIn 0.2s ease-out;
+    }
+    @keyframes lcarsMsgFadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .lcars-msg-user {
+      align-self: flex-end;
+      border-right: 4px solid var(--c-blue);
+      border-left: none;
+      background: rgba(136, 153, 255, 0.1);
+    }
+    .lcars-msg-user .lcars-msg-sender {
+      color: var(--c-blue);
+    }
+    .lcars-msg-agent {
+      align-self: flex-start;
+      border-left: 4px solid var(--c-primary);
+      background: rgba(235, 148, 58, 0.08);
+    }
+    .lcars-msg-agent .lcars-msg-sender {
+      color: var(--c-primary);
+    }
+    .lcars-msg-error {
+      align-self: flex-start;
+      border-left: 4px solid var(--c-red);
+      background: rgba(207, 79, 79, 0.12);
+    }
+    .lcars-msg-error .lcars-msg-sender {
+      color: var(--c-red);
+    }
+    .lcars-msg-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: var(--font-family);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding-bottom: 0.25rem;
+    }
+    .lcars-msg-time {
+      color: rgba(255, 255, 255, 0.5);
+      font-family: var(--mono-family);
+      font-size: 0.74rem;
+    }
+    .lcars-msg-body {
+      font-family: var(--mono-family);
+      font-size: 0.9rem;
+      line-height: 1.5;
+      color: #f1f5f9;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .lcars-msg-body pre {
+      background: rgba(0, 0, 0, 0.85);
+      border: 1px solid var(--c-primary);
+      border-radius: 4px;
+      padding: 0.5rem 0.75rem;
+      margin: 0.5rem 0;
+      overflow-x: auto;
+      font-family: var(--mono-family);
+      font-size: 0.82rem;
+      color: #93c5fd;
+      max-width: 100%;
+      white-space: pre;
+    }
+    .lcars-msg-body code {
+      font-family: var(--mono-family);
+    }
+    .lcars-inline-code {
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--c-gold);
+      padding: 0.1rem 0.35rem;
+      border-radius: 3px;
+      font-size: 0.85em;
+    }
+    .lcars-chat-loading {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.55rem 0.85rem;
+      background: rgba(235, 148, 58, 0.1);
+      border: 1px dashed var(--c-primary);
+      border-radius: 6px;
+      font-family: var(--mono-family);
+      font-size: 0.84rem;
+      color: var(--c-primary);
+      animation: lcarsBlinkAnim 1.2s infinite ease-in-out;
+    }
+    @keyframes lcarsBlinkAnim {
+      0%, 100% { opacity: 1; border-color: var(--c-primary); }
+      50% { opacity: 0.35; border-color: transparent; }
+    }
+    .lcars-loading-bars {
+      display: inline-flex;
+      gap: 3px;
+      height: 14px;
+      align-items: center;
+    }
+    .lcars-loading-bar {
+      width: 4px;
+      height: 6px;
+      background-color: var(--c-primary);
+      animation: lcarsBarScale 0.7s infinite alternate ease-in-out;
+    }
+    .lcars-loading-bar:nth-child(2) { animation-delay: 0.2s; background-color: var(--c-secondary); }
+    .lcars-loading-bar:nth-child(3) { animation-delay: 0.4s; background-color: var(--c-gold); }
+    @keyframes lcarsBarScale {
+      0% { height: 4px; }
+      100% { height: 14px; }
+    }
+    .lcars-chat-input-row {
+      display: flex;
+      gap: 0.5rem;
+      width: 100%;
+      min-width: 0;
+      align-items: stretch;
+    }
+    .lcars-chat-input {
+      width: 100%;
+      min-width: 0;
+      background: #080a10;
+      border: 2px solid var(--c-card-border);
+      color: #fff;
+      font-family: var(--mono-family);
+      font-size: 0.92rem;
+      padding: 0.65rem 0.9rem;
+      border-radius: 8px;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .lcars-chat-input:focus {
+      border-color: var(--c-primary);
+      box-shadow: 0 0 10px rgba(235, 148, 58, 0.35);
+    }
+    .lcars-chat-btn-send {
+      background-color: var(--c-primary);
+      color: #000;
+      font-family: var(--font-family);
+      font-size: 1.05rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 0.65rem 1.3rem;
+      border-radius: 100vmax;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: all 0.15s ease;
+    }
+    .lcars-chat-btn-send:hover {
+      filter: brightness(1.25);
+      transform: scale(1.02);
+    }
+    .lcars-chat-btn-send:active {
+      transform: scale(0.98);
+    }
+    .lcars-chat-btn-send:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+      filter: none;
+    }
+    .lcars-chat-quick-actions {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .lcars-quick-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: var(--c-gold);
+      font-family: var(--mono-family);
+      font-size: 0.74rem;
+      padding: 0.25rem 0.55rem;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .lcars-quick-btn:hover {
+      border-color: var(--c-primary);
+      color: #fff;
+      background: rgba(235, 148, 58, 0.18);
+    }
+    .lcars-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background-color: #10b981;
+      display: inline-block;
+    }
+    @media (max-width: 650px) {
+      .lcars-msg { max-width: 96%; }
+      .lcars-chat-input-row { flex-direction: column; }
+      .lcars-chat-btn-send { width: 100%; justify-content: center; }
+      .lcars-chat-select { max-width: 180px; }
+    }
 
     /* Theme Buttons in Config */
     .theme-selector-grid {
@@ -2677,6 +3112,93 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </div>
           </div>
 
+          <!-- LCARS KI-AGENTEN CHAT-TERMINAL -->
+          <div class="lcars-card lcars-chat-card">
+            <!-- Header-Leiste des Chat Terminals -->
+            <div class="card-head" style="flex-wrap: wrap; gap: 0.6rem; border-bottom: 2px solid var(--c-primary); padding-bottom: 0.6rem; margin-bottom: 0.8rem;">
+              <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                <span class="card-head-title" style="color: var(--c-primary); font-size: 1.1rem; letter-spacing: 0.08em;">
+                  LCARS SUBRAUM COMM-LINK // KI-AGENTEN TERMINAL
+                </span>
+                <span class="badge-status badge-online" id="chatProxyStatusBadge">
+                  <span class="lcars-status-dot"></span>
+                  <span id="chatProxyStatusText">PROXY BEREIT</span>
+                </span>
+              </div>
+
+              <!-- Modell-Auswahl & LCARS Steuerung -->
+              <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                <label for="chatModelSelect" style="font-family: var(--font-family); font-size: 0.82rem; font-weight: 700; color: var(--c-secondary); text-transform: uppercase; letter-spacing: 0.05em;">
+                  AGENT / MODELL:
+                </label>
+                <div class="lcars-select-wrap">
+                  <select id="chatModelSelect" class="lcars-chat-select" onchange="onChatModelChange()">
+                    <option value="ag/gemini-3-flash">ag/gemini-3-flash</option>
+                    <option value="openrouter/openrouter/free">openrouter/openrouter/free</option>
+                  </select>
+                </div>
+                <button type="button" class="left-action-btn" onclick="loadChatModels(true)" title="Modell-Liste neu laden" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">
+                  <span>⟳</span>
+                </button>
+                <button type="button" class="left-action-btn" onclick="clearChatHistory()" title="Dialog zurücksetzen" style="padding: 0.3rem 0.7rem; font-size: 0.8rem; border-color: var(--c-red); color: var(--c-red);">
+                  <span>🗑️ RESET</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Chat Verlauf / ODN Log Screen -->
+            <div id="lcarsChatLog" class="lcars-chat-log" role="log" aria-live="polite">
+              <!-- Initialnachricht -->
+              <div class="lcars-msg lcars-msg-agent">
+                <div class="lcars-msg-header">
+                  <span class="lcars-msg-sender">▶ AGENT // SUBRAUM-COMM</span>
+                  <span class="lcars-msg-time" id="chatInitialTime">--:--:--</span>
+                </div>
+                <div class="lcars-msg-body">LCARS Subraum-Transceiver initialisiert. Kanal zum lokalen KI-Proxy (Port 20128) etabliert. Geben Sie einen Befehl oder eine Frage ein, um eine Kommunikation mit dem ausgewählten KI-Agenten zu starten.</div>
+              </div>
+            </div>
+
+            <!-- LCARS Ladeanzeige mit Blinken/Pulsieren während Generierung -->
+            <div id="lcarsChatLoading" class="lcars-chat-loading" style="display: none;">
+              <div class="lcars-loading-bars">
+                <div class="lcars-loading-bar"></div>
+                <div class="lcars-loading-bar"></div>
+                <div class="lcars-loading-bar"></div>
+              </div>
+              <span id="lcarsChatLoadingText">KOGNITIVER PROZESSOR AKTIV // VERARBEITE SUBRAUM-TRANSMISSION...</span>
+            </div>
+
+            <!-- Eingabebereich mit LCARS Send-Button -->
+            <form id="lcarsChatForm" onsubmit="handleChatSubmit(event)" style="margin-top: 0.75rem; width: 100%; min-width: 0;">
+              <div class="lcars-chat-input-row">
+                <input
+                  type="text"
+                  id="lcarsChatInput"
+                  class="lcars-chat-input"
+                  placeholder="BEFEHL AN KI-AGENTEN EINGEBEN..."
+                  autocomplete="off"
+                  required
+                />
+                <button type="submit" id="lcarsChatSendBtn" class="lcars-chat-btn-send">
+                  <span id="lcarsChatSendLabel">TRANSMIT</span> <span>↵</span>
+                </button>
+              </div>
+            </form>
+
+            <!-- Schnellbefehle & Telemetrie Statusleiste -->
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.65rem;">
+              <div class="lcars-chat-quick-actions">
+                <span style="font-size: 0.75rem; color: rgba(255,255,255,0.5); align-self: center; font-family: var(--mono-family);">SCHNELL-BEFEHLE:</span>
+                <button type="button" class="lcars-quick-btn" onclick="sendQuickPrompt('Statusbericht aller Subsysteme anfordern.')">STATUSBERICHT</button>
+                <button type="button" class="lcars-quick-btn" onclick="sendQuickPrompt('Welche Webdienste laufen aktuell auf dem Server?')">DIENSTE ANALYSIEREN</button>
+                <button type="button" class="lcars-quick-btn" onclick="sendQuickPrompt('Wer bist du und welche Aufgaben kannst du übernehmen?')">IDENTIFIKATION</button>
+              </div>
+              <div id="chatMetaStatus" style="font-family: var(--mono-family); font-size: 0.76rem; color: var(--c-gold);">
+                BEREIT // PROXY: 127.0.0.1:20128
+              </div>
+            </div>
+          </div>
+
           <!-- Hermes Donut & Model Table -->
           <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:1rem; margin-top:1.25rem; width:100%; min-width:0;">
             <!-- Donut Canvas Card -->
@@ -2997,6 +3519,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (catId === 'agents') {
       setTimeout(() => {
         initHermesChart();
+        loadChatModels();
       }, 60);
     }
   }
@@ -3678,6 +4201,258 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     ctx.fillText(totalStr, cx, cy + 10);
   }
 
+  // ---------------------------------------------------------------------------
+  // LCARS KI-AGENTEN CHAT ENGINE
+  // ---------------------------------------------------------------------------
+  let chatHistory = [];
+  let chatModels = ['ag/gemini-3-flash', 'openrouter/openrouter/free'];
+  let currentChatModel = localStorage.getItem('lcars-chat-model') || 'ag/gemini-3-flash';
+  let isChatGenerating = false;
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function formatTimeNow() {
+    const d = new Date();
+    return String(d.getHours()).padStart(2, '0') + ':' +
+           String(d.getMinutes()).padStart(2, '0') + ':' +
+           String(d.getSeconds()).padStart(2, '0');
+  }
+
+  function formatMessageText(text) {
+    if (!text) return '';
+    const codeBlocks = [];
+    let processed = text.replace(/```([a-zA-Z0-9_-]*)\n?([\\s\\S]*?)```/g, (match, lang, code) => {
+      const idx = codeBlocks.length;
+      codeBlocks.push(`<pre class="lcars-code-block"><code>${escapeHtml(code.trim())}</code></pre>`);
+      return `###CODEBLOCK_${idx}###`;
+    });
+
+    processed = escapeHtml(processed);
+
+    processed = processed.replace(/`([^`]+)`/g, (match, code) => {
+      return `<code class="lcars-inline-code">${code}</code>`;
+    });
+
+    processed = processed.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
+
+    codeBlocks.forEach((block, idx) => {
+      processed = processed.replace(`###CODEBLOCK_${idx}###`, block);
+    });
+
+    return processed;
+  }
+
+  function appendChatMessage(role, content, modelName = null, isError = false) {
+    const log = document.getElementById('lcarsChatLog');
+    if (!log) return;
+
+    const msgDiv = document.createElement('div');
+    const timeStr = formatTimeNow();
+
+    let cssClass = 'lcars-msg ';
+    let senderLabel = '';
+
+    if (isError) {
+      cssClass += 'lcars-msg-error';
+      senderLabel = '⚠️ SYSTEM // WARNUNG';
+    } else if (role === 'user') {
+      cssClass += 'lcars-msg-user';
+      senderLabel = '▶ USER // ODN-TERMINAL';
+    } else {
+      cssClass += 'lcars-msg-agent';
+      senderLabel = `▶ AGENT // ${escapeHtml(modelName || currentChatModel)}`;
+    }
+
+    msgDiv.className = cssClass;
+    msgDiv.innerHTML = `
+      <div class="lcars-msg-header">
+        <span class="lcars-msg-sender">${senderLabel}</span>
+        <span class="lcars-msg-time">${timeStr}</span>
+      </div>
+      <div class="lcars-msg-body">${formatMessageText(content)}</div>
+    `;
+
+    log.appendChild(msgDiv);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function loadChatModels(playSound = false) {
+    if (playSound) playLcarsBeep(1200, 1800);
+    try {
+      const resp = await fetch('/api/chat/models');
+      if (resp.ok) {
+        const data = await resp.json();
+        let models = [];
+        if (Array.isArray(data)) {
+          models = data;
+        } else if (Array.isArray(data.models)) {
+          models = data.models;
+        } else if (Array.isArray(data.data)) {
+          models = data.data.map(m => typeof m === 'string' ? m : (m.id || m.name));
+        }
+
+        if (models && models.length > 0) {
+          chatModels = models;
+          const select = document.getElementById('chatModelSelect');
+          if (select) {
+            const saved = localStorage.getItem('lcars-chat-model') || currentChatModel;
+            select.innerHTML = '';
+            models.forEach(m => {
+              const opt = document.createElement('option');
+              opt.value = m;
+              opt.textContent = m;
+              if (m === saved) opt.selected = true;
+              select.appendChild(opt);
+            });
+            if (select.value) {
+              currentChatModel = select.value;
+            }
+          }
+        }
+
+        const badge = document.getElementById('chatProxyStatusBadge');
+        const text = document.getElementById('chatProxyStatusText');
+        if (badge && text) {
+          if (data.status === 'online' || !data.status) {
+            badge.className = 'badge-status badge-online';
+            text.textContent = 'PROXY BEREIT';
+          } else {
+            badge.className = 'badge-status badge-warn';
+            text.textContent = 'FALLBACK MODUS';
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Konnte KI-Modelle nicht abrufen:", e);
+      const badge = document.getElementById('chatProxyStatusBadge');
+      const text = document.getElementById('chatProxyStatusText');
+      if (badge && text) {
+        badge.className = 'badge-status badge-offline';
+        text.textContent = 'OFFLINE';
+      }
+    }
+  }
+
+  function onChatModelChange() {
+    playLcarsBeep(980, 1400);
+    const select = document.getElementById('chatModelSelect');
+    if (select) {
+      currentChatModel = select.value;
+      localStorage.setItem('lcars-chat-model', currentChatModel);
+      const meta = document.getElementById('chatMetaStatus');
+      if (meta) meta.textContent = `MODELL GEWÄHLT: ${currentChatModel}`;
+    }
+  }
+
+  function clearChatHistory() {
+    playLcarsBeep(440, 220);
+    chatHistory = [];
+    const log = document.getElementById('lcarsChatLog');
+    if (log) {
+      const timeStr = formatTimeNow();
+      log.innerHTML = `
+        <div class="lcars-msg lcars-msg-agent">
+          <div class="lcars-msg-header">
+            <span class="lcars-msg-sender">▶ AGENT // SUBRAUM-COMM</span>
+            <span class="lcars-msg-time">${timeStr}</span>
+          </div>
+          <div class="lcars-msg-body">Kanal zurückgesetzt. Neuer Dialog initialisiert. Bereit für neue Befehle.</div>
+        </div>
+      `;
+    }
+    const meta = document.getElementById('chatMetaStatus');
+    if (meta) meta.textContent = 'DIALOG ZURÜCKGESETZT // BEREIT';
+  }
+
+  function sendQuickPrompt(promptText) {
+    const input = document.getElementById('lcarsChatInput');
+    if (input) {
+      input.value = promptText;
+      handleChatSubmit(null);
+    }
+  }
+
+  async function handleChatSubmit(event) {
+    if (event) event.preventDefault();
+    if (isChatGenerating) return;
+
+    const input = document.getElementById('lcarsChatInput');
+    const sendBtn = document.getElementById('lcarsChatSendBtn');
+    const sendLabel = document.getElementById('lcarsChatSendLabel');
+    const loading = document.getElementById('lcarsChatLoading');
+    const meta = document.getElementById('chatMetaStatus');
+
+    if (!input) return;
+    const messageText = input.value.trim();
+    if (!messageText) return;
+
+    playLcarsBeep(1200, 1600);
+
+    chatHistory.push({ role: 'user', content: messageText });
+    appendChatMessage('user', messageText);
+    input.value = '';
+
+    isChatGenerating = true;
+    input.disabled = true;
+    if (sendBtn) sendBtn.disabled = true;
+    if (sendLabel) sendLabel.textContent = 'TRANSMITTING...';
+    if (loading) loading.style.display = 'flex';
+    if (meta) meta.textContent = `TRANSMISSION IN BEARBEITUNG (${currentChatModel})...`;
+
+    try {
+      const resp = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: currentChatModel,
+          messages: chatHistory
+        })
+      });
+
+      const data = await resp.json();
+
+      if (resp.ok) {
+        const assistantText = data.content ||
+                              (data.message && data.message.content) ||
+                              (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) ||
+                              'Keine Antwort vom Agenten erhalten.';
+
+        chatHistory.push({ role: 'assistant', content: assistantText });
+        appendChatMessage('assistant', assistantText, data.model || currentChatModel);
+        playLcarsBeep(980, 1400);
+
+        if (meta) {
+          const toks = data.usage ? ` [Tokens: ${data.usage.total_tokens || 0}]` : '';
+          meta.textContent = `TRANSMISSION EMPFANGEN // MODELL: ${data.model || currentChatModel}${toks}`;
+        }
+      } else {
+        const errorMsg = data.error || (data.message && data.message.content) || 'Unbekannter Fehler bei Kommunikation mit KI-Proxy.';
+        appendChatMessage('assistant', errorMsg, currentChatModel, true);
+        playLcarsBeep(440, 220);
+        if (meta) meta.textContent = `TRANSMISSIONSFEHLER (${resp.status})`;
+      }
+    } catch (e) {
+      appendChatMessage('assistant', `Netzwerkfehler: Verbindung zum Backend fehlgeschlagen (${e.message})`, currentChatModel, true);
+      playLcarsBeep(440, 220);
+      if (meta) meta.textContent = 'NETZWERKFEHLER BEI TRANSMISSION';
+    } finally {
+      isChatGenerating = false;
+      input.disabled = false;
+      if (sendBtn) sendBtn.disabled = false;
+      if (sendLabel) sendLabel.textContent = 'TRANSMIT';
+      if (loading) loading.style.display = 'none';
+      input.focus();
+    }
+  }
+
   // Window Resize Listener
   window.addEventListener('resize', () => {
     if (historyChart) historyChart.resize();
@@ -3695,6 +4470,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // Initialer Boot-Ablauf
   function bootDashboard() {
     renderStats(initialStats);
+    const initialTimeEl = document.getElementById('chatInitialTime');
+    if (initialTimeEl) initialTimeEl.textContent = formatTimeNow();
+    loadChatModels();
     ensureChart(() => {
       initHistoryChart();
     });
@@ -3821,6 +4599,24 @@ if USE_FLASK:
         threading.Thread(target=webserver_scanner.scan, daemon=True).start()
         return jsonify({"success": True, "stopped_pid": pid, "port": port})
 
+    @app.route("/api/chat/models")
+    def api_chat_models():
+        return jsonify(fetch_chat_models())
+
+    @app.route("/api/chat", methods=["POST"])
+    def api_chat():
+        data = request.get_json(silent=True) or {}
+        model = data.get("model") or "ag/gemini-3.8-flash-high"
+        messages = data.get("messages")
+        if not messages:
+            prompt = data.get("message") or data.get("prompt") or ""
+            if not prompt:
+                return jsonify({"error": "messages oder message Parameter erforderlich"}), 400
+            messages = [{"role": "user", "content": prompt}]
+        auth_header = request.headers.get("Authorization")
+        res_data, status_code = forward_chat_completion(model, messages, auth_header)
+        return jsonify(res_data), status_code
+
     def run_server():
         print("[START] Starte System Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
         app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
@@ -3861,6 +4657,13 @@ else:
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+            elif parsed.path == "/api/chat/models":
+                data = json.dumps(fetch_chat_models()).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
             else:
                 stats = get_system_stats()
                 html = render_html_fallback(stats).encode("utf-8")
@@ -3893,6 +4696,26 @@ else:
                 resp = json.dumps({"success": True}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/chat":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                model = data.get("model") or "ag/gemini-3.8-flash-high"
+                messages = data.get("messages")
+                if not messages:
+                    prompt = data.get("message") or data.get("prompt") or ""
+                    messages = [{"role": "user", "content": prompt}] if prompt else []
+                auth_header = self.headers.get("Authorization")
+                res_data, status_code = forward_chat_completion(model, messages, auth_header)
+                resp = json.dumps(res_data).encode("utf-8")
+                self.send_response(status_code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()
                 self.wfile.write(resp)
