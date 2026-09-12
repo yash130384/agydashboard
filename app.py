@@ -69,7 +69,7 @@ SERVICE_REGISTRY = {
         "title": "System Dashboard",
         "icon": "📟",
         "port": 5000,
-        "description": "Flask LCARS Dashboard (Eigenes)",
+        "description": "Flask System Dashboard (Eigenes)",
         "allow_external": True,
         "cf_key": "dashboard",
         "tailscale_url": "http://pimmel.tail3a782b.ts.net:5000",
@@ -408,41 +408,79 @@ class CloudflaredTunnelManager:
         self._watcher_thread = threading.Thread(target=self._watcher_loop, daemon=True)
         self._watcher_thread.start()
 
+    def is_external_process_running(self, port: int) -> bool:
+        if not psutil:
+            return False
+        try:
+            for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                cmd = proc.info.get("cmdline") or []
+                cmd_str = " ".join(cmd)
+                if "cloudflared" in cmd_str and "--url" in cmd_str:
+                    m_port = re.search(r"--url\s+https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)", cmd_str)
+                    if m_port and int(m_port.group(1)) == port:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def is_tunnel_alive(self, port: int) -> bool:
+        with self._lock:
+            t = self._tunnels.get(port)
+            if t and t.get("proc") and t["proc"].poll() is None:
+                return True
+        return self.is_external_process_running(port)
+
     def get_url(self, port: int) -> str | None:
         with self._lock:
             t = self._tunnels.get(port)
             if t and t.get("url"):
                 return t["url"]
 
-        for pattern in [f"port_{port}.url", f"{port}.url"]:
-            p_file = os.path.join(self.url_dir, pattern)
-            if os.path.isfile(p_file):
-                try:
-                    with open(p_file, "r", encoding="utf-8") as f:
-                        u = f.read().strip()
-                        if u.startswith("https://"):
-                            with self._lock:
-                                if port not in self._tunnels:
-                                    self._tunnels[port] = {"proc": None, "log": f"/tmp/cloudflared_{port}.log", "url": u, "created_at": time.time()}
-                            return u
-                except Exception:
-                    pass
+        # Nur wenn nachweislich ein Prozess läuft, URL-Dateien oder Logs auswerten
+        if self.is_tunnel_alive(port):
+            patterns = [f"port_{port}.url", f"{port}.url"]
+            if port == 5000:
+                patterns.extend(["dash.url", "dashboard.url"])
+            elif port == 3000:
+                patterns.append("xdcc.url")
+            elif port == 8000:
+                patterns.append("telemetry.url")
 
-        log_file = f"/tmp/cloudflared_{port}.log"
-        if os.path.isfile(log_file):
-            try:
-                with open(log_file, "r", errors="ignore") as f:
-                    urls = re.findall(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com", f.read())
-                    if urls:
-                        u = urls[-1]
-                        with self._lock:
-                            if port in self._tunnels:
-                                self._tunnels[port]["url"] = u
-                            else:
-                                self._tunnels[port] = {"proc": None, "log": log_file, "url": u, "created_at": time.time()}
-                        return u
-            except Exception:
-                pass
+            for pattern in patterns:
+                p_file = os.path.join(self.url_dir, pattern)
+                if os.path.isfile(p_file):
+                    try:
+                        with open(p_file, "r", encoding="utf-8") as f:
+                            u = f.read().strip()
+                            if u.startswith("https://"):
+                                with self._lock:
+                                    if port not in self._tunnels:
+                                        self._tunnels[port] = {"proc": None, "log": f"/tmp/cloudflared_{port}.log", "url": u, "created_at": time.time()}
+                                return u
+                    except Exception:
+                        pass
+
+            log_candidates = [f"/tmp/cloudflared_{port}.log"]
+            if port == 5000:
+                log_candidates.append("/tmp/cloudflared_dash.log")
+            elif port == 3000:
+                log_candidates.append("/tmp/cloudflared_xdcc.log")
+
+            for log_file in log_candidates:
+                if os.path.isfile(log_file):
+                    try:
+                        with open(log_file, "r", errors="ignore") as f:
+                            urls = re.findall(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com", f.read())
+                            if urls:
+                                u = urls[-1]
+                                with self._lock:
+                                    if port in self._tunnels:
+                                        self._tunnels[port]["url"] = u
+                                    else:
+                                        self._tunnels[port] = {"proc": None, "log": log_file, "url": u, "created_at": time.time()}
+                                return u
+                    except Exception:
+                        pass
         return None
 
     def get_all_urls(self) -> dict:
@@ -454,53 +492,105 @@ class CloudflaredTunnelManager:
         return result
 
     def ensure_tunnel(self, port: int):
-        existing_url = self.get_url(port)
-        if existing_url:
-            return existing_url
+        if port in (22, 111, 5432) or port >= 32768:
+            return None
 
+        # 1. Haben wir einen eigenen aktiven Prozess?
         with self._lock:
             if port in self._tunnels:
                 t = self._tunnels[port]
-                if t.get("proc") and t["proc"].poll() is None:
+                proc = t.get("proc")
+                if proc and proc.poll() is None:
                     return t.get("url")
+                else:
+                    # Prozess gestorben, verwerfen
+                    del self._tunnels[port]
 
-            log_file = f"/tmp/cloudflared_{port}.log"
+        # 2. Läuft ein externer Prozess (z.B. port 5000, 3000)?
+        if self.is_external_process_running(port):
+            return self.get_url(port)
+
+        # 3. Keine laufenden Prozesse: Stale URL-Dateien aufräumen
+        for pattern in [f"port_{port}.url", f"{port}.url"]:
+            p_file = os.path.join(self.url_dir, pattern)
+            if os.path.isfile(p_file):
+                try:
+                    os.remove(p_file)
+                except Exception:
+                    pass
+
+        log_file = f"/tmp/cloudflared_{port}.log"
+        if os.path.isfile(log_file):
             try:
-                if os.path.exists(log_file):
-                    os.remove(log_file)
+                os.remove(log_file)
             except Exception:
                 pass
 
-            try:
-                cmd = [
-                    self.binary_path,
-                    "tunnel",
-                    "--url", f"http://127.0.0.1:{port}",
-                    "--logfile", log_file,
-                    "--no-autoupdate",
-                ]
-                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 4. Neuen Quick-Tunnel starten
+        try:
+            cmd = [
+                self.binary_path,
+                "tunnel",
+                "--url", f"http://127.0.0.1:{port}",
+                "--logfile", log_file,
+                "--no-autoupdate",
+            ]
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with self._lock:
                 self._tunnels[port] = {
                     "proc": proc,
                     "log": log_file,
                     "url": None,
                     "created_at": time.time(),
                 }
-                print(f"[CLOUDFLARED AUTO] Neuer Quick-Tunnel für Port {port} gestartet (PID {proc.pid}).", flush=True)
-            except Exception as e:
-                print(f"[CLOUDFLARED AUTO] Fehler beim Starten für Port {port}: {e}", file=sys.stderr)
+            print(f"[CLOUDFLARED AUTO] Neuer Quick-Tunnel für Port {port} gestartet (PID {proc.pid}).", flush=True)
+        except Exception as e:
+            print(f"[CLOUDFLARED AUTO] Fehler beim Starten für Port {port}: {e}", file=sys.stderr)
+
         return None
+
+    def stop_tunnel(self, port: int):
+        with self._lock:
+            t = self._tunnels.pop(port, None)
+        if t:
+            proc = t.get("proc")
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=1)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+        for pattern in [f"port_{port}.url", f"{port}.url"]:
+            p_file = os.path.join(self.url_dir, pattern)
+            if os.path.isfile(p_file):
+                try:
+                    os.remove(p_file)
+                except Exception:
+                    pass
+        log_file = f"/tmp/cloudflared_{port}.log"
+        if os.path.isfile(log_file):
+            try:
+                os.remove(log_file)
+            except Exception:
+                pass
 
     def _watcher_loop(self):
         while self._running:
             try:
                 with self._lock:
-                    ports = list(self._tunnels.keys())
+                    items = list(self._tunnels.items())
 
-                for p in ports:
-                    with self._lock:
-                        t = self._tunnels.get(p)
-                    if not t:
+                for p, t in items:
+                    proc = t.get("proc")
+                    if proc and proc.poll() is not None:
+                        # Prozess unerwartet beendet
+                        print(f"[CLOUDFLARED AUTO] Tunnel für Port {p} beendet (Exit-Code: {proc.returncode}).", file=sys.stderr)
+                        with self._lock:
+                            if p in self._tunnels and self._tunnels[p] is t:
+                                del self._tunnels[p]
                         continue
 
                     if not t.get("url"):
@@ -522,7 +612,7 @@ class CloudflaredTunnelManager:
                                 pass
             except Exception:
                 pass
-            time.sleep(2)
+            time.sleep(1.0)
 
     def stop_all(self):
         self._running = False
@@ -684,7 +774,7 @@ class WebserverDiscoveryScanner:
 
             for phost in probe_hosts:
                 try:
-                    req = urllib.request.Request(f"http://{phost}:{port}/", headers={"User-Agent": "LCARS-Discovery/1.0"})
+                    req = urllib.request.Request(f"http://{phost}:{port}/", headers={"User-Agent": "System-Discovery/1.0"})
                     with urllib.request.urlopen(req, timeout=0.25) as resp:
                         http_status = resp.status
                         is_http = True
@@ -782,7 +872,7 @@ class WebserverDiscoveryScanner:
         # Kurz abwarten falls neue Tunnel gerade gestartet wurden, um URLs direkt zu erfassen
         pending = [d for d in discovered if not d.get("cloudflared_url") and d.get("port", 99999) < 32768]
         if pending:
-            t_end = time.time() + 3.0
+            t_end = time.time() + 6.0
             while time.time() < t_end:
                 time.sleep(0.5)
                 resolved = True
@@ -808,7 +898,7 @@ class WebserverDiscoveryScanner:
             self.scan_count += 1
             self.is_scanning = False
 
-        print(f"[LCARS DISCOVERY] Scan #{self.scan_count} abgeschlossen: {len(discovered)} Webserver aktiv.", flush=True)
+        print(f"[DISCOVERY] Scan #{self.scan_count} abgeschlossen: {len(discovered)} Webserver aktiv.", flush=True)
         return discovered
 
     def _worker(self):
@@ -839,9 +929,24 @@ class WebserverDiscoveryScanner:
 
     def get_results(self):
         with self._lock:
+            cf_map = self.get_cloudflared_map()
+            discovered = []
+            for srv in self.discovered_servers:
+                srv_copy = dict(srv)
+                p = srv_copy.get("port")
+                if p:
+                    # Dynamisch Cloudflared-URL aktualisieren sobald verfügbar
+                    if not srv_copy.get("cloudflared_url") and p in cf_map:
+                        srv_copy["cloudflared_url"] = cf_map[p]
+                        srv["cloudflared_url"] = cf_map[p]
+                        for reg_key, reg_val in SERVICE_REGISTRY.items():
+                            if reg_val["port"] == p:
+                                reg_val["cf_url"] = cf_map[p]
+                discovered.append(srv_copy)
+
             remaining = max(0, int(self.next_scan_ts - time.time())) if self.next_scan_ts else self.interval
             return {
-                "discovered": list(self.discovered_servers),
+                "discovered": discovered,
                 "last_scan_time": self.last_scan_time,
                 "next_scan_seconds": remaining,
                 "scan_count": self.scan_count,
@@ -1422,7 +1527,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="format-detection" content="telephone=no, date=no">
-  <title>LCARS 47 // SYSTEM DASHBOARD // {{ stats.hostname }}</title>
+  <title>SYSTEM DASHBOARD // {{ stats.hostname }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Bebas+Neue&family=Share+Tech+Mono&display=swap" rel="stylesheet">
@@ -2068,6 +2173,46 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       max-width: 100%;
     }
 
+    .card-service-footer {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      margin-top: 0.65rem;
+      padding-top: 0.45rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .system-kernel-badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: var(--c-gold);
+      padding: 0.2rem 0.55rem;
+      border: 1px solid rgba(255, 170, 68, 0.3);
+      border-radius: 6px;
+      background: rgba(255, 170, 68, 0.08);
+    }
+    .btn-stop-service {
+      background-color: rgba(207, 48, 48, 0.15);
+      color: var(--c-red);
+      border: 1px solid var(--c-red);
+      font-family: inherit;
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      padding: 0.25rem 0.65rem;
+      border-radius: 10px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      transition: all 0.15s ease;
+    }
+    .btn-stop-service:hover {
+      background-color: var(--c-red);
+      color: #000;
+      transform: scale(1.02);
+    }
+
     /* Scanner Header Bar */
     .scanner-dashboard-box {
       background: rgba(20, 20, 30, 0.85);
@@ -2222,12 +2367,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <!-- OBERER RAHMEN -->
   <div class="wrap">
     <div class="left-frame-top">
-      <button onclick="playLcarsBeep(880, 1760); switchCategory('system')">LCARS 47<br><span style="font-size:0.8rem; opacity:0.85;">AGY-PI</span></button>
+      <button onclick="playLcarsBeep(880, 1760); switchCategory('system')">TERMINAL 47<br><span style="font-size:0.8rem; opacity:0.85;">AGY-PI</span></button>
       <div style="font-size: 0.8rem; font-family: var(--mono-family);">ONLINE</div>
     </div>
     <div class="right-frame-top">
       <div class="banner-container">
-        <div class="banner-title" id="bannerSectionTitle">LCARS / SYSTEM & SENSOR VERLAUF</div>
+        <div class="banner-title" id="bannerSectionTitle">SYSTEM & SENSOR VERLAUF</div>
         <div class="banner-stardate">
           <span>STARDATE:</span>
           <span id="stardateValue" style="font-weight:700;">--------.-</span>
@@ -2298,7 +2443,39 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="lcars-pill-tag">LIVE ODN METRIKEN</span>
           </div>
 
-          <!-- Telemetrie Readout Cards -->
+          <!-- 24H SENSOR VERLAUFS-CHART (ÜBER DEN LIVE-WERTEN) -->
+          <div class="lcars-card" style="margin-bottom: 1.25rem; padding: 1.1rem; width: 100%; min-width: 0;">
+            <div class="card-head">
+              <span class="card-head-title" style="color:var(--c-primary); font-size:1.1rem;">24H SENSOR HISTORIE & SENSOR-KURVEN</span>
+              <span class="card-head-icon">📈</span>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom: 1rem;">
+              <!-- Range Selector Pills -->
+              <div style="display:flex; gap:0.35rem; flex-wrap:wrap;">
+                <button class="left-action-btn range-btn" onclick="setChartRange('10m')">10 MIN</button>
+                <button class="left-action-btn range-btn" onclick="setChartRange('30m')">30 MIN</button>
+                <button class="left-action-btn range-btn active-range" onclick="setChartRange('1h')">1 STUNDE</button>
+                <button class="left-action-btn range-btn" onclick="setChartRange('12h')">12 STUNDEN</button>
+                <button class="left-action-btn range-btn" onclick="setChartRange('24h')">24 STUNDEN</button>
+              </div>
+
+              <!-- Dataset Toggles -->
+              <div style="display:flex; gap:0.35rem; flex-wrap:wrap;">
+                <button class="left-action-btn" onclick="toggleDataset(0)" id="dsBtn0" style="border-color:var(--c-primary); color:var(--c-primary);">TEMPERATUR</button>
+                <button class="left-action-btn" onclick="toggleDataset(1)" id="dsBtn1" style="border-color:var(--c-blue); color:var(--c-blue);">CPU %</button>
+                <button class="left-action-btn" onclick="toggleDataset(2)" id="dsBtn2" style="border-color:var(--c-red); color:var(--c-red);">THROTTLING</button>
+                <button class="left-action-btn" onclick="toggleDataset(3)" id="dsBtn3" style="border-color:var(--c-secondary); color:var(--c-secondary);">RAM %</button>
+              </div>
+            </div>
+
+            <!-- Canvas Container mit fester Höhe & responsiver Breite -->
+            <div style="position: relative; width: 100%; height: 320px; min-width: 0; overflow: hidden;">
+              <canvas id="historyChart"></canvas>
+            </div>
+          </div>
+
+          <!-- Telemetrie Readout Cards (Live-Werte) -->
           <div class="readout-grid">
             <!-- CPU -->
             <div class="lcars-card">
@@ -2374,38 +2551,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <div class="card-metric-sub">LAN IP: <span id="sysLanIp">{{ stats.lan_ip or '192.168.31.210' }}</span></div>
             </div>
           </div>
-
-          <!-- 24H SENSOR VERLAUFS-CHART -->
-          <div class="lcars-card" style="margin-top: 1.25rem; padding: 1.1rem; width: 100%; min-width: 0;">
-            <div class="card-head">
-              <span class="card-head-title" style="color:var(--c-primary); font-size:1.1rem;">24H SENSOR HISTORIE & SENSOR-KURVEN</span>
-              <span class="card-head-icon">📈</span>
-            </div>
-
-            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom: 1rem;">
-              <!-- Range Selector Pills -->
-              <div style="display:flex; gap:0.35rem; flex-wrap:wrap;">
-                <button class="left-action-btn range-btn" onclick="setChartRange('10m')">10 MIN</button>
-                <button class="left-action-btn range-btn" onclick="setChartRange('30m')">30 MIN</button>
-                <button class="left-action-btn range-btn active-range" onclick="setChartRange('1h')">1 STUNDE</button>
-                <button class="left-action-btn range-btn" onclick="setChartRange('12h')">12 STUNDEN</button>
-                <button class="left-action-btn range-btn" onclick="setChartRange('24h')">24 STUNDEN</button>
-              </div>
-
-              <!-- Dataset Toggles -->
-              <div style="display:flex; gap:0.35rem; flex-wrap:wrap;">
-                <button class="left-action-btn" onclick="toggleDataset(0)" id="dsBtn0" style="border-color:var(--c-primary); color:var(--c-primary);">TEMPERATUR</button>
-                <button class="left-action-btn" onclick="toggleDataset(1)" id="dsBtn1" style="border-color:var(--c-blue); color:var(--c-blue);">CPU %</button>
-                <button class="left-action-btn" onclick="toggleDataset(2)" id="dsBtn2" style="border-color:var(--c-red); color:var(--c-red);">THROTTLING</button>
-                <button class="left-action-btn" onclick="toggleDataset(3)" id="dsBtn3" style="border-color:var(--c-secondary); color:var(--c-secondary);">RAM %</button>
-              </div>
-            </div>
-
-            <!-- Canvas Container mit fester Höhe & responsiver Breite -->
-            <div style="position: relative; width: 100%; height: 320px; min-width: 0; overflow: hidden;">
-              <canvas id="historyChart"></canvas>
-            </div>
-          </div>
         </section>
 
         <!-- KATEGORIE 2: SERVICES & SCANNER (KOMBINIERT) -->
@@ -2469,7 +2614,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                   <span>☁️</span> <span>CF: {{ s.cloudflared_url }}</span>
                 </a>
                 {% else %}
-                <span style="font-size:0.75rem; color:rgba(255,255,255,0.4); padding-left:0.2rem;">☁️ Kein Cloudflare-Tunnel</span>
+                <span style="font-size:0.75rem; color:var(--c-gold); padding-left:0.2rem;">☁️ Tunnel wird aufgebaut...</span>
+                {% endif %}
+              </div>
+
+              <!-- Service Beenden Action -->
+              <div class="card-service-footer">
+                {% if s.port == 5000 %}
+                <span class="system-kernel-badge">🔒 SYSTEM KERNEL</span>
+                {% else %}
+                <button class="btn-stop-service" onclick="stopService({{ s.pid or 0 }}, {{ s.port }}, '{{ s.title|escape }}')">
+                  <span>🛑</span> <span>PROZESS BEENDEN</span>
+                </button>
                 {% endif %}
               </div>
             </div>
@@ -2568,7 +2724,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
 
           <p style="margin-bottom:1.1rem; color:var(--c-gold);">
-            WÄHLEN SIE DEN LCARS-FARBMODUS FÜR DAS GESAMTE DASHBOARD AUS. EINSTELLUNGEN WERDEN AUTOMATISCH GESPEICHERT.
+            WÄHLEN SIE DEN FARBMODUS FÜR DAS GESAMTE DASHBOARD AUS. EINSTELLUNGEN WERDEN AUTOMATISCH GESPEICHERT.
           </p>
 
           <div class="theme-selector-grid">
@@ -2643,7 +2799,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <div class="lcars-card">
               <div class="card-head-title">AUDIO & SOUND-EFFEKTE</div>
               <p style="font-size:0.88rem; color:var(--c-gold); margin:0.6rem 0;">
-                AUTHENTISCHE LCARS-BEEPS VIA WEB AUDIO API SYNTHESIZER.
+                AUTHENTISCHE SYSTEM-BEEPS VIA WEB AUDIO API SYNTHESIZER.
               </p>
               <button class="left-action-btn" onclick="toggleAudio(); playLcarsBeep(880, 1760);">
                 <span>🔊</span> <span id="cfgAudioLabel">SOUND EFFEKTE UMSCHALTEN</span>
@@ -2694,13 +2850,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <footer>
-    <div>LCARS TERMINAL 47 // HOST: {{ stats.hostname }} // STAND: <span id="footerTimestamp">{{ stats.timestamp }}</span></div>
-    <div>DESIGN: <a href="https://www.thelcars.com/" target="_blank">THELCARS.COM</a> // AGY DASHBOARD</div>
+    <div>SYSTEM TERMINAL 47 // HOST: {{ stats.hostname }} // STAND: <span id="footerTimestamp">{{ stats.timestamp }}</span></div>
+    <div>TERMINAL ARCHITEKTUR // AGY DASHBOARD</div>
   </footer>
 </section>
 
 <!-- ==========================================================================
-     JAVASCRIPT: LCARS CONTROLLER, CHARTS, THEMES & APIS
+     JAVASCRIPT: SYSTEM CONTROLLER, CHARTS, THEMES & APIS
      ========================================================================== -->
 <script>
   const initialStats = {{ stats_json | safe }};
@@ -2719,34 +2875,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (AudioCtx) audioContext = new AudioCtx();
     }
-    if (audioContext && audioContext.state === 'suspended') {
-      audioContext.resume();
-    }
     return audioContext;
   }
 
-  function playLcarsBeep(f1 = 880, f2 = 1760, duration = 0.04) {
+  function playLcarsBeep(f1 = 880, f2 = 1760) {
     if (!soundEnabled) return;
     try {
       const ctx = getAudioCtx();
       if (!ctx) return;
+      if (ctx.state === 'suspended') ctx.resume();
+
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
       osc.frequency.setValueAtTime(f1, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(f2, ctx.currentTime + duration);
-      gain.gain.setValueAtTime(0.08, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+      osc.frequency.exponentialRampToValueAtTime(f2, ctx.currentTime + 0.08);
+
+      gain.gain.setValueAtTime(0.04, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
-      osc.stop(ctx.currentTime + duration);
-    } catch (e) {}
+      osc.stop(ctx.currentTime + 0.08);
+    } catch (e) {
+      // Audio optional
+    }
   }
 
   function toggleAudio() {
     soundEnabled = !soundEnabled;
-    localStorage.setItem('lcars-sound', soundEnabled ? 'true' : 'false');
+    localStorage.setItem('lcars-sound', soundEnabled);
     updateAudioUI();
     if (soundEnabled) playLcarsBeep(880, 1760);
   }
@@ -2802,10 +2961,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   // 4 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
   const CATEGORY_NAMES = {
-    'system': 'LCARS / SYSTEM & SENSOR VERLAUF',
-    'services': 'LCARS / SERVICES & PROZESS-SCANNER',
-    'agents': 'LCARS / KI-AGENTEN & HERMES ARCHIV',
-    'config': 'LCARS / SYSTEM CONFIG & FARBMODI'
+    'system': 'SYSTEM & SENSOR VERLAUF',
+    'services': 'SERVICES & PROZESS-SCANNER',
+    'agents': 'KI-AGENTEN & HERMES ARCHIV',
+    'config': 'SYSTEM CONFIG & FARBMODI'
   };
 
   function switchCategory(catId) {
@@ -2954,6 +3113,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ? `<a href="${s.cloudflared_url}" target="_blank" class="url-chip-btn chip-cf"><span>☁️</span> <span>CF: ${s.cloudflared_url}</span></a>`
         : `<span style="font-size:0.75rem; color:var(--c-gold); padding-left:0.2rem;">☁️ Tunnel wird initialisiert...</span>`;
 
+      const stopActionHtml = (s.port === 5000)
+        ? `<span class="system-kernel-badge">🔒 SYSTEM KERNEL</span>`
+        : `<button class="btn-stop-service" onclick="stopService(${s.pid || 0}, ${s.port}, '${(s.title || 'Dienst').replace(/'/g, "\\'")}')">
+             <span>🛑</span> <span>PROZESS BEENDEN</span>
+           </button>`;
+
       html += `
         <div class="lcars-card">
           <div class="card-head">
@@ -2975,10 +3140,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             ${tailscaleBtn}
             ${cfBtn}
           </div>
+          <div class="card-service-footer">
+            ${stopActionHtml}
+          </div>
         </div>
       `;
     });
     grid.innerHTML = html;
+  }
+
+  // Dienst über API beenden
+  async function stopService(pid, port, name) {
+    if (!confirm(`Möchtest du den Dienst "${name}" (Port ${port}, PID ${pid}) wirklich beenden?`)) {
+      return;
+    }
+    playLcarsBeep(440, 220);
+    try {
+      const resp = await fetch('/api/services/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pid: pid, port: port })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        setTimeout(() => triggerWebserverScan(), 400);
+      } else {
+        alert("Fehler beim Beenden: " + (data.error || "Unbekannter Fehler"));
+      }
+    } catch (e) {
+      alert("Netzwerkfehler beim Beenden: " + e.message);
+    }
   }
 
   // Manueller Sofort-Scan Trigger
@@ -3474,7 +3665,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.fill();
     }
 
-    // Zentrierte LCARS Beschriftung
+    // Zentrierte Beschriftung
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 15px "Antonio", sans-serif';
     ctx.textAlign = 'center';
@@ -3582,8 +3773,56 @@ if USE_FLASK:
             "scan_time": webserver_scanner.last_scan_time,
         })
 
+    @app.route("/api/services/stop", methods=["POST"])
+    def api_stop_service():
+        data = request.get_json(silent=True) or {}
+        pid = data.get("pid")
+        port = data.get("port")
+        if not pid and not port:
+            return jsonify({"success": False, "error": "PID oder Port erforderlich"}), 400
+
+        my_pid = os.getpid()
+        if (pid and int(pid) == my_pid) or (port and int(port) == 5000):
+            return jsonify({"success": False, "error": "Das Dashboard selbst kann nicht beendet werden"}), 403
+
+        stopped_processes = []
+        if pid:
+            try:
+                pid = int(pid)
+                if pid <= 1:
+                    return jsonify({"success": False, "error": "Systemprozesse können nicht beendet werden"}), 403
+                if psutil and psutil.pid_exists(pid):
+                    p = psutil.Process(pid)
+                    try:
+                        p_user = p.username()
+                        import getpass
+                        if p_user != getpass.getuser() and os.geteuid() != 0:
+                            return jsonify({"success": False, "error": f"Keine Berechtigung für Prozess von {p_user}"}), 403
+                    except Exception:
+                        pass
+                    p.terminate()
+                    try:
+                        p.wait(timeout=2)
+                    except psutil.TimeoutExpired:
+                        p.kill()
+                    stopped_processes.append(pid)
+            except psutil.NoSuchProcess:
+                pass
+            except Exception as e:
+                return jsonify({"success": False, "error": f"Fehler beim Beenden von PID {pid}: {e}"}), 500
+
+        if port:
+            try:
+                port = int(port)
+                cf_tunnel_manager.stop_tunnel(port)
+            except Exception:
+                pass
+
+        threading.Thread(target=webserver_scanner.scan, daemon=True).start()
+        return jsonify({"success": True, "stopped_pid": pid, "port": port})
+
     def run_server():
-        print("[START] Starte Star Trek LCARS Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
+        print("[START] Starte System Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
         app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
 
 else:
@@ -3631,6 +3870,36 @@ else:
                 self.end_headers()
                 self.wfile.write(html)
 
+        def do_POST(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/api/services/stop":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                pid = data.get("pid")
+                port = data.get("port")
+                if pid:
+                    try:
+                        p = psutil.Process(int(pid))
+                        p.terminate()
+                    except Exception:
+                        pass
+                if port:
+                    cf_tunnel_manager.stop_tunnel(int(port))
+                threading.Thread(target=webserver_scanner.scan, daemon=True).start()
+                resp = json.dumps({"success": True}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
         def log_message(self, format, *args):
             sys.stdout.write(f"[{self.log_date_time_string()}] {args[0]} {args[1]} {args[2]}\n")
             sys.stdout.flush()
@@ -3638,7 +3907,7 @@ else:
     def run_server():
         server_address = ("0.0.0.0", 5000)
         httpd = HTTPServer(server_address, DashboardHTTPHandler)
-        print("[START] Starte Standard-HTTP LCARS Server auf http://0.0.0.0:5000 ...", flush=True)
+        print("[START] Starte Standard-HTTP System Server auf http://0.0.0.0:5000 ...", flush=True)
         httpd.serve_forever()
 
 
