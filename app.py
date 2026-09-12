@@ -3,11 +3,13 @@
 LCARS System Dashboard & Webserver Discovery Engine (Star Trek LCARS Interface)
 Lauscht auf Port 5000 (bind 0.0.0.0) und bietet:
 - Star Trek LCARS Fullscreen Benutzeroberfläche (Vorlage: https://www.thelcars.com/)
-- Einstellungsmenü mit 5 umschaltbaren Farbmodi (Classic, Nemesis Blue, Lower Decks, Red Alert, Voyager Bio-Neural)
-- Linke LCARS Steuerungsbuttons zur Einbettung aller Kategorien (System, 24h Verlauf, Services, KI-Agenten, Scanner, Config)
-- Automatischer 5-Minuten Webserver-Scanner (ermittelt lokale LAN-, Tailscale- und Cloudflared-Adressen aller laufenden Prozesse)
-- On-Demand Webserver-Scan & REST APIs (/api/stats, /api/history, /api/discovered-servers, /api/scan-webservers)
-- 24h In-Memory System-Sensor-Historie & interaktive Chart.js Graphen
+- 4 Hauptkategorien ohne Nummern: SYSTEM, SERVICES, KI-AGENTEN, CONFIG
+- System & 24h Sensor-Verlauf in einer gemeinsamen Kategorie (SYSTEM)
+- Web-Services & 5-Minuten Webserver-Scanner in einer gemeinsamen Kategorie (SERVICES)
+- 5 umschaltbare LCARS Farbmodi (Classic, Nemesis Blue, Lower Decks, Red Alert, Voyager Bio-Neural)
+- Keine horizontalen Scrollbalken (alle Inhalte responsive und bildschirmgerecht aufbereitet)
+- Zuverlässig initialisierte Chart.js Diagramme für Systemverlauf und KI-Modell-Verbrauch
+- 5-Minuten Hintergrund-Scanner für alle laufenden Prozesse mit LAN-, Tailscale- und Cloudflared-Adressen
 """
 
 import datetime
@@ -181,7 +183,6 @@ def format_uptime(seconds):
 
 
 def get_temperature():
-    """Liest die CPU-Temperatur des Raspberry Pi aus."""
     thermal_paths = [
         "/sys/class/thermal/thermal_zone0/temp",
         "/sys/devices/virtual/thermal/thermal_zone0/temp",
@@ -219,14 +220,13 @@ def get_temperature():
 
 
 def get_throttled_status():
-    """Prüft get_throttled beim Raspberry Pi auf Undervoltage / Throttling."""
     try:
         out = subprocess.check_output(["vcgencmd", "get_throttled"], stderr=subprocess.DEVNULL, timeout=1).decode("utf-8")
         m = re.search(r"throttled=(0x[0-9a-fA-F]+)", out)
         if m:
             val_hex = m.group(1)
             val = int(val_hex, 16)
-            is_active = bool(val & 0x1)  # Bit 0: aktuell gethrottled
+            is_active = bool(val & 0x1)
             return is_active, val_hex
     except Exception:
         pass
@@ -234,7 +234,6 @@ def get_throttled_status():
 
 
 def get_ram_metrics():
-    """Liest RAM-Auslastung via psutil oder /proc/meminfo."""
     if psutil:
         try:
             vm = psutil.virtual_memory()
@@ -269,7 +268,6 @@ def get_ram_metrics():
 
 
 def get_disk_metrics():
-    """Liest Disk-Auslastung für Root /."""
     if psutil:
         try:
             du = psutil.disk_usage("/")
@@ -299,7 +297,6 @@ def get_disk_metrics():
 
 
 def get_lan_ip():
-    """Ermittelt die primäre lokale LAN IP des Hosts."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("1.1.1.1", 80))
@@ -311,7 +308,6 @@ def get_lan_ip():
 
 
 def get_tailscale_info():
-    """Ermittelt Tailscale Hostname, FQDN und IP."""
     try:
         res = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=2)
         if res.returncode == 0:
@@ -330,7 +326,6 @@ def get_tailscale_info():
 
 
 def get_cloudflared_urls():
-    """Liest die aktuellen Quick-Tunnel URLs von cloudflared aus ~/.cloudflared-urls/."""
     urls = {"dashboard": None, "xdcc": None}
     dash_file = "/home/yash/.cloudflared-urls/dash.url"
     xdcc_file = "/home/yash/.cloudflared-urls/xdcc.url"
@@ -358,7 +353,6 @@ _service_status_lock = threading.Lock()
 
 
 def check_service_status(port=8000, host="127.0.0.1", timeout=0.25, max_age=4.0):
-    """Prüft, ob ein Dienst via Port erreichbar ist (mit kurzem In-Memory Cache)."""
     now = time.time()
     cache_key = (host, port)
     with _service_status_lock:
@@ -411,7 +405,6 @@ class WebserverDiscoveryScanner:
         self.discovered_servers = []
 
     def get_cloudflared_map(self):
-        """Mappt Ports zu Cloudflare trycloudflare.com URLs."""
         cf_map = {}
         url_dir = "/home/yash/.cloudflared-urls"
         port_file_map = {
@@ -434,7 +427,6 @@ class WebserverDiscoveryScanner:
             except Exception:
                 pass
 
-        # Logs scannen
         for log_path, p in [("/tmp/cloudflared_dash.log", 5000), ("/tmp/cloudflared_xdcc.log", 3000)]:
             if p not in cf_map and os.path.exists(log_path):
                 try:
@@ -445,7 +437,6 @@ class WebserverDiscoveryScanner:
                 except Exception:
                     pass
 
-        # Prozess-Argumente scannen
         if psutil:
             try:
                 for proc in psutil.process_iter(["pid", "name", "cmdline"]):
@@ -467,7 +458,6 @@ class WebserverDiscoveryScanner:
         return cf_map
 
     def scan(self):
-        """Führt einen Scan aller lauschenden TCP-Sockets und Webserver durch."""
         with self._lock:
             self.is_scanning = True
 
@@ -488,7 +478,7 @@ class WebserverDiscoveryScanner:
                 print(f"[WARN] Socket-Scan Fehler: {e}", file=sys.stderr)
 
         discovered = []
-        skip_ports = {22, 111, 5432}  # SSH, RPC, PostgreSQL
+        skip_ports = {22, 111, 5432}
 
         for port, info in sorted(ports_dict.items()):
             if port in skip_ports:
@@ -505,11 +495,9 @@ class WebserverDiscoveryScanner:
                 except Exception:
                     pass
 
-            # Interne cloudflared Proxy Ports überspringen
             if "cloudflared" in pname and port > 20000:
                 continue
 
-            # HTTP Probing
             is_http = False
             http_status = None
             server_hdr = None
@@ -548,10 +536,9 @@ class WebserverDiscoveryScanner:
 
             is_loopback = info["ip"] in ["127.0.0.1", "::1"]
             lan_url = f"http://{lan_ip}:{port}" if not is_loopback else f"http://127.0.0.1:{port}"
-            ts_url = f"http://{ts_host}:{port}" if not is_loopback else f"http://{ts_host}:{port} (Localhost)"
+            ts_url = f"http://{ts_host}:{port}" if not is_loopback else None
             cf_url = cf_map.get(port)
 
-            # Titel ermitteln
             title = f"{pname.capitalize()} (Port {port})"
             icon = "🌐"
             for reg_key, reg_val in SERVICE_REGISTRY.items():
@@ -586,7 +573,6 @@ class WebserverDiscoveryScanner:
                     title = "Node Server (3001)"
                     icon = "🟢"
 
-            # Dynamische URL Aktualisierung in SERVICE_REGISTRY
             for reg_key, reg_val in SERVICE_REGISTRY.items():
                 if reg_val["port"] == port:
                     reg_val["lan_url"] = lan_url
@@ -780,8 +766,6 @@ hermes_manager = HermesManager(cache_ttl=5)
 # OpenRouter Budget & Spendings API
 # ---------------------------------------------------------------------------
 class OpenRouterManager:
-    """Fragt OpenRouter Key Info & Credits ab (~/.hermes/.env)."""
-
     def __init__(self, cache_ttl=60):
         self.cache_ttl = cache_ttl
         self._cached_data = None
@@ -947,7 +931,6 @@ openrouter_manager = OpenRouterManager(cache_ttl=60)
 # Antigravity Status & Quota
 # ---------------------------------------------------------------------------
 def get_antigravity_status():
-    """Liest den Auth-Status und Session-Aktivität von Antigravity CLI aus."""
     oauth_path = "/home/yash/.gemini/antigravity-cli/antigravity-oauth-token"
     token_present = False
     auth_method = "consumer"
@@ -1011,7 +994,6 @@ def get_antigravity_status():
 # Gesamt-System-Stats Sammler
 # ---------------------------------------------------------------------------
 def get_system_stats():
-    """Sammelt alle Systemmetriken inklusive Discovered Webserver."""
     stats = {
         "hostname": socket.gethostname(),
         "platform": f"{platform.system()} {platform.release()} ({platform.machine()})",
@@ -1242,7 +1224,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Bebas+Neue&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <style>
     /* ==========================================================================
        LCARS THEME PALETTES & CSS VARIABLES
@@ -1251,13 +1233,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       --bg: #000000;
       --font-family: 'Antonio', 'Arial Narrow', sans-serif;
       --mono-family: 'Share Tech Mono', monospace;
-      --lfw: 230px;
-      --elbow-radius: 0 0 0 130px;
-      --elbow-radius-bottom: 130px 0 0 0;
-      --corner-cutout: 0 0 0 50px;
-      --corner-cutout-bottom: 50px 0 0 0;
-      --bar-height: 26px;
-      --pill-height: 52px;
+      --lfw: 200px;
+      --elbow-radius: 0 0 0 110px;
+      --elbow-radius-bottom: 110px 0 0 0;
+      --corner-cutout: 0 0 0 45px;
+      --corner-cutout-bottom: 45px 0 0 0;
+      --bar-height: 24px;
+      --pill-height: 54px;
 
       /* Classic TNG Theme (Default) */
       --c-primary: #eb943a;       /* Okuda Orange */
@@ -1344,7 +1326,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     /* ==========================================================================
-       GLOBAL LAYOUT & TYPOGRAPHY
+       GLOBAL LAYOUT (NO HORIZONTAL OVERFLOW)
        ========================================================================== */
     * {
       box-sizing: border-box;
@@ -1354,6 +1336,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     html, body {
       width: 100%;
+      max-width: 100vw;
       min-height: 100vh;
       background-color: var(--bg);
       color: var(--c-text);
@@ -1366,21 +1349,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     body {
       display: flex;
       flex-direction: column;
-      padding: 0.4rem 0.8rem;
+      padding: 0.35rem 0.6rem;
     }
 
-    /* LCARS Standard Wrap Container (Fullscreen) */
     .wrap-standard {
       width: 100%;
+      max-width: 100%;
       min-height: 98vh;
       display: flex;
       flex-direction: column;
       position: relative;
+      overflow-x: hidden;
     }
     .wrap {
       display: flex;
       width: 100%;
+      max-width: 100%;
       position: relative;
+      box-sizing: border-box;
+      overflow-x: hidden;
     }
 
     /* ==========================================================================
@@ -1388,6 +1375,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
        ========================================================================== */
     .left-frame-top {
       width: var(--lfw);
+      flex-shrink: 0;
       display: flex;
       flex-direction: column;
       background-color: var(--elbow-top);
@@ -1397,14 +1385,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       color: #000;
       font-weight: 700;
       justify-content: space-between;
-      min-height: 140px;
+      min-height: 120px;
     }
     .left-frame-top button {
       background: transparent;
       border: none;
       color: #000;
       font-family: var(--font-family);
-      font-size: 1.25rem;
+      font-size: 1.35rem;
       font-weight: 700;
       text-transform: uppercase;
       text-align: right;
@@ -1414,18 +1402,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     .right-frame-top {
       flex: 1;
+      min-width: 0;
       display: flex;
       flex-direction: column;
       justify-content: flex-end;
       position: relative;
-      padding-left: 0;
+      overflow: hidden;
     }
-    /* Konkave Okuda-Kurve am oberen Elbow */
     .right-frame-top::before {
       content: '';
       display: block;
-      width: 50px;
-      height: 50px;
+      width: 45px;
+      height: 45px;
       background-color: var(--elbow-top);
       position: absolute;
       left: 0;
@@ -1435,8 +1423,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .right-frame-top::after {
       content: '';
       display: block;
-      width: 50px;
-      height: 50px;
+      width: 45px;
+      height: 45px;
       background-color: #000;
       border-radius: var(--corner-cutout);
       position: absolute;
@@ -1449,41 +1437,45 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       display: flex;
       justify-content: space-between;
       align-items: flex-end;
-      padding-bottom: 0.4rem;
-      padding-left: 60px;
+      padding-bottom: 0.35rem;
+      padding-left: 55px;
       flex-wrap: wrap;
-      gap: 0.5rem;
+      gap: 0.4rem;
+      max-width: 100%;
     }
     .banner-title {
-      font-size: clamp(1.4rem, 2.8vw, 2.5rem);
+      font-size: clamp(1.2rem, 2.4vw, 2.2rem);
       font-weight: 700;
       color: var(--banner-color);
       line-height: 1;
       letter-spacing: 0.08em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .banner-stardate {
       font-family: var(--mono-family);
-      font-size: 1.15rem;
+      font-size: 1.1rem;
       color: var(--c-gold);
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      gap: 0.4rem;
+      white-space: nowrap;
     }
 
-    /* Top Data Cascade Animation */
     .data-cascade-bar {
       display: flex;
       justify-content: flex-end;
       align-items: center;
       gap: 0.5rem;
-      padding-bottom: 0.4rem;
+      padding-bottom: 0.35rem;
       overflow: hidden;
     }
     .data-cascade {
       display: flex;
-      gap: 0.6rem;
+      gap: 0.5rem;
       font-family: var(--mono-family);
-      font-size: 0.78rem;
+      font-size: 0.75rem;
       color: var(--data-cascade-color);
       user-select: none;
     }
@@ -1511,22 +1503,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       position: relative;
       z-index: 3;
     }
-    .bar-1 { width: 42%; background-color: var(--elbow-top); }
+    .bar-1 { width: 38%; background-color: var(--elbow-top); }
     .bar-2 { width: 5%; background-color: var(--c-primary); }
     .bar-3 { width: 18%; background-color: var(--c-secondary); }
     .bar-4 { flex: 1; background-color: var(--c-butterscotch); }
     .bar-5 { width: 6%; background-color: var(--c-red); }
 
     /* ==========================================================================
-       MIDDLE FRAME: LEFT CONTROL PILLAR & MAIN EMBEDDED CATEGORIES
+       MIDDLE FRAME: LEFT CONTROL PILLAR & MAIN
        ========================================================================== */
     .gap-wrap {
       margin-top: 4px;
       flex: 1;
       display: flex;
+      min-width: 0;
     }
     .left-frame {
       width: var(--lfw);
+      flex-shrink: 0;
       background-color: var(--elbow-bottom);
       display: flex;
       flex-direction: column;
@@ -1535,7 +1529,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       padding-top: 4px;
     }
 
-    /* Linke LCARS Steuerungs-Buttons */
+    /* 4 Haupt-Steuerungsbuttons (OHNE Nummern / Slashes) */
     .nav-pillar {
       display: flex;
       flex-direction: column;
@@ -1545,7 +1539,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .lcars-pill-btn {
       display: flex;
       justify-content: flex-end;
-      align-items: flex-end;
+      align-items: center;
       width: 100%;
       height: var(--pill-height);
       padding: 0.5rem 0.8rem;
@@ -1554,9 +1548,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background-color: var(--c-primary);
       color: #000;
       font-family: var(--font-family);
-      font-size: 1.15rem;
+      font-size: 1.25rem;
       font-weight: 700;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
       text-align: right;
       cursor: pointer;
@@ -1579,16 +1573,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       content: '▶ ';
       color: var(--c-red);
       font-size: 0.9rem;
-      margin-right: 0.35rem;
+      margin-right: 0.4rem;
     }
     .pill-sys   { background-color: var(--c-primary); }
-    .pill-hist  { background-color: var(--c-secondary); }
     .pill-srv   { background-color: var(--c-blue); }
-    .pill-ai    { background-color: var(--c-butterscotch); }
-    .pill-scan  { background-color: var(--c-red); }
+    .pill-ai    { background-color: var(--c-secondary); }
     .pill-cfg   { background-color: var(--c-gold); }
 
-    /* Unterer Teil des linken Pillars (Action Buttons & Elbow) */
     .left-frame-lower {
       display: flex;
       flex-direction: column;
@@ -1600,7 +1591,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       justify-content: flex-end;
       align-items: center;
       gap: 0.4rem;
-      height: 42px;
+      min-height: 40px;
       padding: 0.4rem 0.8rem;
       background-color: #000;
       border: 2px solid var(--elbow-bottom);
@@ -1611,13 +1602,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       cursor: pointer;
       text-transform: uppercase;
       transition: all 0.15s ease;
+      word-break: break-all;
     }
     .left-action-btn:hover {
       background-color: var(--elbow-bottom);
       color: #000;
     }
     .left-elbow-bottom {
-      height: 90px;
+      height: 75px;
       background-color: var(--elbow-bottom);
       border-radius: var(--elbow-radius-bottom);
       display: flex;
@@ -1630,22 +1622,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     /* ==========================================================================
-       MAIN CONTENT CONTAINER
+       MAIN CONTENT CONTAINER (RESPONSIVE, KEIN HORIZONTALER SCROLL)
        ========================================================================== */
     .right-frame {
       flex: 1;
+      min-width: 0;
       display: flex;
       flex-direction: column;
       position: relative;
       padding-left: 0;
       background: transparent;
+      overflow-x: hidden;
     }
-    /* Konkave Okuda-Kurve am unteren Elbow */
     .right-frame::after {
       content: '';
       display: block;
-      width: 50px;
-      height: 50px;
+      width: 45px;
+      height: 45px;
       background-color: var(--elbow-bottom);
       position: absolute;
       left: 0;
@@ -1653,8 +1646,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       z-index: 1;
     }
     .right-frame-inner-corner {
-      width: 50px;
-      height: 50px;
+      width: 45px;
+      height: 45px;
       background-color: #000;
       border-radius: var(--corner-cutout-bottom);
       position: absolute;
@@ -1665,35 +1658,41 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     main {
       flex: 1;
-      padding: 1rem 1.25rem 2rem clamp(1rem, 2.5vw, 2.5rem);
+      width: 100%;
+      min-width: 0;
+      padding: 0.8rem 1rem 2rem clamp(0.8rem, 2vw, 2rem);
       overflow-y: auto;
-      max-height: calc(100vh - 180px);
+      overflow-x: hidden;
+      max-height: calc(100vh - 170px);
+      box-sizing: border-box;
     }
 
-    /* Embedded Category Sections */
     .lcars-section {
       display: none;
-      animation: lcars-fade 0.2s ease-in;
+      animation: lcars-fade 0.15s ease-in;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
     .lcars-section.active-section {
       display: block;
     }
     @keyframes lcars-fade {
-      from { opacity: 0; transform: translateY(4px); }
+      from { opacity: 0; transform: translateY(3px); }
       to { opacity: 1; transform: translateY(0); }
     }
 
-    /* LCARS Header Bars */
     .lcars-header-bar {
       display: flex;
       align-items: center;
       gap: 0.8rem;
-      margin-bottom: 1.2rem;
+      margin-bottom: 1.1rem;
       border-bottom: 2px solid var(--c-primary);
-      padding-bottom: 0.4rem;
+      padding-bottom: 0.35rem;
+      flex-wrap: wrap;
     }
     .lcars-header-bar h2 {
-      font-size: 1.5rem;
+      font-size: 1.45rem;
       color: var(--c-primary);
       font-weight: 700;
       letter-spacing: 0.08em;
@@ -1708,14 +1707,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       letter-spacing: 0.05em;
     }
 
-    /* ==========================================================================
-       LCARS READOUT CARDS & GRIDS
-       ========================================================================== */
+    /* Grids & Cards (Fully Responsive) */
     .readout-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: 1rem;
-      margin-bottom: 1.5rem;
+      gap: 0.85rem;
+      margin-bottom: 1.25rem;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
     .lcars-card {
       background-color: var(--c-card-bg);
@@ -1723,12 +1723,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       border-top: 1px solid var(--c-card-border);
       border-right: 1px solid var(--c-card-border);
       border-bottom: 1px solid var(--c-card-border);
-      border-radius: 0 14px 14px 0;
-      padding: 1.1rem;
+      border-radius: 0 12px 12px 0;
+      padding: 1rem;
       position: relative;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
+      min-width: 0;
+      overflow: hidden;
+      box-sizing: border-box;
     }
     .lcars-card.card-violet { border-left-color: var(--c-secondary); }
     .lcars-card.card-blue { border-left-color: var(--c-blue); }
@@ -1739,35 +1742,39 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 0.6rem;
+      margin-bottom: 0.5rem;
     }
     .card-head-title {
-      font-size: 0.92rem;
+      font-size: 0.95rem;
       color: var(--c-secondary);
       font-weight: 700;
       letter-spacing: 0.06em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .card-head-icon {
       font-size: 1.25rem;
+      flex-shrink: 0;
     }
     .card-metric {
-      font-size: 2.3rem;
+      font-size: 2.2rem;
       font-weight: 700;
       color: #fff;
       line-height: 1;
-      margin-bottom: 0.4rem;
+      margin-bottom: 0.35rem;
     }
     .card-metric-sub {
       font-size: 0.86rem;
       color: var(--c-gold);
-      margin-bottom: 0.75rem;
+      margin-bottom: 0.65rem;
       font-family: var(--mono-family);
+      word-break: break-word;
     }
 
-    /* LCARS Progress Bars */
     .lcars-bar-track {
       width: 100%;
-      height: 14px;
+      height: 12px;
       background-color: #11141f;
       border-radius: 100vmax;
       overflow: hidden;
@@ -1781,149 +1788,155 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       transition: width 0.4s ease;
     }
 
-    /* Badges */
     .badge-status {
       display: inline-flex;
       align-items: center;
-      gap: 0.4rem;
-      padding: 0.2rem 0.6rem;
+      gap: 0.35rem;
+      padding: 0.15rem 0.55rem;
       border-radius: 100vmax;
       font-size: 0.78rem;
       font-weight: 700;
       text-transform: uppercase;
+      white-space: nowrap;
     }
     .badge-online { background-color: #059669; color: #fff; }
     .badge-offline { background-color: #dc2626; color: #fff; }
     .badge-warn { background-color: #d97706; color: #fff; }
 
-    /* ==========================================================================
-       DISCOVERY SCANNER VIEW (Kategorie 05)
-       ========================================================================== */
+    /* URL Action Buttons in Cards */
+    .card-action-links {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      margin-top: 0.6rem;
+      width: 100%;
+      min-width: 0;
+    }
+    .url-chip-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.65rem;
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      color: #fff;
+      text-decoration: none;
+      font-family: var(--mono-family);
+      font-size: 0.84rem;
+      word-break: break-all;
+      overflow-wrap: anywhere;
+      transition: all 0.15s ease;
+    }
+    .url-chip-btn:hover {
+      border-color: var(--c-primary);
+      background: rgba(235, 148, 58, 0.2);
+      color: #fff;
+    }
+    .url-chip-btn.chip-ts {
+      border-color: rgba(186, 164, 229, 0.3);
+      color: var(--c-secondary);
+    }
+    .url-chip-btn.chip-ts:hover {
+      background: rgba(186, 164, 229, 0.2);
+      color: #fff;
+    }
+    .url-chip-btn.chip-cf {
+      border-color: rgba(235, 148, 58, 0.4);
+      color: var(--c-primary);
+    }
+    .url-chip-btn.chip-cf:hover {
+      background: rgba(235, 148, 58, 0.25);
+      color: #fff;
+    }
+
+    .cmd-text-box {
+      font-family: var(--mono-family);
+      font-size: 0.76rem;
+      color: rgba(255, 255, 255, 0.65);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin: 0.2rem 0 0.4rem 0;
+      max-width: 100%;
+    }
+
+    /* Scanner Header Bar */
     .scanner-dashboard-box {
       background: rgba(20, 20, 30, 0.85);
-      border: 2px solid var(--c-red);
+      border: 2px solid var(--c-primary);
       border-radius: 12px;
-      padding: 1.25rem;
-      margin-bottom: 1.5rem;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.25rem;
       display: flex;
       flex-wrap: wrap;
       justify-content: space-between;
       align-items: center;
-      gap: 1rem;
+      gap: 0.8rem;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
     .scanner-telemetry-col {
       display: flex;
       flex-direction: column;
-      gap: 0.25rem;
+      gap: 0.2rem;
+      min-width: 140px;
     }
     .scanner-telemetry-col strong {
       color: var(--c-primary);
-      font-size: 1.25rem;
+      font-size: 1.15rem;
     }
     .scanner-telemetry-col span {
       font-family: var(--mono-family);
-      font-size: 0.95rem;
+      font-size: 0.92rem;
       color: #e2e8f0;
     }
     .btn-scan-trigger {
-      background-color: var(--c-red);
+      background-color: var(--c-primary);
       color: #000;
       font-family: var(--font-family);
       font-size: 1.15rem;
       font-weight: 700;
-      padding: 0.65rem 1.5rem;
+      padding: 0.6rem 1.4rem;
       border-radius: 100vmax;
       border: none;
       cursor: pointer;
       text-transform: uppercase;
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      gap: 0.4rem;
       transition: filter 0.15s ease, transform 0.1s ease;
     }
     .btn-scan-trigger:hover { filter: brightness(1.25); }
     .btn-scan-trigger:active { transform: scale(0.98); }
 
-    .scanner-table-wrapper {
-      width: 100%;
-      overflow-x: auto;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 10px;
-      margin-bottom: 1.5rem;
-      background: rgba(10, 12, 18, 0.95);
-    }
-    .lcars-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.92rem;
-      text-align: left;
-    }
-    .lcars-table th {
-      background-color: rgba(235, 148, 58, 0.15);
-      color: var(--c-primary);
-      padding: 0.75rem 0.9rem;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      border-bottom: 2px solid var(--c-primary);
-      white-space: nowrap;
-    }
-    .lcars-table td {
-      padding: 0.75rem 0.9rem;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-      vertical-align: middle;
-    }
-    .lcars-table tr:hover td {
-      background-color: rgba(255, 255, 255, 0.04);
-    }
-    .lcars-table .url-link {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      color: var(--c-blue);
-      text-decoration: none;
-      font-family: var(--mono-family);
-      font-size: 0.85rem;
-      padding: 0.2rem 0.5rem;
-      background: rgba(136, 153, 255, 0.12);
-      border-radius: 4px;
-      transition: background 0.15s ease;
-    }
-    .lcars-table .url-link:hover {
-      background: rgba(136, 153, 255, 0.25);
-      color: #fff;
-    }
-    .lcars-table .url-cf {
-      color: var(--c-primary);
-      background: rgba(235, 148, 58, 0.12);
-    }
-    .lcars-table .url-cf:hover {
-      background: rgba(235, 148, 58, 0.28);
-      color: #fff;
-    }
-
-    /* ==========================================================================
-       SETTINGS & CONFIG VIEW (Kategorie 06)
-       ========================================================================== */
+    /* Theme Buttons in Config */
     .theme-selector-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 1rem;
-      margin-bottom: 2rem;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.85rem;
+      margin-bottom: 1.5rem;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
     .theme-btn {
       display: flex;
       flex-direction: column;
       align-items: flex-start;
-      gap: 0.6rem;
-      padding: 1rem;
+      gap: 0.5rem;
+      padding: 0.9rem;
       background-color: #12141e;
       border: 2px solid rgba(255, 255, 255, 0.15);
-      border-radius: 12px;
+      border-radius: 10px;
       color: #fff;
       cursor: pointer;
       font-family: var(--font-family);
       text-transform: uppercase;
       transition: all 0.15s ease;
+      width: 100%;
+      min-width: 0;
     }
     .theme-btn:hover {
       border-color: var(--c-primary);
@@ -1936,14 +1949,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .theme-swatches {
       display: flex;
-      gap: 5px;
+      gap: 4px;
       width: 100%;
-      height: 18px;
+      height: 16px;
     }
     .theme-swatch {
       flex: 1;
       height: 100%;
-      border-radius: 3px;
+      border-radius: 2px;
     }
 
     /* ==========================================================================
@@ -1957,14 +1970,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       position: relative;
       z-index: 3;
     }
-    .bar-6 { width: 42%; background-color: var(--c-red); }
+    .bar-6 { width: 38%; background-color: var(--c-red); }
     .bar-7 { width: 6%; background-color: var(--c-butterscotch); }
     .bar-8 { width: 18%; background-color: var(--c-red); }
     .bar-9 { flex: 1; background-color: var(--c-secondary); }
     .bar-10 { width: 5%; background-color: var(--c-butterscotch); }
 
     footer {
-      padding: 0.5rem 1rem;
+      padding: 0.4rem 0.8rem;
       font-size: 0.78rem;
       color: rgba(255, 255, 255, 0.5);
       display: flex;
@@ -1975,20 +1988,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     footer a { color: var(--c-primary); text-decoration: none; }
 
-    /* Responsive Anpassungen */
+    /* ==========================================================================
+       RESPONSIVE BREAKPOINTS (KEIN HORIZONTALER OVERFLOW)
+       ========================================================================== */
     @media (max-width: 860px) {
-      :root { --lfw: 160px; --pill-height: 44px; }
+      :root { --lfw: 150px; --pill-height: 48px; }
       .data-cascade { display: none; }
-      .banner-title { font-size: 1.25rem; }
-      main { padding: 0.8rem; }
+      .banner-title { font-size: 1.15rem; }
+      main { padding: 0.6rem; }
     }
-    @media (max-width: 600px) {
+    @media (max-width: 640px) {
+      body { padding: 0; }
       .wrap-standard { min-height: auto; }
       .wrap { flex-direction: column; }
       .left-frame-top, .left-frame { width: 100%; border-radius: 0; }
       .right-frame-top::before, .right-frame-top::after,
       .right-frame::after, .right-frame-inner-corner { display: none; }
-      .banner-container { padding-left: 0.5rem; }
+      .banner-container { padding-left: 0.6rem; }
+      main { max-height: none; overflow: visible; }
     }
   </style>
 </head>
@@ -1999,11 +2016,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="wrap">
     <div class="left-frame-top">
       <button onclick="playLcarsBeep(880, 1760); switchCategory('system')">LCARS 47<br><span style="font-size:0.8rem; opacity:0.85;">AGY-PI</span></button>
-      <div style="font-size: 0.8rem; font-family: var(--mono-family);">SYS // ONLINE</div>
+      <div style="font-size: 0.8rem; font-family: var(--mono-family);">ONLINE</div>
     </div>
     <div class="right-frame-top">
       <div class="banner-container">
-        <div class="banner-title" id="bannerSectionTitle">LCARS / SYSTEM MONITOR</div>
+        <div class="banner-title" id="bannerSectionTitle">LCARS / SYSTEM & SENSOR VERLAUF</div>
         <div class="banner-stardate">
           <span>STARDATE:</span>
           <span id="stardateValue" style="font-weight:700;">--------.-</span>
@@ -2027,28 +2044,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- MITTLERER RAHMEN (LINKE STEUERUNGSBUTTONS & INHALT) -->
+  <!-- MITTLERER RAHMEN: 4 KATEGORIEN OHNE ZAHLEN -->
   <div class="wrap gap-wrap">
     <!-- Linke Steuerungssäule -->
     <div class="left-frame">
       <nav class="nav-pillar">
         <button class="lcars-pill-btn pill-sys active" onclick="switchCategory('system')" id="btn-cat-system">
-          01 // SYSTEM
-        </button>
-        <button class="lcars-pill-btn pill-hist" onclick="switchCategory('history')" id="btn-cat-history">
-          02 // VERLAUF
+          SYSTEM
         </button>
         <button class="lcars-pill-btn pill-srv" onclick="switchCategory('services')" id="btn-cat-services">
-          03 // SERVICES
+          SERVICES
         </button>
         <button class="lcars-pill-btn pill-ai" onclick="switchCategory('agents')" id="btn-cat-agents">
-          04 // KI-AGENTEN
-        </button>
-        <button class="lcars-pill-btn pill-scan" onclick="switchCategory('scanner')" id="btn-cat-scanner">
-          05 // SCANNER
+          KI-AGENTEN
         </button>
         <button class="lcars-pill-btn pill-cfg" onclick="switchCategory('config')" id="btn-cat-config">
-          06 // CONFIG
+          CONFIG
         </button>
       </nav>
 
@@ -2068,18 +2079,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- Haupt-Inhaltsbereich mit eingebetteten Kategorien -->
+    <!-- Haupt-Inhaltsbereich -->
     <div class="right-frame">
       <div class="right-frame-inner-corner"></div>
       <main>
 
-        <!-- KATEGORIE 01: SYSTEM OVERVIEW -->
+        <!-- KATEGORIE 1: SYSTEM & 24H SENSOR VERLAUF (KOMBINIERT) -->
         <section class="lcars-section active-section" id="section-system">
           <div class="lcars-header-bar">
-            <h2>01 // SYSTEM STATUS & TELEMETRIE</h2>
-            <span class="lcars-pill-tag">LIVE DIAGNOSTIK</span>
+            <h2>SYSTEM STATUS & 24H VERLAUF</h2>
+            <span class="lcars-pill-tag">LIVE ODN METRIKEN</span>
           </div>
 
+          <!-- Telemetrie Readout Cards -->
           <div class="readout-grid">
             <!-- CPU -->
             <div class="lcars-card">
@@ -2141,7 +2153,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
               <div class="card-metric" id="sysUptimeVal" style="font-size: 1.8rem;">--</div>
               <div class="card-metric-sub" id="sysBootTimeSub">Boot: --</div>
-              <div class="badge-status badge-online">SYS RUNNING</div>
+              <div class="badge-status badge-online">ONLINE</div>
             </div>
 
             <!-- HARDWARE SPEC -->
@@ -2150,79 +2162,107 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <span class="card-head-title">SPEZIFIKATION</span>
                 <span class="card-head-icon">🎛️</span>
               </div>
-              <div style="font-size: 1.15rem; color:#fff; margin-bottom: 0.3rem;">{{ stats.hostname }}</div>
+              <div style="font-size: 1.15rem; color:#fff; margin-bottom: 0.25rem;">{{ stats.hostname }}</div>
               <div class="card-metric-sub">{{ stats.platform }}</div>
               <div class="card-metric-sub">LAN IP: <span id="sysLanIp">192.168.31.210</span></div>
             </div>
           </div>
-        </section>
 
-        <!-- KATEGORIE 02: 24H SENSOR VERLAUF -->
-        <section class="lcars-section" id="section-history">
-          <div class="lcars-header-bar">
-            <h2>02 // 24H SENSOR VERLAUF & CHARTS</h2>
-            <span class="lcars-pill-tag">ODN METRIKEN</span>
-          </div>
-
-          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.6rem; margin-bottom: 1rem;">
-            <!-- Range Selector Pills -->
-            <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
-              <button class="left-action-btn range-btn" onclick="setChartRange('10m')">10 MIN</button>
-              <button class="left-action-btn range-btn" onclick="setChartRange('30m')">30 MIN</button>
-              <button class="left-action-btn range-btn active-range" onclick="setChartRange('1h')">1 STUNDE</button>
-              <button class="left-action-btn range-btn" onclick="setChartRange('12h')">12 STUNDEN</button>
-              <button class="left-action-btn range-btn" onclick="setChartRange('24h')">24 STUNDEN</button>
+          <!-- 24H SENSOR VERLAUFS-CHART -->
+          <div class="lcars-card" style="margin-top: 1.25rem; padding: 1.1rem; width: 100%; min-width: 0;">
+            <div class="card-head">
+              <span class="card-head-title" style="color:var(--c-primary); font-size:1.1rem;">24H SENSOR HISTORIE & SENSOR-KURVEN</span>
+              <span class="card-head-icon">📈</span>
             </div>
 
-            <!-- Dataset Toggles -->
-            <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
-              <button class="left-action-btn" onclick="toggleDataset(0)" id="dsBtn0" style="border-color:var(--c-primary); color:var(--c-primary);">TEMPERATUR</button>
-              <button class="left-action-btn" onclick="toggleDataset(1)" id="dsBtn1" style="border-color:var(--c-blue); color:var(--c-blue);">CPU %</button>
-              <button class="left-action-btn" onclick="toggleDataset(2)" id="dsBtn2" style="border-color:var(--c-red); color:var(--c-red);">THROTTLING</button>
-              <button class="left-action-btn" onclick="toggleDataset(3)" id="dsBtn3" style="border-color:var(--c-secondary); color:var(--c-secondary);">RAM %</button>
-            </div>
-          </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom: 1rem;">
+              <!-- Range Selector Pills -->
+              <div style="display:flex; gap:0.35rem; flex-wrap:wrap;">
+                <button class="left-action-btn range-btn" onclick="setChartRange('10m')">10 MIN</button>
+                <button class="left-action-btn range-btn" onclick="setChartRange('30m')">30 MIN</button>
+                <button class="left-action-btn range-btn active-range" onclick="setChartRange('1h')">1 STUNDE</button>
+                <button class="left-action-btn range-btn" onclick="setChartRange('12h')">12 STUNDEN</button>
+                <button class="left-action-btn range-btn" onclick="setChartRange('24h')">24 STUNDEN</button>
+              </div>
 
-          <div class="lcars-card" style="padding:1rem; min-height: 380px;">
-            <canvas id="historyChart" style="width:100%; height:360px;"></canvas>
+              <!-- Dataset Toggles -->
+              <div style="display:flex; gap:0.35rem; flex-wrap:wrap;">
+                <button class="left-action-btn" onclick="toggleDataset(0)" id="dsBtn0" style="border-color:var(--c-primary); color:var(--c-primary);">TEMPERATUR</button>
+                <button class="left-action-btn" onclick="toggleDataset(1)" id="dsBtn1" style="border-color:var(--c-blue); color:var(--c-blue);">CPU %</button>
+                <button class="left-action-btn" onclick="toggleDataset(2)" id="dsBtn2" style="border-color:var(--c-red); color:var(--c-red);">THROTTLING</button>
+                <button class="left-action-btn" onclick="toggleDataset(3)" id="dsBtn3" style="border-color:var(--c-secondary); color:var(--c-secondary);">RAM %</button>
+              </div>
+            </div>
+
+            <!-- Canvas Container mit fester Höhe & responsiver Breite -->
+            <div style="position: relative; width: 100%; height: 320px; min-width: 0; overflow: hidden;">
+              <canvas id="historyChart"></canvas>
+            </div>
           </div>
         </section>
 
-        <!-- KATEGORIE 03: WEB-SERVICES -->
+        <!-- KATEGORIE 2: SERVICES & SCANNER (KOMBINIERT) -->
         <section class="lcars-section" id="section-services">
           <div class="lcars-header-bar">
-            <h2>03 // WEB-SERVICES & SCHNELLZUGRIFF</h2>
-            <span class="lcars-pill-tag">ODN NETZWERK</span>
+            <h2>SERVICES & PROZESS-SCANNER</h2>
+            <span class="lcars-pill-tag">5-MIN SCANNER AKTIV</span>
           </div>
 
+          <!-- Scanner Telemetrie Status Box -->
+          <div class="scanner-dashboard-box">
+            <div class="scanner-telemetry-col">
+              <strong>STATUS: AUTOMATISCHER SCAN AKTIV</strong>
+              <span>Intervall: Alle 5 Minuten (300 Sekunden)</span>
+            </div>
+            <div class="scanner-telemetry-col">
+              <span>Letzter Scan: <strong id="scanLastTime" style="color:#fff;">{{ stats.scanner_meta.last_scan_time }}</strong></span>
+              <span>Nächster Scan in: <strong id="scanCountdown" style="color:var(--c-gold);">--:--</strong></span>
+            </div>
+            <div class="scanner-telemetry-col">
+              <span>Aktive Webserver: <strong id="scanFoundCount" style="color:#fff;">{{ stats.discovered_servers|length }}</strong></span>
+            </div>
+            <div>
+              <button class="btn-scan-trigger" onclick="triggerWebserverScan()" id="btnScanTrigger">
+                <span>⚡</span> <span id="btnScanLabel">JETZT SCANNEN</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Responsive Diagnostic Cards aller erkannten Webserver & Services -->
           <div class="readout-grid" id="servicesGrid">
-            {% for key, svc in stats.services.items() %}
+            {% for s in stats.discovered_servers %}
             <div class="lcars-card">
               <div class="card-head">
-                <span class="card-head-title">{{ svc.title }}</span>
-                <span class="card-head-icon">{{ svc.icon }}</span>
+                <span class="card-head-title">{{ s.title }}</span>
+                <span class="card-head-icon">{{ s.icon or '🌐' }}</span>
               </div>
-              <div style="margin-bottom: 0.6rem;">
-                <span class="badge-status {% if svc.online %}badge-online{% else %}badge-offline{% endif %}">
-                  PORT {{ svc.port }} // {% if svc.online %}ONLINE{% else %}OFFLINE{% endif %}
+              <div>
+                <span class="badge-status badge-online">
+                  PORT {{ s.port }} // {{ s.http_status or 200 }} OK
                 </span>
               </div>
-              <div class="card-metric-sub">{{ svc.description }}</div>
-              <div style="display:flex; flex-direction:column; gap:0.4rem; margin-top:0.6rem;">
-                {% if svc.lan_url %}
-                <a href="{{ svc.lan_url }}" target="_blank" class="left-action-btn" style="text-decoration:none;">
-                  <span>🏠</span> <span>LAN: {{ svc.lan_url }}</span>
+              <div class="cmd-text-box" title="{{ s.cmdline }}">
+                PID {{ s.pid }} [{{ s.process_name }}] // {{ s.cmdline }}
+              </div>
+
+              <!-- Links ohne horizontalen Überlauf -->
+              <div class="card-action-links">
+                {% if s.lan_url %}
+                <a href="{{ s.lan_url }}" target="_blank" class="url-chip-btn">
+                  <span>🏠</span> <span>LAN: {{ s.lan_url }}</span>
                 </a>
                 {% endif %}
-                {% if svc.tailscale_url %}
-                <a href="{{ svc.tailscale_url }}" target="_blank" class="left-action-btn" style="text-decoration:none; border-color:var(--c-secondary); color:var(--c-secondary);">
-                  <span>🌐</span> <span>TAILSCALE</span>
+                {% if s.tailscale_url %}
+                <a href="{{ s.tailscale_url }}" target="_blank" class="url-chip-btn chip-ts">
+                  <span>🌐</span> <span>TS: {{ s.tailscale_url }}</span>
                 </a>
                 {% endif %}
-                {% if svc.cf_url %}
-                <a href="{{ svc.cf_url }}" target="_blank" class="left-action-btn" style="text-decoration:none; border-color:var(--c-primary); color:var(--c-primary);">
-                  <span>☁️</span> <span>CLOUDFLARE TUNNEL</span>
+                {% if s.cloudflared_url %}
+                <a href="{{ s.cloudflared_url }}" target="_blank" class="url-chip-btn chip-cf">
+                  <span>☁️</span> <span>CF: {{ s.cloudflared_url }}</span>
                 </a>
+                {% else %}
+                <span style="font-size:0.75rem; color:rgba(255,255,255,0.4); padding-left:0.2rem;">☁️ Kein Cloudflare-Tunnel</span>
                 {% endif %}
               </div>
             </div>
@@ -2230,11 +2270,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
-        <!-- KATEGORIE 04: KI-AGENTEN & HERMES -->
+        <!-- KATEGORIE 3: KI-AGENTEN & HERMES -->
         <section class="lcars-section" id="section-agents">
           <div class="lcars-header-bar">
-            <h2>04 // KI-AGENTEN & HERMES NUTZUNG</h2>
-            <span class="lcars-pill-tag">NEURAL PROZESSOREN</span>
+            <h2>KI-AGENTEN & HERMES NUTZUNG</h2>
+            <span class="lcars-pill-tag">NEURAL ARCHIV</span>
           </div>
 
           <div class="readout-grid">
@@ -2275,33 +2315,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
 
           <!-- Hermes Donut & Model Table -->
-          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:1rem; margin-top:1.5rem;">
-            <div class="lcars-card" style="min-height:300px; display:flex; flex-direction:column; align-items:center; justify-content:center;">
-              <div class="card-head-title" style="align-self:flex-start; margin-bottom:1rem;">MODELL TOKEN-VERTEILUNG</div>
-              <div style="width:100%; max-width:260px; height:240px; position:relative;">
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:1rem; margin-top:1.25rem; width:100%; min-width:0;">
+            <!-- Donut Canvas Card -->
+            <div class="lcars-card" style="min-height:320px; display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; min-width:0;">
+              <div class="card-head-title" style="align-self:flex-start; margin-bottom:0.75rem;">MODELL TOKEN-VERTEILUNG</div>
+              <div style="position:relative; width:100%; max-width:300px; height:260px; min-width:0;">
                 <canvas id="hermesChart"></canvas>
               </div>
             </div>
 
-            <div class="lcars-card">
-              <div class="card-head-title" style="margin-bottom:0.8rem;">HERMES MODELLE & KOSTEN</div>
-              <div class="scanner-table-wrapper" style="margin-bottom:0;">
-                <table class="lcars-table">
+            <!-- Model Table Card -->
+            <div class="lcars-card" style="width:100%; min-width:0; overflow-x:auto;">
+              <div class="card-head-title" style="margin-bottom:0.75rem;">HERMES MODELLE & KOSTEN</div>
+              <div style="width:100%; overflow-x:auto;">
+                <table style="width:100%; border-collapse:collapse; font-size:0.86rem; text-align:left;">
                   <thead>
-                    <tr>
-                      <th>MODELL</th>
-                      <th>TOKENS</th>
-                      <th>SESSIONS</th>
-                      <th>KOSTEN</th>
+                    <tr style="border-bottom:2px solid var(--c-primary); color:var(--c-primary);">
+                      <th style="padding:0.5rem 0.4rem;">MODELL</th>
+                      <th style="padding:0.5rem 0.4rem;">TOKENS</th>
+                      <th style="padding:0.5rem 0.4rem;">SESS.</th>
+                      <th style="padding:0.5rem 0.4rem;">KOSTEN</th>
                     </tr>
                   </thead>
                   <tbody id="hermesTableBody">
                     {% for m in stats.hermes.models %}
-                    <tr>
-                      <td><strong>{{ m.model }}</strong></td>
-                      <td>{{ m.total_formatted }} ({{ m.percent_tokens }}%)</td>
-                      <td>{{ m.sessions }}</td>
-                      <td>{{ m.cost_formatted }}</td>
+                    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+                      <td style="padding:0.45rem 0.4rem; word-break:break-all;"><strong>{{ m.model }}</strong></td>
+                      <td style="padding:0.45rem 0.4rem; white-space:nowrap;">{{ m.total_formatted }}</td>
+                      <td style="padding:0.45rem 0.4rem;">{{ m.sessions }}</td>
+                      <td style="padding:0.45rem 0.4rem; white-space:nowrap;">{{ m.cost_formatted }}</td>
                     </tr>
                     {% endfor %}
                   </tbody>
@@ -2311,99 +2353,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
-        <!-- KATEGORIE 05: 5-MINUTEN WEBSERVER DISCOVERY SCANNER -->
-        <section class="lcars-section" id="section-scanner">
-          <div class="lcars-header-bar">
-            <h2>05 // AUTOMATISCHE WEBSERVER-ERKENNUNG</h2>
-            <span class="lcars-pill-tag">5-MIN SCHLEIFE</span>
-          </div>
-
-          <!-- Scanner Telemetrie Banner -->
-          <div class="scanner-dashboard-box">
-            <div class="scanner-telemetry-col">
-              <strong>STATUS: AUTOMATISCHER SCAN AKTIV</strong>
-              <span>Intervall: Alle 5 Minuten (300 Sekunden)</span>
-            </div>
-            <div class="scanner-telemetry-col">
-              <span>Letzter Scan: <strong id="scanLastTime" style="color:#fff;">{{ stats.scanner_meta.last_scan_time }}</strong></span>
-              <span>Nächster Scan in: <strong id="scanCountdown" style="color:var(--c-gold);">--:--</strong></span>
-            </div>
-            <div class="scanner-telemetry-col">
-              <span>Gefundene Webserver: <strong id="scanFoundCount" style="color:#fff;">{{ stats.discovered_servers|length }}</strong></span>
-            </div>
-            <div>
-              <button class="btn-scan-trigger" onclick="triggerWebserverScan()" id="btnScanTrigger">
-                <span>⚡</span> <span id="btnScanLabel">JETZT SCANNEN</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- Tabelle aller erkannten Webserver -->
-          <div class="scanner-table-wrapper">
-            <table class="lcars-table">
-              <thead>
-                <tr>
-                  <th>PORT / PROZESS</th>
-                  <th>PID & BEFEHL</th>
-                  <th>LOKALE LAN ADRESSE</th>
-                  <th>TAILSCALE ADRESSE</th>
-                  <th>CLOUDFLARED ADRESSE</th>
-                  <th>STATUS</th>
-                </tr>
-              </thead>
-              <tbody id="discoveredServersTableBody">
-                {% for s in stats.discovered_servers %}
-                <tr>
-                  <td>
-                    <strong>{{ s.title }}</strong><br>
-                    <span style="font-size:0.8rem; color:var(--c-gold);">Port {{ s.port }} ({{ s.server_header }})</span>
-                  </td>
-                  <td>
-                    <span style="font-family:var(--mono-family);">PID {{ s.pid }} [{{ s.process_name }}]</span><br>
-                    <span style="font-size:0.75rem; color:rgba(255,255,255,0.6);">{{ s.cmdline }}</span>
-                  </td>
-                  <td>
-                    <a href="{{ s.lan_url }}" target="_blank" class="url-link">🏠 {{ s.lan_url }}</a>
-                  </td>
-                  <td>
-                    {% if s.tailscale_url %}
-                    <a href="{{ s.tailscale_url }}" target="_blank" class="url-link">🌐 {{ s.tailscale_url }}</a>
-                    {% else %}
-                    <span style="color:rgba(255,255,255,0.4); font-size:0.8rem;">Localhost only</span>
-                    {% endif %}
-                  </td>
-                  <td>
-                    {% if s.cloudflared_url %}
-                    <a href="{{ s.cloudflared_url }}" target="_blank" class="url-link url-cf">☁️ {{ s.cloudflared_url }}</a>
-                    {% else %}
-                    <span style="color:rgba(255,255,255,0.4); font-size:0.8rem;">Kein Tunnel</span>
-                    {% endif %}
-                  </td>
-                  <td>
-                    <span class="badge-status badge-online">{{ s.http_status or 200 }} OK</span>
-                  </td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- KATEGORIE 06: LCARS CONFIG & FARBMODI -->
+        <!-- KATEGORIE 4: CONFIG & FARBMODI -->
         <section class="lcars-section" id="section-config">
           <div class="lcars-header-bar">
-            <h2>06 // LCARS CONFIG & FARBMODI</h2>
-            <span class="lcars-pill-tag">BENUTZER-EINSTELLUNGEN</span>
+            <h2>SYSTEM CONFIG & FARBMODI</h2>
+            <span class="lcars-pill-tag">TERMINAL OPTIONEN</span>
           </div>
 
-          <p style="margin-bottom:1.2rem; color:var(--c-gold);">
-            WÄHLEN SIE DEN LCARS-FARBMODUS FÜR DAS GESAMTE DASHBOARD AUS. EINSTELLUNGEN WERDEN IM BROWSER GESPEICHERT.
+          <p style="margin-bottom:1.1rem; color:var(--c-gold);">
+            WÄHLEN SIE DEN LCARS-FARBMODUS FÜR DAS GESAMTE DASHBOARD AUS. EINSTELLUNGEN WERDEN AUTOMATISCH GESPEICHERT.
           </p>
 
           <div class="theme-selector-grid">
             <!-- Classic TNG -->
             <button class="theme-btn active-theme" onclick="setLcarsTheme('classic')" id="theme-btn-classic">
-              <span style="font-weight:700; font-size:1.15rem;">01 // CLASSIC 24TH C.</span>
+              <span style="font-weight:700; font-size:1.15rem;">CLASSIC 24TH C.</span>
               <span style="font-size:0.8rem; color:#aaa;">TNG / DS9 / VOYAGER OKUDA</span>
               <div class="theme-swatches">
                 <div class="theme-swatch" style="background-color:#eb943a;"></div>
@@ -2416,8 +2380,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
             <!-- Nemesis Blue -->
             <button class="theme-btn" onclick="setLcarsTheme('nemesis')" id="theme-btn-nemesis">
-              <span style="font-weight:700; font-size:1.15rem;">02 // NEMESIS BLUE</span>
-              <span style="font-size:0.8rem; color:#aaa;">FIRST CONTACT / TACTICAL BLUE</span>
+              <span style="font-weight:700; font-size:1.15rem;">NEMESIS BLUE</span>
+              <span style="font-size:0.8rem; color:#aaa;">FIRST CONTACT / TACTICAL</span>
               <div class="theme-swatches">
                 <div class="theme-swatch" style="background-color:#6699ff;"></div>
                 <div class="theme-swatch" style="background-color:#88bbff;"></div>
@@ -2429,8 +2393,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
             <!-- Lower Decks -->
             <button class="theme-btn" onclick="setLcarsTheme('lowerdecks')" id="theme-btn-lowerdecks">
-              <span style="font-weight:700; font-size:1.15rem;">03 // LOWER DECKS</span>
-              <span style="font-size:0.8rem; color:#aaa;">CALIFORNIA CLASS WARM GOLD</span>
+              <span style="font-weight:700; font-size:1.15rem;">LOWER DECKS</span>
+              <span style="font-size:0.8rem; color:#aaa;">CALIFORNIA CLASS GOLD</span>
               <div class="theme-swatches">
                 <div class="theme-swatch" style="background-color:#ffaa44;"></div>
                 <div class="theme-swatch" style="background-color:#ff7700;"></div>
@@ -2442,7 +2406,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
             <!-- Red Alert -->
             <button class="theme-btn" onclick="setLcarsTheme('redalert')" id="theme-btn-redalert">
-              <span style="font-weight:700; font-size:1.15rem;">04 // RED ALERT</span>
+              <span style="font-weight:700; font-size:1.15rem;">RED ALERT</span>
               <span style="font-size:0.8rem; color:#aaa;">DEFIANT KAMPFSTATION</span>
               <div class="theme-swatches">
                 <div class="theme-swatch" style="background-color:#cf3030;"></div>
@@ -2455,7 +2419,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
             <!-- Voyager Bio-Neural -->
             <button class="theme-btn" onclick="setLcarsTheme('voyager')" id="theme-btn-voyager">
-              <span style="font-weight:700; font-size:1.15rem;">05 // BIO-NEURAL</span>
+              <span style="font-weight:700; font-size:1.15rem;">BIO-NEURAL</span>
               <span style="font-size:0.8rem; color:#aaa;">WISSENSCHAFT & SMARAGD</span>
               <div class="theme-swatches">
                 <div class="theme-swatch" style="background-color:#14b8a6;"></div>
@@ -2467,12 +2431,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </button>
           </div>
 
-          <!-- Zusätzliche Optionen -->
+          <!-- Weitere Optionen -->
           <div class="readout-grid">
             <div class="lcars-card">
-              <div class="card-head-title">AUDIO & LCARS SOUND EFFEKTE</div>
+              <div class="card-head-title">AUDIO & SOUND-EFFEKTE</div>
               <p style="font-size:0.88rem; color:var(--c-gold); margin:0.6rem 0;">
-                AUTHENTISCHE LCARS-BEEPS VIA WEB AUDIO API BEI TASTENDRUCK.
+                AUTHENTISCHE LCARS-BEEPS VIA WEB AUDIO API SYNTHESIZER.
               </p>
               <button class="left-action-btn" onclick="toggleAudio(); playLcarsBeep(880, 1760);">
                 <span>🔊</span> <span id="cfgAudioLabel">SOUND EFFEKTE UMSCHALTEN</span>
@@ -2482,7 +2446,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <div class="lcars-card">
               <div class="card-head-title">VOLLBILD-MODUS (FULLSCREEN)</div>
               <p style="font-size:0.88rem; color:var(--c-gold); margin:0.6rem 0;">
-                OPTIMIERT FÜR TERMINALS & MONITOR-WAND IM STAR TREK DESIGN.
+                OPTIMIERT FÜR BROWSER, TERMINAL & WANDMONITORE.
               </p>
               <button class="left-action-btn" onclick="toggleFullscreen()">
                 <span>⛶</span> <span>FULLSCREEN AKTIVIEREN / BEENDEN</span>
@@ -2494,7 +2458,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <p style="font-size:0.88rem; color:var(--c-gold); margin:0.6rem 0;">
                 AKTUELL: <span id="refreshRateDisplay">3 SEKUNDEN</span>
               </p>
-              <div style="display:flex; gap:0.4rem;">
+              <div style="display:flex; gap:0.35rem;">
                 <button class="left-action-btn" onclick="setRefreshInterval(2000)">2s</button>
                 <button class="left-action-btn" onclick="setRefreshInterval(3000)">3s</button>
                 <button class="left-action-btn" onclick="setRefreshInterval(5000)">5s</button>
@@ -2510,8 +2474,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   <!-- UNTERER RAHMEN -->
   <div class="wrap" style="margin-top: 4px;">
-    <div style="width: var(--lfw);"></div>
-    <div style="flex:1;">
+    <div style="width: var(--lfw); flex-shrink: 0;"></div>
+    <div style="flex:1; min-width: 0;">
       <div class="bar-panel-bottom">
         <div class="bar-6"></div>
         <div class="bar-7"></div>
@@ -2523,16 +2487,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <footer>
-    <div>LCARS SYSTEM TERMINAL 47 // HOST: {{ stats.hostname }} // STAND: <span id="footerTimestamp">{{ stats.timestamp }}</span></div>
-    <div>DESIGN VORLAGE: <a href="https://www.thelcars.com/" target="_blank">THELCARS.COM</a> // AGY DASHBOARD</div>
+    <div>LCARS TERMINAL 47 // HOST: {{ stats.hostname }} // STAND: <span id="footerTimestamp">{{ stats.timestamp }}</span></div>
+    <div>DESIGN: <a href="https://www.thelcars.com/" target="_blank">THELCARS.COM</a> // AGY DASHBOARD</div>
   </footer>
 </section>
 
 <!-- ==========================================================================
-     JAVASCRIPT: LCARS CONTROLLER, SOUNDS, THEMES & APIS
+     JAVASCRIPT: LCARS CONTROLLER, CHARTS, THEMES & APIS
      ========================================================================== -->
 <script>
-  // Initiales Datenobjekt vom Backend
   const initialStats = {{ stats_json | safe }};
 
   // Sound Engine (Web Audio API Synthesizer)
@@ -2566,9 +2529,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       gain.connect(ctx.destination);
       osc.start();
       osc.stop(ctx.currentTime + duration);
-    } catch (e) {
-      // Audio Ignorieren falls Browser Blockiert
-    }
+    } catch (e) {}
   }
 
   function toggleAudio() {
@@ -2587,7 +2548,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (cfgLabel) cfgLabel.textContent = soundEnabled ? 'SOUND EFFEKTE: AKTIV' : 'SOUND EFFEKTE: STUMM';
   }
 
-  // Stardate Berechnung (Format: Jahr-1946 + TagDesJahres * 2.732 . Stunde)
+  // Stardate Berechnung
   function updateStardate() {
     const now = new Date();
     const currentHour = now.getHours();
@@ -2610,7 +2571,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     playLcarsBeep(1200, 1600);
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen().catch(err => {
-        console.warn("Fullscreen Request abgelehnt:", err);
+        console.warn("Fullscreen abgelehnt:", err);
       });
     } else {
       if (document.exitFullscreen) document.exitFullscreen();
@@ -2627,41 +2588,48 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   });
 
-  // Kategorie Navigation (Left Buttons)
+  // 4 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
   const CATEGORY_NAMES = {
-    'system': 'LCARS / SYSTEM MONITOR',
-    'history': 'LCARS / 24H ODN SENSOR VERLAUF',
-    'services': 'LCARS / WEB-SERVICES & SCHNELLZUGRIFF',
+    'system': 'LCARS / SYSTEM & SENSOR VERLAUF',
+    'services': 'LCARS / SERVICES & PROZESS-SCANNER',
     'agents': 'LCARS / KI-AGENTEN & HERMES ARCHIV',
-    'scanner': 'LCARS / PROZESS- & WEBSERVER-ERKENNUNG',
     'config': 'LCARS / SYSTEM CONFIG & FARBMODI'
   };
 
   function switchCategory(catId) {
     playLcarsBeep(980, 1400);
 
-    // Alle Buttons deaktiveren & gewählten aktivieren
     document.querySelectorAll('.lcars-pill-btn').forEach(btn => btn.classList.remove('active'));
     const activeBtn = document.getElementById('btn-cat-' + catId);
     if (activeBtn) activeBtn.classList.add('active');
 
-    // Alle Sektionen ausblenden & gewählte anzeigen
     document.querySelectorAll('.lcars-section').forEach(sec => sec.classList.remove('active-section'));
     const activeSec = document.getElementById('section-' + catId);
     if (activeSec) activeSec.classList.add('active-section');
 
-    // Banner Titel anpassen
     const banner = document.getElementById('bannerSectionTitle');
     if (banner && CATEGORY_NAMES[catId]) {
       banner.textContent = CATEGORY_NAMES[catId];
     }
 
-    // Falls History geöffnet wird, Chart resize ausführen
-    if (catId === 'history' && historyChart) {
-      setTimeout(() => historyChart.resize(), 50);
+    // Chart Resizing & Nachladen
+    if (catId === 'system' && historyChart) {
+      setTimeout(() => {
+        historyChart.resize();
+        historyChart.update('none');
+      }, 50);
     }
-    if (catId === 'agents' && hermesChart) {
-      setTimeout(() => hermesChart.resize(), 50);
+    if (catId === 'agents') {
+      ensureChart(() => {
+        if (!hermesChart) {
+          initHermesChart();
+        } else {
+          setTimeout(() => {
+            hermesChart.resize();
+            hermesChart.update('none');
+          }, 50);
+        }
+      });
     }
   }
 
@@ -2678,7 +2646,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (historyChart) historyChart.update();
   }
 
-  // Gespeichertes Theme laden
   const savedTheme = localStorage.getItem('lcars-theme') || 'classic';
   setLcarsTheme(savedTheme);
   updateAudioUI();
@@ -2744,7 +2711,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     if (data.discovered_servers) {
       document.getElementById('scanFoundCount').textContent = data.discovered_servers.length;
-      updateDiscoveredTable(data.discovered_servers);
+      updateServicesCards(data.discovered_servers);
     }
 
     // Timestamp
@@ -2753,42 +2720,45 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  // Tabelle der erkannten Webserver rendern
-  function updateDiscoveredTable(servers) {
-    const tbody = document.getElementById('discoveredServersTableBody');
-    if (!tbody || !servers) return;
+  // Responsive Diagnostic Cards für Services & Scanner rendern
+  function updateServicesCards(servers) {
+    const grid = document.getElementById('servicesGrid');
+    if (!grid || !servers) return;
     let html = '';
     servers.forEach(s => {
-      const tailscaleCell = s.tailscale_url 
-        ? `<a href="${s.tailscale_url}" target="_blank" class="url-link">🌐 ${s.tailscale_url}</a>`
-        : `<span style="color:rgba(255,255,255,0.4); font-size:0.8rem;">Localhost only</span>`;
+      const tailscaleBtn = s.tailscale_url
+        ? `<a href="${s.tailscale_url}" target="_blank" class="url-chip-btn chip-ts"><span>🌐</span> <span>TS: ${s.tailscale_url}</span></a>`
+        : `<span style="font-size:0.75rem; color:rgba(255,255,255,0.4); padding-left:0.2rem;">🌐 Localhost only</span>`;
 
-      const cfCell = s.cloudflared_url
-        ? `<a href="${s.cloudflared_url}" target="_blank" class="url-link url-cf">☁️ ${s.cloudflared_url}</a>`
-        : `<span style="color:rgba(255,255,255,0.4); font-size:0.8rem;">Kein Tunnel</span>`;
+      const cfBtn = s.cloudflared_url
+        ? `<a href="${s.cloudflared_url}" target="_blank" class="url-chip-btn chip-cf"><span>☁️</span> <span>CF: ${s.cloudflared_url}</span></a>`
+        : `<span style="font-size:0.75rem; color:rgba(255,255,255,0.4); padding-left:0.2rem;">☁️ Kein Cloudflare-Tunnel</span>`;
 
       html += `
-        <tr>
-          <td>
-            <strong>${s.title}</strong><br>
-            <span style="font-size:0.8rem; color:var(--c-gold);">Port ${s.port} (${s.server_header || 'HTTP'})</span>
-          </td>
-          <td>
-            <span style="font-family:var(--mono-family);">PID ${s.pid || 'N/A'} [${s.process_name || 'N/A'}]</span><br>
-            <span style="font-size:0.75rem; color:rgba(255,255,255,0.6);">${s.cmdline || ''}</span>
-          </td>
-          <td>
-            <a href="${s.lan_url}" target="_blank" class="url-link">🏠 ${s.lan_url}</a>
-          </td>
-          <td>${tailscaleCell}</td>
-          <td>${cfCell}</td>
-          <td>
-            <span class="badge-status badge-online">${s.http_status || 200} OK</span>
-          </td>
-        </tr>
+        <div class="lcars-card">
+          <div class="card-head">
+            <span class="card-head-title">${s.title}</span>
+            <span class="card-head-icon">${s.icon || '🌐'}</span>
+          </div>
+          <div>
+            <span class="badge-status badge-online">
+              PORT ${s.port} // ${s.http_status || 200} OK
+            </span>
+          </div>
+          <div class="cmd-text-box" title="${s.cmdline || ''}">
+            PID ${s.pid || 'N/A'} [${s.process_name || 'N/A'}] // ${s.cmdline || ''}
+          </div>
+          <div class="card-action-links">
+            <a href="${s.lan_url}" target="_blank" class="url-chip-btn">
+              <span>🏠</span> <span>LAN: ${s.lan_url}</span>
+            </a>
+            ${tailscaleBtn}
+            ${cfBtn}
+          </div>
+        </div>
       `;
     });
-    tbody.innerHTML = html;
+    grid.innerHTML = html;
   }
 
   // Manueller Sofort-Scan Trigger
@@ -2803,7 +2773,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const resp = await fetch('/api/scan-webservers');
       if (resp.ok) {
         const data = await resp.json();
-        if (data.discovered) updateDiscoveredTable(data.discovered);
+        if (data.discovered) updateServicesCards(data.discovered);
         fetchLiveStats(true);
       }
     } catch (e) {
@@ -2840,11 +2810,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   refreshTimer = setInterval(() => fetchLiveStats(false), refreshIntervalMs);
 
   // ---------------------------------------------------------------------------
-  // Chart.js: 24h Verlauf & Hermes Donut
+  // CHART.JS HELPER & INITIALISIERUNG
   // ---------------------------------------------------------------------------
   let historyChart = null;
   let hermesChart = null;
   let activeRange = '1h';
+
+  function ensureChart(cb, attempts = 50) {
+    if (typeof Chart !== 'undefined') {
+      try { cb(); } catch (e) { console.error('Chart init exception:', e); }
+      return;
+    }
+    if (attempts > 0) {
+      setTimeout(() => ensureChart(cb, attempts - 1), 60);
+    } else {
+      console.warn('Chart.js konnte nicht innerhalb des Timeouts geladen werden.');
+    }
+  }
 
   function initHistoryChart() {
     const canvas = document.getElementById('historyChart');
@@ -2863,6 +2845,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             backgroundColor: 'rgba(235, 148, 58, 0.1)',
             borderWidth: 2,
             tension: 0.25,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            pointBackgroundColor: '#eb943a',
             fill: false,
             yAxisID: 'yTemp'
           },
@@ -2873,6 +2858,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             backgroundColor: 'rgba(136, 153, 255, 0.1)',
             borderWidth: 2,
             tension: 0.25,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            pointBackgroundColor: '#8899ff',
             fill: false,
             yAxisID: 'yPercent'
           },
@@ -2892,6 +2880,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             backgroundColor: 'rgba(186, 164, 229, 0.1)',
             borderWidth: 2,
             tension: 0.25,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            pointBackgroundColor: '#baa4e5',
             fill: false,
             hidden: true,
             yAxisID: 'yPercent'
@@ -2991,6 +2982,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const data = models.map(m => m.total_tokens);
     const palette = ['#eb943a', '#baa4e5', '#8899ff', '#ea9c72', '#edb378', '#cf4f4f', '#10b981'];
 
+    if (hermesChart) {
+      hermesChart.destroy();
+    }
+
     hermesChart = new Chart(ctx, {
       type: 'doughnut',
       data: {
@@ -3023,8 +3018,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // Initialer Render nach Laden
   window.addEventListener('DOMContentLoaded', () => {
     renderStats(initialStats);
-    initHistoryChart();
-    initHermesChart();
+    ensureChart(() => {
+      initHistoryChart();
+      initHermesChart();
+    });
   });
 </script>
 
