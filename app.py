@@ -4229,7 +4229,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   function formatMessageText(text) {
     if (!text) return '';
     const codeBlocks = [];
-    let processed = text.replace(/```([a-zA-Z0-9_-]*)\n?([\\s\\S]*?)```/g, (match, lang, code) => {
+    let processed = text.replace(/```([a-zA-Z0-9_-]*)\\n?([\\s\\S]*?)```/g, (match, lang, code) => {
       const idx = codeBlocks.length;
       codeBlocks.push(`<pre class="lcars-code-block"><code>${escapeHtml(code.trim())}</code></pre>`);
       return `###CODEBLOCK_${idx}###`;
