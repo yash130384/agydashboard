@@ -3,7 +3,7 @@
 LCARS System Dashboard & Webserver Discovery Engine (Star Trek LCARS Interface)
 Lauscht auf Port 5000 (bind 0.0.0.0) und bietet:
 - Star Trek LCARS Fullscreen Benutzeroberfläche (Vorlage: https://www.thelcars.com/)
-- 4 Hauptkategorien ohne Nummern: SYSTEM, SERVICES, KI-AGENTEN, CONFIG
+- 5 Hauptkategorien ohne Nummern: SYSTEM, SERVICES, KI-AGENTEN, KI-INFO, CONFIG
 - System & 24h Sensor-Verlauf in einer gemeinsamen Kategorie (SYSTEM)
 - Web-Services & 5-Minuten Webserver-Scanner in einer gemeinsamen Kategorie (SERVICES)
 - 5 umschaltbare LCARS Farbmodi (Classic, Nemesis Blue, Lower Decks, Red Alert, Voyager Bio-Neural)
@@ -1295,6 +1295,230 @@ def get_antigravity_status():
 
 
 # ---------------------------------------------------------------------------
+# 9Router SQLite Telemetrie & Verbrauchs-Statistiken
+# ---------------------------------------------------------------------------
+def get_9router_stats():
+    """Liest Nutzungs-, Telemetrie- und Verbindungsdaten aus ~/.9router/db/data.sqlite."""
+    db_path = os.path.expanduser("~/.9router/db/data.sqlite")
+    default_res = {
+        "status": "offline",
+        "error": "Datenbank nicht gefunden",
+        "totals": {
+            "requests": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cached_tokens": 0,
+            "total_tokens": 0,
+            "cost": 0.0,
+            "cost_formatted": "$0.00",
+            "tokens_formatted": "0",
+            "prompt_formatted": "0",
+            "completion_formatted": "0",
+            "cached_formatted": "0",
+        },
+        "by_provider": {},
+        "by_model": {},
+        "daily_timeline": [],
+        "recent_history": [],
+        "connections": [],
+    }
+    if not os.path.exists(db_path):
+        return default_res
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+        try:
+            c = conn.cursor()
+
+            # 1. usageDaily: Alle Tage aggregieren
+            c.execute("SELECT dateKey, data FROM usageDaily ORDER BY dateKey ASC")
+            daily_rows = c.fetchall()
+
+            total_requests = 0
+            total_prompt_tokens = 0
+            total_completion_tokens = 0
+            total_cached_tokens = 0
+            total_cost = 0.0
+
+            aggregated_by_provider = {}
+            aggregated_by_model = {}
+            daily_timeline = []
+
+            for date_key, data_raw in daily_rows:
+                try:
+                    day_data = json.loads(data_raw)
+                except Exception:
+                    continue
+
+                reqs = day_data.get("requests", 0)
+                p_tokens = day_data.get("promptTokens", 0)
+                c_tokens = day_data.get("completionTokens", 0)
+                cached = day_data.get("cachedTokens", 0)
+                cost = day_data.get("cost", 0.0)
+
+                total_requests += reqs
+                total_prompt_tokens += p_tokens
+                total_completion_tokens += c_tokens
+                total_cached_tokens += cached
+                total_cost += cost
+
+                daily_timeline.append({
+                    "date": date_key,
+                    "requests": reqs,
+                    "prompt_tokens": p_tokens,
+                    "completion_tokens": c_tokens,
+                    "cached_tokens": cached,
+                    "total_tokens": p_tokens + c_tokens,
+                    "cost": round(cost, 6),
+                    "cost_formatted": f"${cost:.4f}",
+                })
+
+                # byProvider
+                for prov, p_info in day_data.get("byProvider", {}).items():
+                    if prov not in aggregated_by_provider:
+                        aggregated_by_provider[prov] = {
+                            "provider": prov,
+                            "requests": 0,
+                            "promptTokens": 0,
+                            "completionTokens": 0,
+                            "cachedTokens": 0,
+                            "cost": 0.0,
+                        }
+                    aggregated_by_provider[prov]["requests"] += p_info.get("requests", 0)
+                    aggregated_by_provider[prov]["promptTokens"] += p_info.get("promptTokens", 0)
+                    aggregated_by_provider[prov]["completionTokens"] += p_info.get("completionTokens", 0)
+                    aggregated_by_provider[prov]["cachedTokens"] += p_info.get("cachedTokens", 0)
+                    aggregated_by_provider[prov]["cost"] += p_info.get("cost", 0.0)
+
+                # byModel
+                for mod_key, m_info in day_data.get("byModel", {}).items():
+                    raw_model = m_info.get("rawModel") or mod_key.split("|")[0]
+                    prov = m_info.get("provider") or (mod_key.split("|")[1] if "|" in mod_key else "unknown")
+                    if raw_model not in aggregated_by_model:
+                        aggregated_by_model[raw_model] = {
+                            "model": raw_model,
+                            "provider": prov,
+                            "requests": 0,
+                            "promptTokens": 0,
+                            "completionTokens": 0,
+                            "cachedTokens": 0,
+                            "cost": 0.0,
+                        }
+                    aggregated_by_model[raw_model]["requests"] += m_info.get("requests", 0)
+                    aggregated_by_model[raw_model]["promptTokens"] += m_info.get("promptTokens", 0)
+                    aggregated_by_model[raw_model]["completionTokens"] += m_info.get("completionTokens", 0)
+                    aggregated_by_model[raw_model]["cachedTokens"] += m_info.get("cachedTokens", 0)
+                    aggregated_by_model[raw_model]["cost"] += m_info.get("cost", 0.0)
+
+            # 2. usageHistory: Letzte 15 Requests
+            c.execute("""
+                SELECT id, timestamp, provider, model, promptTokens, completionTokens, cost, status, tokens, meta
+                FROM usageHistory
+                ORDER BY id DESC
+                LIMIT 15
+            """)
+            history_rows = c.fetchall()
+            recent_requests = []
+            for row in history_rows:
+                req_id, ts, prov, model, pt, ct, cost, status, tokens_raw, meta_raw = row
+                cached_tok = 0
+                total_tok = (pt or 0) + (ct or 0)
+                if tokens_raw:
+                    try:
+                        tok_obj = json.loads(tokens_raw)
+                        cached_tok = tok_obj.get("cached_tokens", 0)
+                        if "total_tokens" in tok_obj:
+                            total_tok = tok_obj["total_tokens"]
+                    except Exception:
+                        pass
+
+                time_display = ts
+                if ts and "T" in ts:
+                    try:
+                        dt = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone()
+                        time_display = dt.strftime("%d.%m %H:%M:%S")
+                    except Exception:
+                        time_display = ts.split("T")[1][:8] if len(ts) > 19 else ts
+
+                recent_requests.append({
+                    "id": req_id,
+                    "timestamp": ts,
+                    "time_display": time_display,
+                    "provider": prov or "unknown",
+                    "model": model or "unknown",
+                    "prompt_tokens": pt or 0,
+                    "completion_tokens": ct or 0,
+                    "cached_tokens": cached_tok,
+                    "total_tokens": total_tok,
+                    "cost": round(cost or 0.0, 6),
+                    "cost_formatted": f"${(cost or 0.0):.4f}",
+                    "status": status or "ok"
+                })
+
+            # 3. providerConnections
+            c.execute("""
+                SELECT id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt
+                FROM providerConnections
+                ORDER BY priority ASC, name ASC
+            """)
+            conn_rows = c.fetchall()
+            connections = []
+            for row in conn_rows:
+                conn_id, prov, auth_type, name, email, priority, is_active, data_raw, created_at, updated_at = row
+                connections.append({
+                    "id": conn_id,
+                    "provider": prov,
+                    "auth_type": auth_type,
+                    "name": name or prov,
+                    "email": email,
+                    "priority": priority,
+                    "is_active": bool(is_active),
+                    "created_at": created_at,
+                    "updated_at": updated_at
+                })
+
+            total_tokens = total_prompt_tokens + total_completion_tokens
+
+            def fmt_num(n):
+                if n >= 1_000_000:
+                    return f"{n/1_000_000:.2f}M"
+                elif n >= 1_000:
+                    return f"{n/1_000:.1f}k"
+                return str(n)
+
+            return {
+                "status": "online",
+                "totals": {
+                    "requests": total_requests,
+                    "prompt_tokens": total_prompt_tokens,
+                    "completion_tokens": total_completion_tokens,
+                    "cached_tokens": total_cached_tokens,
+                    "total_tokens": total_tokens,
+                    "cost": round(total_cost, 6),
+                    "cost_formatted": f"${total_cost:.4f}",
+                    "tokens_formatted": fmt_num(total_tokens),
+                    "prompt_formatted": fmt_num(total_prompt_tokens),
+                    "completion_formatted": fmt_num(total_completion_tokens),
+                    "cached_formatted": fmt_num(total_cached_tokens),
+                },
+                "by_provider": aggregated_by_provider,
+                "by_model": aggregated_by_model,
+                "daily_timeline": daily_timeline,
+                "recent_history": recent_requests,
+                "connections": connections
+            }
+        finally:
+            conn.close()
+
+    except Exception as e:
+        print(f"[WARN] 9Router Stats Fehler: {e}", file=sys.stderr)
+        err_res = dict(default_res)
+        err_res["status"] = "error"
+        err_res["error"] = str(e)
+        return err_res
+
+
+# ---------------------------------------------------------------------------
 # Gesamt-System-Stats Sammler
 # ---------------------------------------------------------------------------
 def get_system_stats():
@@ -1385,6 +1609,9 @@ def get_system_stats():
 
     # Hermes Agent
     stats["hermes"] = hermes_manager.get_stats()
+
+    # 9Router SQLite Telemetrie & Statistiken (~/.9router/db/data.sqlite)
+    stats["nine_router"] = get_9router_stats()
 
     # Discovered Webservers (5-min Background Scanner)
     disc_data = webserver_scanner.get_results()
@@ -2039,6 +2266,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .pill-sys   { background-color: var(--c-primary); }
     .pill-srv   { background-color: var(--c-blue); }
     .pill-ai    { background-color: var(--c-secondary); }
+    .pill-info  { background-color: var(--c-butterscotch); }
     .pill-cfg   { background-color: var(--c-gold); }
 
     .left-frame-lower {
@@ -2455,7 +2683,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       color: #fff;
     }
     .lcars-chat-log {
-      height: 380px;
+      height: 540px;
+      min-height: 420px;
+      max-height: calc(100vh - 340px);
       overflow-y: auto;
       overflow-x: hidden;
       display: flex;
@@ -2831,7 +3061,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- MITTLERER RAHMEN: 4 KATEGORIEN OHNE ZAHLEN -->
+  <!-- MITTLERER RAHMEN: 5 KATEGORIEN OHNE ZAHLEN -->
   <div class="wrap gap-wrap">
     <!-- Linke Steuerungssäule -->
     <div class="left-frame">
@@ -2844,6 +3074,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </button>
         <button class="lcars-pill-btn pill-ai" onclick="switchCategory('agents')" id="btn-cat-agents">
           KI-AGENTEN
+        </button>
+        <button class="lcars-pill-btn pill-info" onclick="switchCategory('ai-info')" id="btn-cat-ai-info">
+          KI-INFO
         </button>
         <button class="lcars-pill-btn pill-cfg" onclick="switchCategory('config')" id="btn-cat-config">
           CONFIG
@@ -3068,57 +3301,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
-        <!-- KATEGORIE 3: KI-AGENTEN & HERMES -->
+        <!-- KATEGORIE 3: KI-AGENTEN (EXKLUSIV CHAT-TERMINAL) -->
         <section class="lcars-section" id="section-agents">
           <div class="lcars-header-bar">
-            <h2>KI-AGENTEN & HERMES NUTZUNG</h2>
-            <span class="lcars-pill-tag">NEURAL ARCHIV</span>
-          </div>
-
-          <div class="readout-grid">
-            <!-- OpenRouter -->
-            <div class="lcars-card">
-              <div class="card-head">
-                <span class="card-head-title">OPENROUTER BUDGET</span>
-                <span class="card-head-icon">🤖</span>
-              </div>
-              <div class="card-metric" id="orUsageVal">${{ "%.2f"|format(stats.openrouter.usage or 0.0) }}</div>
-              <div class="card-metric-sub">Limit: {{ stats.openrouter.limit_formatted or 'Unbegrenzt' }}</div>
-              <div class="card-metric-sub">Restguthaben: {{ stats.openrouter.credits_remaining_formatted or '$0.00' }}</div>
-              <div class="badge-status badge-online">OPENROUTER SYNCED</div>
-            </div>
-
-            <!-- Antigravity -->
-            <div class="lcars-card card-violet">
-              <div class="card-head">
-                <span class="card-head-title">ANTIGRAVITY CLI</span>
-                <span class="card-head-icon">🌌</span>
-              </div>
-              <div class="card-metric" id="agySessionsVal">{{ stats.antigravity.sessions_count or 0 }}</div>
-              <div class="card-metric-sub">Aktive Sessions</div>
-              <div class="card-metric-sub">Aktivität: {{ stats.antigravity.latest_activity }}</div>
-              <div class="badge-status badge-online">{{ stats.antigravity.account_label }}</div>
-            </div>
-
-            <!-- Hermes Overview -->
-            <div class="lcars-card card-almond">
-              <div class="card-head">
-                <span class="card-head-title">HERMES GESAMT-TOKEN</span>
-                <span class="card-head-icon">🧠</span>
-              </div>
-              <div class="card-metric" id="hermesTotalTokens">{{ stats.hermes.total_tokens_formatted or '0' }}</div>
-              <div class="card-metric-sub">Sessions: {{ stats.hermes.total_sessions or 0 }} | Kosten: {{ stats.hermes.total_cost_formatted or '$0.00' }}</div>
-              <div class="badge-status badge-online">{{ stats.hermes.database_count }} DATENBANKEN</div>
-            </div>
+            <h2>LCARS SUBRAUM COMM-LINK // KI-AGENTEN TERMINAL</h2>
+            <span class="lcars-pill-tag">ODN TRANSCEIVER // PORT 20128</span>
           </div>
 
           <!-- LCARS KI-AGENTEN CHAT-TERMINAL -->
-          <div class="lcars-card lcars-chat-card">
+          <div class="lcars-card lcars-chat-card" style="margin-top: 0.5rem;">
             <!-- Header-Leiste des Chat Terminals -->
             <div class="card-head" style="flex-wrap: wrap; gap: 0.6rem; border-bottom: 2px solid var(--c-primary); padding-bottom: 0.6rem; margin-bottom: 0.8rem;">
               <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
                 <span class="card-head-title" style="color: var(--c-primary); font-size: 1.1rem; letter-spacing: 0.08em;">
-                  LCARS SUBRAUM COMM-LINK // KI-AGENTEN TERMINAL
+                  SUBRAUM TRANSMISSIONSTERMINAL
                 </span>
                 <span class="badge-status badge-online" id="chatProxyStatusBadge">
                   <span class="lcars-status-dot"></span>
@@ -3198,12 +3394,224 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
             </div>
           </div>
+        </section>
+
+        <!-- KATEGORIE 4: KI-INFO (9ROUTER TELEMETRIE, AGENTEN-STATISTIKEN & ARCHIV) -->
+        <section class="lcars-section" id="section-ai-info">
+          <div class="lcars-header-bar">
+            <h2>KI-INFO // 9ROUTER & NEURAL-STATISTIKEN</h2>
+            <span class="lcars-pill-tag">ODN TELEMETRIE // 9ROUTER PROXY</span>
+          </div>
+
+          <!-- 9ROUTER HAUPT-METRIKEN (DATA TILES) -->
+          <div class="readout-grid">
+            <!-- 9Router Total Requests -->
+            <div class="lcars-card">
+              <div class="card-head">
+                <span class="card-head-title">9ROUTER ANFRAGEN</span>
+                <span class="card-head-icon">⚡</span>
+              </div>
+              <div class="card-metric" id="nrTotalRequests">{{ (stats.nine_router.totals.requests if stats.nine_router else 0) }}</div>
+              <div class="card-metric-sub">ODN Subraum-Transceiver</div>
+              <div class="card-metric-sub">Proxy Port 20128 // Status: {{ (stats.nine_router.status if stats.nine_router else 'offline')|upper }}</div>
+              <div class="badge-status badge-online">9ROUTER AKTIV</div>
+            </div>
+
+            <!-- 9Router Total Tokens mit Aufschlüsselung -->
+            <div class="lcars-card card-violet">
+              <div class="card-head">
+                <span class="card-head-title">9ROUTER TOKEN-VOLUMEN</span>
+                <span class="card-head-icon">🔢</span>
+              </div>
+              <div class="card-metric" id="nrTotalTokens">{{ (stats.nine_router.totals.tokens_formatted if stats.nine_router else '0') }}</div>
+              <div class="card-metric-sub" id="nrPromptComplTokens">Prompt: {{ (stats.nine_router.totals.prompt_formatted if stats.nine_router else '0') }} | Compl: {{ (stats.nine_router.totals.completion_formatted if stats.nine_router else '0') }}</div>
+              <div class="card-metric-sub" id="nrCachedTokens" style="color:var(--c-blue);">Cached: {{ (stats.nine_router.totals.cached_formatted if stats.nine_router else '0') }}</div>
+              <div class="badge-status badge-online">PROMPT & CACHE TELEMETRIE</div>
+            </div>
+
+            <!-- 9Router Total Cost -->
+            <div class="lcars-card card-almond">
+              <div class="card-head">
+                <span class="card-head-title">9ROUTER GESAMTKOSTEN</span>
+                <span class="card-head-icon">💳</span>
+              </div>
+              <div class="card-metric" id="nrTotalCost">{{ (stats.nine_router.totals.cost_formatted if stats.nine_router else '$0.00') }}</div>
+              <div class="card-metric-sub">Aggregierte Modell-Kosten</div>
+              <div class="card-metric-sub">Präzise 9Router Abrechnung</div>
+              <div class="badge-status badge-online">ROUTING SPENDINGS</div>
+            </div>
+
+            <!-- Active Provider Connections -->
+            <div class="lcars-card">
+              <div class="card-head">
+                <span class="card-head-title">AKTIVE PROVIDER</span>
+                <span class="card-head-icon">🛰️</span>
+              </div>
+              <div class="card-metric" id="nrActiveConnCount">{{ (stats.nine_router.connections|length if stats.nine_router and stats.nine_router.connections else 0) }}</div>
+              <div class="card-metric-sub">Verbundene Backends:</div>
+              <div class="card-metric-sub" id="nrConnProvidersList">
+                {% if stats.nine_router and stats.nine_router.connections %}
+                  {% for c in stats.nine_router.connections %}{{ c.provider|capitalize }}{% if not loop.last %} • {% endif %}{% endfor %}
+                {% else %}
+                  Keine Provider
+                {% endif %}
+              </div>
+              <div class="badge-status badge-online">UPSTREAM BEREIT</div>
+            </div>
+          </div>
+
+          <!-- WEITERE KI-DIENSTE (OPENROUTER, ANTIGRAVITY, HERMES) -->
+          <div class="readout-grid" style="margin-top: 1rem;">
+            <!-- OpenRouter -->
+            <div class="lcars-card">
+              <div class="card-head">
+                <span class="card-head-title">OPENROUTER BUDGET</span>
+                <span class="card-head-icon">🤖</span>
+              </div>
+              <div class="card-metric" id="orUsageVal">${{ "%.2f"|format(stats.openrouter.usage or 0.0) }}</div>
+              <div class="card-metric-sub">Limit: {{ stats.openrouter.limit_formatted or 'Unbegrenzt' }}</div>
+              <div class="card-metric-sub">Restguthaben: {{ stats.openrouter.credits_remaining_formatted or '$0.00' }}</div>
+              <div class="badge-status badge-online">OPENROUTER SYNCED</div>
+            </div>
+
+            <!-- Antigravity -->
+            <div class="lcars-card card-violet">
+              <div class="card-head">
+                <span class="card-head-title">ANTIGRAVITY CLI</span>
+                <span class="card-head-icon">🌌</span>
+              </div>
+              <div class="card-metric" id="agySessionsVal">{{ stats.antigravity.sessions_count or 0 }}</div>
+              <div class="card-metric-sub">Aktive Sessions</div>
+              <div class="card-metric-sub">Aktivität: {{ stats.antigravity.latest_activity }}</div>
+              <div class="badge-status badge-online">{{ stats.antigravity.account_label }}</div>
+            </div>
+
+            <!-- Hermes Overview -->
+            <div class="lcars-card card-almond">
+              <div class="card-head">
+                <span class="card-head-title">HERMES GESAMT-TOKEN</span>
+                <span class="card-head-icon">🧠</span>
+              </div>
+              <div class="card-metric" id="hermesTotalTokens">{{ stats.hermes.total_tokens_formatted or '0' }}</div>
+              <div class="card-metric-sub">Sessions: {{ stats.hermes.total_sessions or 0 }} | Kosten: {{ stats.hermes.total_cost_formatted or '$0.00' }}</div>
+              <div class="badge-status badge-online">{{ stats.hermes.database_count }} DATENBANKEN</div>
+            </div>
+          </div>
+
+          <!-- PROVIDER-VERBINDUNGEN & MODELL-VERTEILUNG -->
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:1rem; margin-top:1.25rem; width:100%; min-width:0;">
+            <!-- Provider Connections Card -->
+            <div class="lcars-card" style="width:100%; min-width:0;">
+              <div class="card-head" style="margin-bottom:0.75rem;">
+                <span class="card-head-title">PROVIDER-VERBINDUNGEN (9ROUTER)</span>
+                <span class="card-head-icon">🔌</span>
+              </div>
+              <div id="nineRouterConnectionsList" style="display:flex; flex-direction:column; gap:0.6rem;">
+                {% if stats.nine_router and stats.nine_router.connections %}
+                  {% for conn in stats.nine_router.connections %}
+                  <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.5); padding:0.6rem 0.8rem; border-left:4px solid var(--c-primary); border-radius:6px; flex-wrap:wrap; gap:0.5rem;">
+                    <div>
+                      <div style="font-weight:700; color:var(--c-primary); font-size:0.95rem;">{{ conn.provider|upper }} // {{ conn.name or conn.provider }}</div>
+                      <div style="font-family:var(--mono-family); font-size:0.78rem; color:#888;">Auth: {{ conn.auth_type|upper }} | Prio: {{ conn.priority }} {% if conn.email %}| {{ conn.email }}{% endif %}</div>
+                    </div>
+                    <div>
+                      <span class="badge-status {% if conn.is_active %}badge-online{% else %}badge-offline{% endif %}">
+                        {% if conn.is_active %}AKTIV // VERBUNDEN{% else %}INAKTIV{% endif %}
+                      </span>
+                    </div>
+                  </div>
+                  {% endfor %}
+                {% else %}
+                  <div style="color:#888; font-size:0.85rem; padding:0.5rem;">Keine Provider-Verbindungen konfiguriert.</div>
+                {% endif %}
+              </div>
+            </div>
+
+            <!-- Model Distribution Doughnut Chart -->
+            <div class="lcars-card" style="min-height:320px; display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; min-width:0;">
+              <div class="card-head" style="align-self:flex-start; width:100%; margin-bottom:0.75rem;">
+                <span class="card-head-title">9ROUTER MODELL-TOKEN VERTEILUNG</span>
+                <span class="card-head-icon">📊</span>
+              </div>
+              <div style="position:relative; width:100%; max-width:320px; height:260px; min-width:0;">
+                <canvas id="nineRouterModelChart"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <!-- 9ROUTER VERLAUFS-CHART -->
+          <div class="lcars-card" style="margin-top:1.25rem; padding:1.1rem; width:100%; min-width:0;">
+            <div class="card-head" style="margin-bottom:0.75rem;">
+              <span class="card-head-title" style="color:var(--c-primary); font-size:1.1rem;">9ROUTER TRANSMISSIONS-HISTORIE & TOKEN-FLOW</span>
+              <span class="card-head-icon">📈</span>
+            </div>
+            <div style="position:relative; width:100%; height:260px; min-width:0;">
+              <canvas id="nineRouterTimelineChart"></canvas>
+            </div>
+          </div>
+
+          <!-- 9ROUTER LETZTE TRANSMISSIONEN (HISTORIE TABELLE) -->
+          <div class="lcars-card" style="margin-top:1.25rem; width:100%; min-width:0; overflow-x:auto;">
+            <div class="card-head" style="margin-bottom:0.75rem; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <span class="card-head-title">9ROUTER TRANSMISSIONS-LOG // LETZTE 15 REQUESTS</span>
+                <span class="card-head-icon">📋</span>
+              </div>
+              <button type="button" class="left-action-btn" onclick="fetchNineRouterStats(true)" title="9Router Daten aktualisieren" style="padding:0.25rem 0.6rem; font-size:0.8rem;">
+                <span>⟳ REFRESH</span>
+              </button>
+            </div>
+            <div style="width:100%; overflow-x:auto;">
+              <table style="width:100%; border-collapse:collapse; font-size:0.86rem; text-align:left;">
+                <thead>
+                  <tr style="border-bottom:2px solid var(--c-primary); color:var(--c-primary); font-family:var(--font-family); letter-spacing:0.06em;">
+                    <th style="padding:0.5rem 0.4rem;">ID</th>
+                    <th style="padding:0.5rem 0.4rem;">ZEITPUNKT</th>
+                    <th style="padding:0.5rem 0.4rem;">PROVIDER</th>
+                    <th style="padding:0.5rem 0.4rem;">MODELL</th>
+                    <th style="padding:0.5rem 0.4rem;">PROMPT</th>
+                    <th style="padding:0.5rem 0.4rem;">COMPL</th>
+                    <th style="padding:0.5rem 0.4rem;">CACHED</th>
+                    <th style="padding:0.5rem 0.4rem;">TOTAL</th>
+                    <th style="padding:0.5rem 0.4rem;">KOSTEN</th>
+                    <th style="padding:0.5rem 0.4rem;">STATUS</th>
+                  </tr>
+                </thead>
+                <tbody id="nineRouterHistoryTableBody">
+                  {% if stats.nine_router and stats.nine_router.recent_history %}
+                    {% for r in stats.nine_router.recent_history %}
+                    <tr style="border-bottom:1px solid rgba(255,255,255,0.08); font-family:var(--mono-family);">
+                      <td style="padding:0.45rem 0.4rem; color:var(--c-gold);">#{{ r.id }}</td>
+                      <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:#ccc;">{{ r.time_display }}</td>
+                      <td style="padding:0.45rem 0.4rem;"><span style="color:var(--c-blue); font-weight:700;">{{ r.provider|upper }}</span></td>
+                      <td style="padding:0.45rem 0.4rem; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ r.model }}">{{ r.model }}</td>
+                      <td style="padding:0.45rem 0.4rem; white-space:nowrap;">{{ r.prompt_tokens }}</td>
+                      <td style="padding:0.45rem 0.4rem; white-space:nowrap;">{{ r.completion_tokens }}</td>
+                      <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:var(--c-blue);">{{ r.cached_tokens }}</td>
+                      <td style="padding:0.45rem 0.4rem; white-space:nowrap; font-weight:700; color:var(--c-primary);">{{ r.total_tokens }}</td>
+                      <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:var(--c-gold);">{{ r.cost_formatted }}</td>
+                      <td style="padding:0.45rem 0.4rem;">
+                        <span class="badge-status {% if r.status == 'ok' %}badge-online{% else %}badge-offline{% endif %}" style="padding:0.15rem 0.4rem; font-size:0.75rem;">
+                          {{ r.status|upper }}
+                        </span>
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  {% else %}
+                    <tr>
+                      <td colspan="10" style="padding:0.8rem; text-align:center; color:#888;">Keine Transaktionen aufgezeichnet.</td>
+                    </tr>
+                  {% endif %}
+                </tbody>
+              </table>
+            </div>
+          </div>
 
           <!-- Hermes Donut & Model Table -->
           <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:1rem; margin-top:1.25rem; width:100%; min-width:0;">
             <!-- Donut Canvas Card -->
             <div class="lcars-card" style="min-height:320px; display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; min-width:0;">
-              <div class="card-head-title" style="align-self:flex-start; margin-bottom:0.75rem;">MODELL TOKEN-VERTEILUNG</div>
+              <div class="card-head-title" style="align-self:flex-start; margin-bottom:0.75rem;">HERMES MODELL TOKEN-VERTEILUNG</div>
               <div style="position:relative; width:100%; max-width:300px; height:260px; min-width:0;">
                 <canvas id="hermesChart"></canvas>
               </div>
@@ -3238,7 +3646,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
-        <!-- KATEGORIE 4: CONFIG & FARBMODI -->
+        <!-- KATEGORIE 5: CONFIG & FARBMODI -->
         <section class="lcars-section" id="section-config">
           <div class="lcars-header-bar">
             <h2>SYSTEM CONFIG & FARBMODI</h2>
@@ -3384,6 +3792,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   const initialStats = {{ stats_json | safe }};
   var historyChart = null;
   var hermesChart = null;
+  var nineRouterTimelineChart = null;
+  var nineRouterModelChart = null;
+  var currentNineRouterData = initialStats?.nine_router || null;
   var activeRange = '1h';
   var currentHistorySamples = initialStats?.history_samples || [];
   var visibleDatasets = [true, true, true, false]; // 0: Temp, 1: CPU, 2: Throttle, 3: RAM
@@ -3481,11 +3892,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   });
 
-  // 4 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
+  // 5 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
   const CATEGORY_NAMES = {
     'system': 'SYSTEM & SENSOR VERLAUF',
     'services': 'SERVICES & PROZESS-SCANNER',
-    'agents': 'KI-AGENTEN & HERMES ARCHIV',
+    'agents': 'LCARS SUBRAUM COMM-LINK // KI-AGENTEN',
+    'ai-info': 'KI-INFO // 9ROUTER & NEURAL TELEMETRIE',
     'config': 'SYSTEM CONFIG & FARBMODI'
   };
 
@@ -3518,8 +3930,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     if (catId === 'agents') {
       setTimeout(() => {
-        initHermesChart();
         loadChatModels();
+        const inp = document.getElementById('lcarsChatInput');
+        if (inp) inp.focus();
+      }, 60);
+    }
+    if (catId === 'ai-info') {
+      setTimeout(() => {
+        initNineRouterCharts();
+        initHermesChart();
       }, 60);
     }
   }
@@ -3609,6 +4028,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (data.lan_ip) {
       const el = document.getElementById('sysLanIp');
       if (el) el.textContent = data.lan_ip;
+    }
+
+    // 9Router Telemetrie Sync
+    if (data.nine_router) {
+      renderNineRouterStats(data.nine_router);
     }
 
     // Timestamp
@@ -4079,6 +4503,350 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // 9ROUTER TELEMETRIE, CHARTS & TABELLEN ENGINE
+  // ---------------------------------------------------------------------------
+  function renderNineRouterStats(nrData) {
+    if (!nrData) return;
+    currentNineRouterData = nrData;
+
+    // Totals & Metriken
+    const totals = nrData.totals || {};
+    const reqEl = document.getElementById('nrTotalRequests');
+    if (reqEl) reqEl.textContent = totals.requests || 0;
+
+    const tokEl = document.getElementById('nrTotalTokens');
+    if (tokEl) tokEl.textContent = totals.tokens_formatted || (totals.total_tokens ? Number(totals.total_tokens).toLocaleString() : '0');
+
+    const promptComplEl = document.getElementById('nrPromptComplTokens');
+    if (promptComplEl) {
+      promptComplEl.textContent = `Prompt: ${totals.prompt_formatted || totals.prompt_tokens || '0'} | Compl: ${totals.completion_formatted || totals.completion_tokens || '0'}`;
+    }
+
+    const cachedEl = document.getElementById('nrCachedTokens');
+    if (cachedEl) {
+      cachedEl.textContent = `Cached: ${totals.cached_formatted || totals.cached_tokens || '0'}`;
+    }
+
+    const costEl = document.getElementById('nrTotalCost');
+    if (costEl) costEl.textContent = totals.cost_formatted || `$${Number(totals.cost || 0).toFixed(4)}`;
+
+    const connCountEl = document.getElementById('nrActiveConnCount');
+    if (connCountEl) {
+      connCountEl.textContent = `${(nrData.connections || []).length}`;
+    }
+
+    const provListEl = document.getElementById('nrConnProvidersList');
+    if (provListEl && nrData.connections && nrData.connections.length > 0) {
+      provListEl.textContent = nrData.connections.map(c => (c.provider ? c.provider.toUpperCase() : '')).join(' • ');
+    }
+
+    // Provider Connections List Rendering
+    const connList = document.getElementById('nineRouterConnectionsList');
+    if (connList && nrData.connections) {
+      if (nrData.connections.length === 0) {
+        connList.innerHTML = '<div style="color:#888; font-size:0.85rem; padding:0.5rem;">Keine Provider-Verbindungen konfiguriert.</div>';
+      } else {
+        let cHtml = '';
+        nrData.connections.forEach(conn => {
+          const badgeCls = conn.is_active ? 'badge-online' : 'badge-offline';
+          const badgeTxt = conn.is_active ? 'AKTIV // VERBUNDEN' : 'INAKTIV';
+          cHtml += `
+            <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.5); padding:0.6rem 0.8rem; border-left:4px solid var(--c-primary); border-radius:6px; flex-wrap:wrap; gap:0.5rem;">
+              <div>
+                <div style="font-weight:700; color:var(--c-primary); font-size:0.95rem;">${escapeHtml(conn.provider.toUpperCase())} // ${escapeHtml(conn.name || conn.provider)}</div>
+                <div style="font-family:var(--mono-family); font-size:0.78rem; color:#888;">Auth: ${escapeHtml((conn.auth_type || '').toUpperCase())} | Prio: ${conn.priority} ${conn.email ? '| ' + escapeHtml(conn.email) : ''}</div>
+              </div>
+              <div>
+                <span class="badge-status ${badgeCls}">${badgeTxt}</span>
+              </div>
+            </div>
+          `;
+        });
+        connList.innerHTML = cHtml;
+      }
+    }
+
+    // Recent History Table Rendering
+    const tbody = document.getElementById('nineRouterHistoryTableBody');
+    if (tbody && nrData.recent_history) {
+      if (nrData.recent_history.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" style="padding:0.8rem; text-align:center; color:#888;">Keine Transaktionen aufgezeichnet.</td></tr>';
+      } else {
+        let hHtml = '';
+        nrData.recent_history.forEach(r => {
+          const badgeClass = (r.status === 'ok') ? 'badge-online' : 'badge-offline';
+          hHtml += `
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.08); font-family:var(--mono-family);">
+              <td style="padding:0.45rem 0.4rem; color:var(--c-gold);">#${r.id}</td>
+              <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:#ccc;">${escapeHtml(r.time_display)}</td>
+              <td style="padding:0.45rem 0.4rem;"><span style="color:var(--c-blue); font-weight:700;">${escapeHtml((r.provider || '').toUpperCase())}</span></td>
+              <td style="padding:0.45rem 0.4rem; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(r.model)}">${escapeHtml(r.model)}</td>
+              <td style="padding:0.45rem 0.4rem; white-space:nowrap;">${Number(r.prompt_tokens || 0).toLocaleString()}</td>
+              <td style="padding:0.45rem 0.4rem; white-space:nowrap;">${Number(r.completion_tokens || 0).toLocaleString()}</td>
+              <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:var(--c-blue);">${Number(r.cached_tokens || 0).toLocaleString()}</td>
+              <td style="padding:0.45rem 0.4rem; white-space:nowrap; font-weight:700; color:var(--c-primary);">${Number(r.total_tokens || 0).toLocaleString()}</td>
+              <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:var(--c-gold);">${escapeHtml(r.cost_formatted || ('$' + Number(r.cost || 0).toFixed(4)))}</td>
+              <td style="padding:0.45rem 0.4rem;">
+                <span class="badge-status ${badgeClass}" style="padding:0.15rem 0.4rem; font-size:0.75rem;">
+                  ${escapeHtml((r.status || 'OK').toUpperCase())}
+                </span>
+              </td>
+            </tr>
+          `;
+        });
+        tbody.innerHTML = hHtml;
+      }
+    }
+
+    // Charts aktualisieren falls bereits gezeichnet
+    if (nineRouterModelChart || nineRouterTimelineChart) {
+      initNineRouterCharts(nrData);
+    }
+  }
+
+  async function fetchNineRouterStats(playSound = false) {
+    if (playSound) playLcarsBeep(1400, 900);
+    try {
+      const resp = await fetch('/api/9router/stats');
+      if (resp.ok) {
+        const data = await resp.json();
+        renderNineRouterStats(data);
+        initNineRouterCharts(data);
+      }
+    } catch (e) {
+      console.warn("9Router Fetch Fehler:", e);
+    }
+  }
+
+  function initNineRouterCharts(nrData) {
+    if (nrData) currentNineRouterData = nrData;
+    const data = currentNineRouterData || initialStats?.nine_router;
+    if (!data) return;
+
+    initNineRouterModelChart(data);
+    initNineRouterTimelineChart(data);
+  }
+
+  function initNineRouterModelChart(data) {
+    const canvas = document.getElementById('nineRouterModelChart');
+    if (!canvas) return;
+
+    if (nineRouterModelChart) {
+      try { nineRouterModelChart.destroy(); } catch (e) {}
+      nineRouterModelChart = null;
+    }
+
+    const modelsObj = data?.by_model || {};
+    let labels = Object.keys(modelsObj);
+    let values = labels.map(k => (modelsObj[k].promptTokens || 0) + (modelsObj[k].completionTokens || 0));
+    const palette = ['#eb943a', '#baa4e5', '#8899ff', '#faad44', '#10b981', '#cf4f4f', '#06b6d4'];
+
+    if (!labels.length || values.every(v => v === 0)) {
+      labels = ['Keine Daten'];
+      values = [1];
+    }
+
+    if (typeof Chart !== 'undefined') {
+      try {
+        const existing = Chart.getChart(canvas);
+        if (existing) {
+          try { existing.destroy(); } catch (e) {}
+        }
+        nineRouterModelChart = new Chart(canvas, {
+          type: 'doughnut',
+          data: {
+            labels: labels,
+            datasets: [{
+              data: values,
+              backgroundColor: palette.slice(0, labels.length),
+              borderColor: '#000000',
+              borderWidth: 2
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '68%',
+            animation: { duration: 350 },
+            plugins: {
+              legend: {
+                display: true,
+                position: 'bottom',
+                labels: {
+                  color: '#ccc',
+                  font: { family: 'Share Tech Mono', size: 11 },
+                  boxWidth: 12
+                }
+              },
+              tooltip: {
+                backgroundColor: '#000',
+                borderColor: '#eb943a',
+                borderWidth: 1,
+                titleFont: { family: 'Antonio', size: 14 },
+                bodyFont: { family: 'Share Tech Mono', size: 12 },
+                callbacks: {
+                  label: function(ctx) {
+                    const val = ctx.raw || 0;
+                    return ` ${ctx.label}: ${val.toLocaleString()} Tokens`;
+                  }
+                }
+              }
+            }
+          }
+        });
+        return;
+      } catch (e) {
+        console.error('9Router Model Chart error:', e);
+      }
+    }
+  }
+
+  function initNineRouterTimelineChart(data) {
+    const canvas = document.getElementById('nineRouterTimelineChart');
+    if (!canvas) return;
+
+    if (nineRouterTimelineChart) {
+      try { nineRouterTimelineChart.destroy(); } catch (e) {}
+      nineRouterTimelineChart = null;
+    }
+
+    const history = (data?.recent_history || []).slice().reverse();
+    const labels = history.map(r => {
+      if (r.time_display) {
+        const parts = r.time_display.split(' ');
+        return parts.length > 1 ? parts[1] : parts[0];
+      }
+      return '#' + r.id;
+    });
+
+    const promptToks = history.map(r => r.prompt_tokens || 0);
+    const cachedToks = history.map(r => r.cached_tokens || 0);
+    const complToks = history.map(r => r.completion_tokens || 0);
+    const costs = history.map(r => r.cost || 0);
+
+    if (typeof Chart !== 'undefined') {
+      try {
+        const existing = Chart.getChart(canvas);
+        if (existing) {
+          try { existing.destroy(); } catch (e) {}
+        }
+        nineRouterTimelineChart = new Chart(canvas, {
+          type: 'bar',
+          data: {
+            labels: labels.length ? labels : ['Keine Daten'],
+            datasets: [
+              {
+                label: 'Prompt Tokens',
+                data: promptToks.length ? promptToks : [0],
+                backgroundColor: 'rgba(235, 148, 58, 0.8)',
+                borderColor: '#eb943a',
+                borderWidth: 1,
+                stack: 'tokens',
+                yAxisID: 'y'
+              },
+              {
+                label: 'Cached Tokens',
+                data: cachedToks.length ? cachedToks : [0],
+                backgroundColor: 'rgba(16, 185, 129, 0.8)',
+                borderColor: '#10b981',
+                borderWidth: 1,
+                stack: 'tokens',
+                yAxisID: 'y'
+              },
+              {
+                label: 'Completion Tokens',
+                data: complToks.length ? complToks : [0],
+                backgroundColor: 'rgba(136, 153, 255, 0.8)',
+                borderColor: '#8899ff',
+                borderWidth: 1,
+                stack: 'tokens',
+                yAxisID: 'y'
+              },
+              {
+                label: 'Kosten ($)',
+                type: 'line',
+                data: costs.length ? costs : [0],
+                borderColor: '#faad44',
+                backgroundColor: '#faad44',
+                borderWidth: 2,
+                pointRadius: 3,
+                pointHoverRadius: 6,
+                tension: 0.2,
+                yAxisID: 'yCost'
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 350 },
+            plugins: {
+              legend: {
+                display: true,
+                position: 'top',
+                labels: {
+                  color: '#ccc',
+                  font: { family: 'Share Tech Mono', size: 11 },
+                  boxWidth: 12
+                }
+              },
+              tooltip: {
+                backgroundColor: '#000',
+                borderColor: '#eb943a',
+                borderWidth: 1,
+                titleFont: { family: 'Antonio', size: 14 },
+                bodyFont: { family: 'Share Tech Mono', size: 12 },
+                callbacks: {
+                  label: function(ctx) {
+                    if (ctx.dataset.yAxisID === 'yCost') {
+                      return ` Kosten: $${Number(ctx.raw || 0).toFixed(4)}`;
+                    }
+                    return ` ${ctx.dataset.label}: ${Number(ctx.raw || 0).toLocaleString()} Tokens`;
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                stacked: true,
+                grid: { color: 'rgba(255, 255, 255, 0.07)' },
+                ticks: { color: '#aaa', font: { family: 'Share Tech Mono', size: 11 } }
+              },
+              y: {
+                stacked: true,
+                grid: { color: 'rgba(255, 255, 255, 0.07)' },
+                ticks: {
+                  color: '#aaa',
+                  font: { family: 'Share Tech Mono', size: 11 },
+                  callback: function(val) {
+                    if (val >= 1000000) return (val / 1000000).toFixed(1) + 'M';
+                    if (val >= 1000) return (val / 1000).toFixed(0) + 'k';
+                    return val;
+                  }
+                }
+              },
+              yCost: {
+                position: 'right',
+                grid: { drawOnChartArea: false },
+                ticks: {
+                  color: '#faad44',
+                  font: { family: 'Share Tech Mono', size: 11 },
+                  callback: function(val) {
+                    return '$' + Number(val).toFixed(4);
+                  }
+                }
+              }
+            }
+          }
+        });
+        return;
+      } catch (e) {
+        console.error('9Router Timeline Chart error:', e);
+      }
+    }
+  }
+
   // 2. Hermes Donut Chart (Modell Token-Verteilung)
   function initHermesChart() {
     const canvas = document.getElementById('hermesChart');
@@ -4465,16 +5233,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const c = document.getElementById('hermesChart');
       if (c) renderNativeDonutChart(c, initialStats?.hermes?.models || []);
     }
+    if (nineRouterTimelineChart) nineRouterTimelineChart.resize();
+    if (nineRouterModelChart) nineRouterModelChart.resize();
   });
 
   // Initialer Boot-Ablauf
   function bootDashboard() {
     renderStats(initialStats);
+    if (initialStats?.nine_router) {
+      renderNineRouterStats(initialStats.nine_router);
+    }
     const initialTimeEl = document.getElementById('chatInitialTime');
     if (initialTimeEl) initialTimeEl.textContent = formatTimeNow();
     loadChatModels();
     ensureChart(() => {
       initHistoryChart();
+      initNineRouterCharts();
+      initHermesChart();
     });
   }
 
@@ -4524,6 +5299,10 @@ if USE_FLASK:
     @app.route("/api/stats")
     def api_stats():
         return jsonify(get_system_stats())
+
+    @app.route("/api/9router/stats")
+    def api_9router_stats():
+        return jsonify(get_9router_stats())
 
     @app.route("/api/history")
     def api_history():
@@ -4652,6 +5431,13 @@ else:
             elif parsed.path in ("/api/discovered-servers", "/api/scan-webservers"):
                 discovered = webserver_scanner.scan() if parsed.path == "/api/scan-webservers" else webserver_scanner.discovered_servers
                 data = json.dumps({"discovered": discovered}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/9router/stats":
+                data = json.dumps(get_9router_stats()).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
