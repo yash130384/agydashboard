@@ -73,6 +73,13 @@ except Exception as _espn_err:
     espn_client = None
     print(f"[WARN] espn_service konnte nicht importiert werden: {_espn_err}", file=sys.stderr)
 
+# Home Assistant Service Import
+try:
+    from ha_service import ha_service
+except Exception as _ha_err:
+    ha_service = None
+    print(f"[WARN] ha_service konnte nicht importiert werden: {_ha_err}", file=sys.stderr)
+
 
 # ---------------------------------------------------------------------------
 # Basis Service-Registry für Web-Services
@@ -1944,6 +1951,14 @@ class AlertMonitor:
                     elif k in ("gateway_url", "antigravity_ide_url"):
                         self.config[k] = str(v).strip()
             try:
+                disk_data = {}
+                if os.path.exists(self.config_path):
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        disk_data = json.load(f)
+                        if not isinstance(disk_data, dict):
+                            disk_data = {}
+                disk_data.update(self.config)
+                self.config = disk_data
                 with open(self.config_path, "w", encoding="utf-8") as f:
                     json.dump(self.config, f, indent=2)
             except Exception as e:
@@ -2961,6 +2976,238 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .pill-info  { background-color: var(--c-butterscotch); }
     .pill-cfg   { background-color: var(--c-gold); }
     .pill-fantasy { background-color: var(--c-almond); }
+    .pill-ha { background-color: var(--c-secondary); }
+
+    /* Home Assistant LCARS UI */
+    .ha-room-card {
+      background: var(--c-card-bg);
+      border: 1px solid var(--c-card-border);
+      border-left: 6px solid var(--c-secondary);
+      border-radius: 8px;
+      padding: 1.1rem;
+      transition: all 0.2s ease;
+    }
+    .ha-room-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.9rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .ha-room-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--c-secondary);
+      letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      text-transform: uppercase;
+    }
+    .ha-entities-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 0.85rem;
+    }
+    .ha-entity-tile {
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      padding: 0.75rem;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 92px;
+      transition: all 0.15s ease;
+      position: relative;
+    }
+    .ha-entity-tile:hover {
+      border-color: var(--c-primary);
+      background: rgba(235, 148, 58, 0.08);
+      transform: translateY(-2px);
+    }
+    .ha-entity-tile.entity-active {
+      border-color: var(--c-primary);
+      box-shadow: inset 0 0 10px rgba(235, 148, 58, 0.25);
+    }
+    .ha-tile-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 0.4rem;
+    }
+    .ha-tile-name {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 155px;
+    }
+    .ha-tile-id {
+      font-size: 0.72rem;
+      color: #888;
+      font-family: var(--mono-family);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 155px;
+    }
+    .ha-tile-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 0.5rem;
+      gap: 0.4rem;
+    }
+    .ha-tile-state-badge {
+      font-size: 0.75rem;
+      font-family: var(--mono-family);
+      font-weight: 700;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #bbb;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .ha-tile-state-badge.state-on {
+      background: rgba(68, 221, 136, 0.2);
+      color: #44dd88;
+      border: 1px solid rgba(68, 221, 136, 0.4);
+    }
+    .ha-tile-state-badge.state-active {
+      background: rgba(235, 148, 58, 0.2);
+      color: var(--c-primary);
+      border: 1px solid rgba(235, 148, 58, 0.4);
+    }
+    .ha-tile-toggle-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      color: #fff;
+      border-radius: 4px;
+      padding: 0.25rem 0.6rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-family: var(--font-family);
+      letter-spacing: 0.04em;
+    }
+    .ha-tile-toggle-btn:hover {
+      background: var(--c-primary);
+      color: #000;
+      border-color: var(--c-primary);
+    }
+    .ha-tile-toggle-btn.btn-active {
+      background: #44dd88;
+      color: #000;
+      border-color: #44dd88;
+    }
+
+    /* Modal Overlay & Card */
+    .ha-modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(5px);
+      z-index: 99999;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 1rem;
+    }
+    .ha-modal-content {
+      background: #0f1118;
+      border: 2px solid var(--c-secondary);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 520px;
+      box-shadow: 0 0 35px rgba(0, 0, 0, 0.95), 0 0 15px rgba(186, 164, 229, 0.3);
+      overflow: hidden;
+      animation: haModalIn 0.18s ease-out;
+    }
+    @keyframes haModalIn {
+      from { transform: scale(0.95); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .ha-modal-header {
+      background: var(--c-secondary);
+      padding: 0.75rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .ha-modal-close-btn {
+      background: #000;
+      color: var(--c-secondary);
+      border: 1px solid #000;
+      padding: 0.3rem 0.7rem;
+      border-radius: 4px;
+      font-weight: 700;
+      font-size: 0.82rem;
+      cursor: pointer;
+      font-family: var(--font-family);
+      letter-spacing: 0.05em;
+    }
+    .ha-modal-close-btn:hover {
+      background: #fff;
+      color: #000;
+    }
+    .ha-modal-body {
+      padding: 1.25rem;
+      max-height: 75vh;
+      overflow-y: auto;
+    }
+    .ha-ctrl-row {
+      margin-bottom: 1.2rem;
+    }
+    .ha-ctrl-label {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--c-gold);
+      margin-bottom: 0.4rem;
+      display: flex;
+      justify-content: space-between;
+    }
+    .ha-slider {
+      width: 100%;
+      height: 10px;
+      border-radius: 5px;
+      background: #222634;
+      outline: none;
+      -webkit-appearance: none;
+      cursor: pointer;
+    }
+    .ha-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--c-primary);
+      cursor: pointer;
+      box-shadow: 0 0 8px var(--c-primary);
+    }
+    .ha-color-circle {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      cursor: pointer;
+      transition: transform 0.15s ease;
+    }
+    .ha-color-circle:hover {
+      transform: scale(1.18);
+      border-color: #fff;
+    }
 
     @keyframes pulseScoreGain {
       0% {
@@ -4003,6 +4250,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="lcars-pill-btn pill-fantasy" onclick="switchCategory('fantasy')" id="btn-cat-fantasy">
           FANTASY
         </button>
+        <button class="lcars-pill-btn pill-ha" onclick="switchCategory('homeassistant')" id="btn-cat-homeassistant" style="display: none;">
+          HOME ASSISTANT
+        </button>
       </nav>
 
       <div class="left-frame-lower">
@@ -4942,6 +5192,101 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </button>
           </div>
 
+          <!-- HOME ASSISTANT INTEGRATION CONFIG -->
+          <div class="lcars-card" style="margin-top: 1.25rem; margin-bottom: 1.25rem; width: 100%; border-left: 6px solid var(--c-secondary);">
+            <div class="card-head">
+              <span class="card-head-title" style="color:var(--c-secondary); font-size:1.15rem;">HOME ASSISTANT // SMART HOME INTEGRATION</span>
+              <span class="card-head-icon">🏠</span>
+            </div>
+            <p style="color:var(--c-gold); font-size:0.9rem; margin-bottom:1rem;">
+              VERBINDEN SIE IHR HOME ASSISTANT SYSTEM. SOBALD DIE ZUGANGSDATEN EINGEGEBEN SIND, ERSCHEINT IN DER LINKEN LEISTE EIN BUTTON ZUR INTERAKTIVEN STEUERUNG ALLER RÄUME UND OBJEKTE.
+            </p>
+
+            <form id="homeAssistantForm" onsubmit="saveHomeAssistantConfig(event)">
+              <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.25rem;">
+
+                <!-- URL -->
+                <div class="config-field">
+                  <label for="cfgHaUrl" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-primary);">
+                    <span>🌐 HOME ASSISTANT URL</span>
+                  </label>
+                  <input type="text" id="cfgHaUrl" value="http://127.0.0.1:8123" class="lcars-input" placeholder="http://127.0.0.1:8123" required>
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Standard: http://127.0.0.1:8123</div>
+                </div>
+
+                <!-- Name in Sidebar -->
+                <div class="config-field">
+                  <label for="cfgHaName" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-gold);">
+                    <span>🏷️ BUTTON-NAME (LINKE LEISTE)</span>
+                  </label>
+                  <input type="text" id="cfgHaName" value="Home Assistant" class="lcars-input" placeholder="Home Assistant" required>
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">z.B. Home Assistant, Smart Home, Quartier</div>
+                </div>
+
+                <!-- Username -->
+                <div class="config-field">
+                  <label for="cfgHaUser" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-secondary);">
+                    <span>👤 BENUTZERNAME (OPTIONAL)</span>
+                  </label>
+                  <input type="text" id="cfgHaUser" value="cb" class="lcars-input" placeholder="cb">
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Home Assistant Benutzername</div>
+                </div>
+
+                <!-- Password -->
+                <div class="config-field">
+                  <label for="cfgHaPass" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-red);">
+                    <span>🔒 PASSWORT (OPTIONAL)</span>
+                  </label>
+                  <input type="password" id="cfgHaPass" value="mymaajen" class="lcars-input" placeholder="••••••••">
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Wird sicher im Backend verwendet</div>
+                </div>
+
+                <!-- Long Lived Token -->
+                <div class="config-field" style="grid-column: 1 / -1;">
+                  <label for="cfgHaToken" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-secondary);">
+                    <span>🔑 LANGLEBIGER ZUGANGS-TOKEN (BEARER)</span>
+                    <span id="cfgHaTokenStatus" style="font-size:0.75rem; color:#44dd88;">● TOKEN HINTERLEGT</span>
+                  </label>
+                  <input type="password" id="cfgHaToken" class="lcars-input" placeholder="eyJhbGciOi... (optional wenn Benutzer/Passwort angegeben)">
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">
+                    Alternativ: In HA unter Profil &gt; Sicherheit &gt; Langlebige Zugangs-Token erstellen
+                  </div>
+                </div>
+
+                <!-- Enabled Checkbox -->
+                <div class="config-field" style="grid-column: 1 / -1; display:flex; align-items:center; gap:0.6rem; padding-top:0.25rem;">
+                  <input type="checkbox" id="cfgHaEnabled" checked style="transform:scale(1.3); cursor:pointer; accent-color:var(--c-secondary);">
+                  <label for="cfgHaEnabled" style="font-size:0.92rem; font-weight:700; color:var(--c-text); cursor:pointer;">
+                    HOME ASSISTANT INTEGRATION AKTIVIEREN &amp; IN LINKER LEISTE ANZEIGEN
+                  </label>
+                </div>
+
+              </div>
+
+              <!-- Status Box & Action Buttons -->
+              <div style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:0.85rem 1rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+                <div>
+                  <div style="font-size:0.75rem; color:#888; text-transform:uppercase;">Verbindungs-Status</div>
+                  <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.25rem;">
+                    <span id="cfgHaBadge" class="badge-status badge-online">ONLINE</span>
+                    <span id="cfgHaStatusMsg" style="font-size:0.8rem; color:#bbb;">Bereit</span>
+                  </div>
+                </div>
+
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                  <button type="button" class="left-action-btn" onclick="testHomeAssistantConnection()" id="btnTestHa" style="padding:0.4rem 0.8rem; font-size:0.82rem;">
+                    <span>⚡</span> <span>VERBINDUNG TESTEN</span>
+                  </button>
+                  <button type="submit" class="left-action-btn" id="btnSaveHa" style="padding:0.4rem 1rem; font-size:0.85rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
+                    <span>💾</span> <span>EINSTELLUNGEN SPEICHERN</span>
+                  </button>
+                </div>
+              </div>
+
+              <div id="cfgHaSaveMsg" style="display:none; font-family:var(--mono-family); font-size:0.85rem; color:var(--c-secondary); margin-top:0.5rem;"></div>
+            </form>
+          </div>
+
           <!-- ALARM & SCHWELLWERTE (RED ALERT TRIGGER) -->
           <div class="lcars-card" style="margin-top: 1.25rem; margin-bottom: 1.25rem; width: 100%;">
             <div class="card-head">
@@ -5256,6 +5601,77 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
         </section>
 
+        <!-- KATEGORIE 7: HOME ASSISTANT HAUSSTEUERUNG -->
+        <section class="lcars-section" id="section-homeassistant">
+          <div class="lcars-header-bar">
+            <h2 id="haSectionTitle">LCARS HAUSSTEUERUNG // HOME ASSISTANT</h2>
+            <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
+              <span id="haLiveBadge" class="badge-status badge-online">ONLINE</span>
+              <span id="haStatsBadge" style="font-size:0.82rem; color:var(--c-primary); font-family:var(--mono-family); font-weight:700;">
+                0 RÄUME // 0 OBJEKTE
+              </span>
+              <span id="haCountdownBadge" style="font-size:0.75rem; color:#888; font-family:var(--mono-family);">
+                AUTO-REFRESH: 15s
+              </span>
+              <button class="left-action-btn" onclick="loadHomeAssistantData(true)" style="padding:0.25rem 0.65rem; font-size:0.8rem;">
+                <span>⟳</span> <span>REFRESH</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Room Filter Tabs & Domain Search Bar -->
+          <div style="margin: 0.9rem 0; display:flex; flex-wrap:wrap; gap:0.6rem; align-items:center; justify-content:space-between; background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.6rem 0.8rem;">
+            <!-- Dynamic Room Pills -->
+            <div id="haRoomFilterBar" style="display:flex; flex-wrap:wrap; gap:0.4rem; align-items:center;">
+              <button class="left-action-btn active-room-filter" onclick="setHaRoomFilter('all')" id="ha-room-btn-all" style="padding:0.3rem 0.75rem; font-size:0.82rem; border-color:var(--c-primary); color:var(--c-primary);">
+                ALLE RÄUME
+              </button>
+            </div>
+
+            <!-- Domain filter & Search -->
+            <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+              <select id="haDomainFilter" onchange="filterHaEntities()" class="lcars-input" style="padding:0.35rem 0.65rem; font-size:0.82rem; width:auto;">
+                <option value="all">ALLE TYPEN</option>
+                <option value="light">💡 LICHTER</option>
+                <option value="switch">🔌 SCHALTER / STECKDOSEN</option>
+                <option value="climate">🌡️ KLIMA &amp; HEIZUNG</option>
+                <option value="cover">🪟 ROLLOS &amp; JALOUSIEN</option>
+                <option value="media_player">🎵 MEDIEN-PLAYER</option>
+                <option value="vacuum">🤖 SAUGROBOTER</option>
+                <option value="sensor">📊 SENSOREN</option>
+                <option value="controllable">⚙️ NUR STEUERBARE</option>
+              </select>
+              <input type="text" id="haSearchInput" oninput="filterHaEntities()" placeholder="Objekt suchen..." class="lcars-input" style="padding:0.35rem 0.65rem; font-size:0.82rem; width:150px;">
+            </div>
+          </div>
+
+          <!-- Container for Room Cards -->
+          <div id="haRoomsContainer" style="display:flex; flex-direction:column; gap:1.25rem; margin-top:0.8rem;">
+            <div style="padding:2rem; text-align:center; color:#888; font-family:var(--mono-family);">
+              Lade Home Assistant Daten...
+            </div>
+          </div>
+        </section>
+
+        <!-- LCARS ENTITY CONTROL MODAL -->
+        <div id="haControlModal" class="ha-modal-overlay" style="display:none;" onclick="handleModalBackdropClick(event)">
+          <div class="ha-modal-content" onclick="event.stopPropagation()">
+            <div class="ha-modal-header">
+              <div style="display:flex; align-items:center; gap:0.6rem; min-width:0;">
+                <span id="haModalIcon" style="font-size:1.5rem; flex-shrink:0;">💡</span>
+                <div style="min-width:0;">
+                  <div id="haModalTitle" style="font-size:1.2rem; font-weight:700; color:#000; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Gerätename</div>
+                  <div id="haModalEntityId" style="font-size:0.75rem; color:#222; font-family:var(--mono-family); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">light.device</div>
+                </div>
+              </div>
+              <button class="ha-modal-close-btn" onclick="closeHaControlModal()">✕ SCHLIESSEN</button>
+            </div>
+            <div class="ha-modal-body" id="haModalBody">
+              <!-- Dynamically populated per domain -->
+            </div>
+          </div>
+        </div>
+
       </main>
     </div>
   </div>
@@ -5409,14 +5825,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   });
 
-  // 6 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
+  // 7 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
   const CATEGORY_NAMES = {
     'system': 'SYSTEM & SENSOR VERLAUF',
     'services': 'SERVICES & PROZESS-SCANNER',
     'agents': 'LCARS SUBRAUM COMM-LINK // KI-AGENTEN',
     'ai-info': 'KI-INFO // 9ROUTER & NEURAL TELEMETRIE',
     'config': 'SYSTEM CONFIG & FARBMODI',
-    'fantasy': 'ESPN FANTASY FOOTBALL // INCOMPLETE PASS'
+    'fantasy': 'ESPN FANTASY FOOTBALL // INCOMPLETE PASS',
+    'homeassistant': 'LCARS HAUSSTEUERUNG // HOME ASSISTANT'
   };
 
   function switchCategory(catId) {
@@ -5472,6 +5889,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         fantasyCountdownSeconds = 30;
         updateFantasyCountdownUI();
         loadFantasyData(false);
+      }, 60);
+    }
+    if (catId === 'homeassistant') {
+      setTimeout(() => {
+        haCountdownSeconds = 15;
+        updateHaCountdownUI();
+        loadHomeAssistantData(false);
       }, 60);
     }
   }
@@ -5702,7 +6126,837 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }, 1000);
   }
 
-  // Red Alert Klaxon Alarm Sound (Authentischer Star Trek Doppel-Sirenen-Warble)
+  // ===========================================================================
+  // HOME ASSISTANT CONTROLLER
+  // ===========================================================================
+  let haCachedData = null;
+  let haActiveRoomFilter = 'all';
+  let haCountdownSeconds = 15;
+  let isHaLoading = false;
+  let haAutoRefreshTimer = null;
+
+  function updateHaCountdownUI() {
+    const badge = document.getElementById('haCountdownBadge');
+    if (!badge) return;
+    if (isHaLoading) {
+      badge.textContent = '● LÄDT DATEN...';
+      badge.style.color = 'var(--c-primary)';
+    } else {
+      badge.textContent = `AUTO-REFRESH: ${haCountdownSeconds}S`;
+      badge.style.color = '#888';
+    }
+  }
+
+  async function checkHomeAssistantConfig() {
+    try {
+      const resp = await fetch('/api/homeassistant/config');
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      const btn = document.getElementById('btn-cat-homeassistant');
+      const cfgName = (data.name || 'HOME ASSISTANT').toUpperCase();
+
+      if (data.configured && data.enabled) {
+        if (btn) {
+          btn.style.display = 'flex';
+          btn.textContent = cfgName;
+        }
+        CATEGORY_NAMES['homeassistant'] = 'LCARS HAUSSTEUERUNG // ' + cfgName;
+        const secTitle = document.getElementById('haSectionTitle');
+        if (secTitle) secTitle.textContent = 'LCARS HAUSSTEUERUNG // ' + cfgName;
+      } else {
+        if (btn) btn.style.display = 'none';
+      }
+
+      // Populate form in Config section
+      const urlInp = document.getElementById('cfgHaUrl');
+      const nameInp = document.getElementById('cfgHaName');
+      const userInp = document.getElementById('cfgHaUser');
+      const passInp = document.getElementById('cfgHaPass');
+      const tokInp = document.getElementById('cfgHaToken');
+      const enInp = document.getElementById('cfgHaEnabled');
+      const badge = document.getElementById('cfgHaBadge');
+      const tokStatus = document.getElementById('cfgHaTokenStatus');
+      const statusMsg = document.getElementById('cfgHaStatusMsg');
+
+      if (urlInp && data.url) urlInp.value = data.url;
+      if (nameInp && data.name) nameInp.value = data.name;
+      if (userInp && data.username) userInp.value = data.username;
+      if (passInp && data.has_creds) passInp.value = '********';
+      if (tokInp && data.token_masked) tokInp.placeholder = data.token_masked;
+      if (enInp) enInp.checked = data.enabled !== false;
+
+      if (badge && statusMsg) {
+        if (data.configured) {
+          badge.className = 'badge-status badge-online';
+          badge.textContent = 'ONLINE';
+          statusMsg.textContent = 'Verbindung konfiguriert';
+        } else {
+          badge.className = 'badge-status badge-warn';
+          badge.textContent = 'UNVOLLSTÄNDIG';
+          statusMsg.textContent = 'Zugangsdaten fehlen oder deaktiviert';
+        }
+      }
+
+      if (tokStatus) {
+        if (data.has_token) {
+          tokStatus.textContent = '● TOKEN AKTIV (' + (data.token_masked || 'GÜLTIG') + ')';
+          tokStatus.style.color = '#44dd88';
+        } else if (data.has_creds) {
+          tokStatus.textContent = '● BENUTZER: ' + data.username;
+          tokStatus.style.color = 'var(--c-primary)';
+        } else {
+          tokStatus.textContent = 'KEIN TOKEN';
+          tokStatus.style.color = '#888';
+        }
+      }
+    } catch(e) {
+      console.warn('Home Assistant Config Check Error:', e);
+    }
+  }
+
+  async function saveHomeAssistantConfig(e) {
+    if (e) e.preventDefault();
+    playLcarsBeep(980, 1400);
+
+    const url = document.getElementById('cfgHaUrl')?.value?.trim();
+    const name = document.getElementById('cfgHaName')?.value?.trim() || 'Home Assistant';
+    const username = document.getElementById('cfgHaUser')?.value?.trim() || '';
+    const password = document.getElementById('cfgHaPass')?.value?.trim() || '';
+    const token = document.getElementById('cfgHaToken')?.value?.trim() || '';
+    const enabled = document.getElementById('cfgHaEnabled')?.checked ?? true;
+
+    const payload = { url, name, username, password, token, enabled };
+    const msgEl = document.getElementById('cfgHaSaveMsg');
+
+    try {
+      const resp = await fetch('/api/config/homeassistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const res = await resp.json();
+      if (res.success) {
+        if (msgEl) {
+          msgEl.style.display = 'block';
+          msgEl.style.color = 'var(--c-primary)';
+          msgEl.textContent = '✓ HOME ASSISTANT KONFIGURATION ERFOLGREICH GESPEICHERT';
+          setTimeout(() => { msgEl.style.display = 'none'; }, 4000);
+        }
+        playLcarsBeep(1400, 2100);
+        await checkHomeAssistantConfig();
+        loadHomeAssistantData(true);
+      } else {
+        throw new Error(res.error || 'Fehler beim Speichern');
+      }
+    } catch(err) {
+      if (msgEl) {
+        msgEl.style.display = 'block';
+        msgEl.style.color = 'var(--c-red)';
+        msgEl.textContent = '✗ FEHLER: ' + err.message;
+      }
+      playLcarsBeep(440, 220);
+    }
+  }
+
+  async function testHomeAssistantConnection() {
+    playLcarsBeep(980, 1400);
+    const btn = document.getElementById('btnTestHa');
+    if (btn) btn.disabled = true;
+
+    const badge = document.getElementById('cfgHaBadge');
+    const msg = document.getElementById('cfgHaStatusMsg');
+    if (badge) {
+      badge.className = 'badge-status badge-warn';
+      badge.textContent = 'TESTET...';
+    }
+
+    const url = document.getElementById('cfgHaUrl')?.value?.trim();
+    const username = document.getElementById('cfgHaUser')?.value?.trim();
+    const password = document.getElementById('cfgHaPass')?.value?.trim();
+    const token = document.getElementById('cfgHaToken')?.value?.trim();
+
+    try {
+      const resp = await fetch('/api/homeassistant/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, username, password, token })
+      });
+      const data = await resp.json();
+      if (data.success) {
+        if (badge) {
+          badge.className = 'badge-status badge-online';
+          badge.textContent = 'ONLINE';
+        }
+        if (msg) msg.textContent = '✓ ' + (data.message || 'Verbindung erfolgreich');
+        playLcarsBeep(1400, 2100);
+      } else {
+        if (badge) {
+          badge.className = 'badge-status badge-offline';
+          badge.textContent = 'FEHLER';
+        }
+        if (msg) msg.textContent = '✗ ' + (data.error || 'Fehlgeschlagen');
+        playLcarsBeep(440, 220);
+      }
+    } catch(err) {
+      if (badge) {
+        badge.className = 'badge-status badge-offline';
+        badge.textContent = 'OFFLINE';
+      }
+      if (msg) msg.textContent = '✗ ' + err.message;
+      playLcarsBeep(440, 220);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function loadHomeAssistantData(force = false) {
+    if (isHaLoading && !force) return;
+    isHaLoading = true;
+    updateHaCountdownUI();
+
+    try {
+      const resp = await fetch('/api/homeassistant/data');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+
+      if (data.success) {
+        haCachedData = data;
+        renderHaRooms();
+        const liveBadge = document.getElementById('haLiveBadge');
+        const statsBadge = document.getElementById('haStatsBadge');
+        if (liveBadge) {
+          liveBadge.className = 'badge-status badge-online';
+          liveBadge.textContent = '● ONLINE';
+        }
+        if (statsBadge && data.stats) {
+          statsBadge.textContent = `${data.stats.areas_count} RÄUME // ${data.stats.total_entities} ENTITIES (${data.stats.active_count} AKTIV)`;
+        }
+      } else {
+        const container = document.getElementById('haRoomsContainer');
+        if (container) {
+          container.innerHTML = `
+            <div class="ha-room-card" style="border-left-color:var(--c-red); text-align:center; padding:2.5rem 1.5rem;">
+              <div style="font-size:2.2rem; margin-bottom:0.6rem;">⚠️</div>
+              <div style="font-size:1.3rem; font-weight:700; color:var(--c-red); margin-bottom:0.5rem;">HOME ASSISTANT NICHT ERREICHBAR</div>
+              <div style="color:#bbb; font-family:var(--mono-family); max-width:500px; margin:0 auto 1.2rem auto;">${escapeHtml(data.error || 'Bitte Zugangsdaten in der Config prüfen.')}</div>
+              <button class="left-action-btn" onclick="switchCategory('config')" style="display:inline-flex; border-color:var(--c-gold); color:var(--c-gold);">
+                ⚙️ ZUR CONFIG GEHEN
+              </button>
+            </div>
+          `;
+        }
+        const liveBadge = document.getElementById('haLiveBadge');
+        if (liveBadge) {
+          liveBadge.className = 'badge-status badge-offline';
+          liveBadge.textContent = 'OFFLINE';
+        }
+      }
+    } catch(err) {
+      console.warn('loadHomeAssistantData error:', err);
+      const liveBadge = document.getElementById('haLiveBadge');
+      if (liveBadge) {
+        liveBadge.className = 'badge-status badge-offline';
+        liveBadge.textContent = 'OFFLINE';
+      }
+    } finally {
+      isHaLoading = false;
+      haCountdownSeconds = 15;
+      updateHaCountdownUI();
+    }
+  }
+
+  function setHaRoomFilter(roomId) {
+    haActiveRoomFilter = roomId;
+    playLcarsBeep(980, 1400);
+
+    document.querySelectorAll('#haRoomFilterBar button').forEach(b => {
+      b.classList.remove('active-room-filter');
+      b.style.borderColor = 'rgba(255,255,255,0.2)';
+      b.style.color = '#bbb';
+    });
+    const curBtn = document.getElementById('ha-room-btn-' + roomId);
+    if (curBtn) {
+      curBtn.classList.add('active-room-filter');
+      curBtn.style.borderColor = 'var(--c-primary)';
+      curBtn.style.color = 'var(--c-primary)';
+    }
+    filterHaEntities();
+  }
+
+  function filterHaEntities() {
+    const domain = document.getElementById('haDomainFilter')?.value || 'all';
+    const search = (document.getElementById('haSearchInput')?.value || '').toLowerCase().trim();
+
+    document.querySelectorAll('.ha-room-card').forEach(roomCard => {
+      const roomId = roomCard.getAttribute('data-room-id');
+      const roomMatch = (haActiveRoomFilter === 'all' || haActiveRoomFilter === roomId);
+
+      let visibleInRoom = 0;
+      roomCard.querySelectorAll('.ha-entity-tile').forEach(tile => {
+        const tDomain = tile.getAttribute('data-domain');
+        const tName = (tile.getAttribute('data-name') || '').toLowerCase();
+        const tId = (tile.getAttribute('data-entity-id') || '').toLowerCase();
+        const tControllable = tile.getAttribute('data-controllable') === 'true';
+
+        let domainMatch = true;
+        if (domain === 'controllable') {
+          domainMatch = tControllable;
+        } else if (domain !== 'all') {
+          domainMatch = (tDomain === domain);
+        }
+
+        const searchMatch = !search || tName.includes(search) || tId.includes(search);
+
+        if (domainMatch && searchMatch) {
+          tile.style.display = 'flex';
+          visibleInRoom++;
+        } else {
+          tile.style.display = 'none';
+        }
+      });
+
+      if (roomMatch && visibleInRoom > 0) {
+        roomCard.style.display = 'block';
+      } else {
+        roomCard.style.display = 'none';
+      }
+    });
+  }
+
+  function renderHaRooms() {
+    if (!haCachedData) return;
+    const areas = haCachedData.areas || [];
+    const unassigned = haCachedData.unassigned || [];
+    const container = document.getElementById('haRoomsContainer');
+    const filterBar = document.getElementById('haRoomFilterBar');
+
+    if (!container || !filterBar) return;
+
+    // 1. Build Filter Tabs
+    let filterHtml = `
+      <button class="left-action-btn ${haActiveRoomFilter === 'all' ? 'active-room-filter' : ''}" onclick="setHaRoomFilter('all')" id="ha-room-btn-all" style="padding:0.3rem 0.75rem; font-size:0.82rem; ${haActiveRoomFilter === 'all' ? 'border-color:var(--c-primary); color:var(--c-primary);' : 'border-color:rgba(255,255,255,0.2); color:#bbb;'}">
+        ALLE RÄUME (${areas.length})
+      </button>
+    `;
+
+    areas.forEach(a => {
+      const isActive = (haActiveRoomFilter === a.id);
+      filterHtml += `
+        <button class="left-action-btn ${isActive ? 'active-room-filter' : ''}" onclick="setHaRoomFilter('${escapeHtml(a.id)}')" id="ha-room-btn-${escapeHtml(a.id)}" style="padding:0.3rem 0.75rem; font-size:0.82rem; ${isActive ? 'border-color:var(--c-primary); color:var(--c-primary);' : 'border-color:rgba(255,255,255,0.2); color:#bbb;'}">
+          ${escapeHtml(a.icon || '🚪')} ${escapeHtml(a.name.toUpperCase())} (${a.entities.length})
+        </button>
+      `;
+    });
+
+    if (unassigned.length > 0) {
+      const isUn = (haActiveRoomFilter === 'unassigned');
+      filterHtml += `
+        <button class="left-action-btn ${isUn ? 'active-room-filter' : ''}" onclick="setHaRoomFilter('unassigned')" id="ha-room-btn-unassigned" style="padding:0.3rem 0.75rem; font-size:0.82rem; ${isUn ? 'border-color:var(--c-primary); color:var(--c-primary);' : 'border-color:rgba(255,255,255,0.2); color:#bbb;'}">
+          🌐 WEITERE (${unassigned.length})
+        </button>
+      `;
+    }
+
+    filterBar.innerHTML = filterHtml;
+
+    // 2. Build Room Cards & Entity Grids
+    let roomsHtml = '';
+
+    areas.forEach(a => {
+      const lightEntities = a.entities.filter(e => e.domain === 'light');
+      const hasLights = lightEntities.length > 0;
+      const anyLightOn = lightEntities.some(e => e.state === 'on');
+
+      roomsHtml += `
+        <div class="ha-room-card" data-room-id="${escapeHtml(a.id)}">
+          <div class="ha-room-header">
+            <div class="ha-room-title">
+              <span>${escapeHtml(a.icon || '🚪')}</span>
+              <span>${escapeHtml(a.name)}</span>
+              <span style="font-size:0.8rem; color:var(--c-gold); font-family:var(--mono-family); font-weight:normal; margin-left:0.5rem;">
+                (${a.active_count > 0 ? a.active_count + ' AKTIV / ' : ''}${a.entities.length} OBJEKTE)
+              </span>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              ${hasLights ? `
+                <button class="left-action-btn" onclick="toggleRoomLights('${escapeHtml(a.id)}', ${!anyLightOn})" style="padding:0.25rem 0.65rem; font-size:0.75rem; border-color:${anyLightOn ? '#44dd88' : 'rgba(255,255,255,0.2)'}; color:${anyLightOn ? '#44dd88' : '#bbb'};">
+                  💡 ${anyLightOn ? 'LICHTER AUS' : 'LICHTER AN'}
+                </button>
+              ` : ''}
+            </div>
+          </div>
+          <div class="ha-entities-grid">
+            ${a.entities.map(e => renderHaEntityTile(e)).join('')}
+          </div>
+        </div>
+      `;
+    });
+
+    if (unassigned.length > 0) {
+      roomsHtml += `
+        <div class="ha-room-card" data-room-id="unassigned" style="border-left-color:var(--c-gold);">
+          <div class="ha-room-header">
+            <div class="ha-room-title">
+              <span>🌐</span>
+              <span>WEITERE GERÄTE &amp; SENSOREN</span>
+              <span style="font-size:0.8rem; color:var(--c-gold); font-family:var(--mono-family); font-weight:normal; margin-left:0.5rem;">
+                (${unassigned.length} OBJEKTE)
+              </span>
+            </div>
+          </div>
+          <div class="ha-entities-grid">
+            ${unassigned.map(e => renderHaEntityTile(e)).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    container.innerHTML = roomsHtml;
+    filterHaEntities();
+  }
+
+  function renderHaEntityTile(e) {
+    const isOn = ['on', 'open', 'playing', 'cleaning'].includes(e.state);
+    const isActiveState = (isOn || (e.domain === 'vacuum' && e.state !== 'docked') || (e.domain === 'climate' && e.state !== 'off'));
+    
+    let displayState = e.state;
+    if (e.state === 'on') displayState = 'AN';
+    else if (e.state === 'off') displayState = 'AUS';
+    else if (e.state === 'docked') displayState = 'DOCK';
+    else if (e.state === 'cleaning') displayState = 'REINIGT';
+    else if (e.state === 'open') displayState = 'OFFEN';
+    else if (e.state === 'closed') displayState = 'ZU';
+    else if (e.controls?.unit) displayState = `${e.state} ${e.controls.unit}`;
+
+    const badgeClass = isOn ? 'ha-tile-state-badge state-on' : (isActiveState ? 'ha-tile-state-badge state-active' : 'ha-tile-state-badge');
+
+    return `
+      <div class="ha-entity-tile ${isActiveState ? 'entity-active' : ''}" 
+           data-entity-id="${escapeHtml(e.entity_id)}"
+           data-domain="${escapeHtml(e.domain)}"
+           data-name="${escapeHtml(e.friendly_name)}"
+           data-controllable="${e.controllable}"
+           onclick="openHaControlModal('${escapeHtml(e.entity_id)}')">
+        <div class="ha-tile-top">
+          <div style="min-width:0;">
+            <div class="ha-tile-name" title="${escapeHtml(e.friendly_name)}">${escapeHtml(e.friendly_name)}</div>
+            <div class="ha-tile-id" title="${escapeHtml(e.entity_id)}">${escapeHtml(e.entity_id)}</div>
+          </div>
+          <span style="font-size:1.3rem; flex-shrink:0;">${escapeHtml(e.icon)}</span>
+        </div>
+        <div class="ha-tile-bottom">
+          <span class="${badgeClass}">${escapeHtml(displayState)}</span>
+          ${e.controls?.can_toggle ? `
+            <button class="ha-tile-toggle-btn ${isOn ? 'btn-active' : ''}" 
+                    onclick="toggleHaEntity(event, '${escapeHtml(e.entity_id)}', '${escapeHtml(e.domain)}')">
+              ${isOn ? 'AUS' : 'AN'}
+            </button>
+          ` : (e.controllable ? `
+            <span style="font-size:0.75rem; color:var(--c-primary); font-family:var(--mono-family); font-weight:700;">
+              STEUERN ▶
+            </span>
+          ` : '')}
+        </div>
+      </div>
+    `;
+  }
+
+  async function toggleHaEntity(event, entityId, domain) {
+    if (event) event.stopPropagation();
+    playLcarsBeep(1200, 1600);
+
+    const srv = (domain === 'light' || domain === 'switch' || domain === 'input_boolean') ? 'toggle' : 'toggle';
+    await callHaService(domain, srv, { entity_id: entityId });
+  }
+
+  async function toggleRoomLights(roomId, turnOn) {
+    playLcarsBeep(1200, 1600);
+    if (!haCachedData) return;
+    const area = haCachedData.areas.find(a => a.id === roomId);
+    if (!area) return;
+
+    const lights = area.entities.filter(e => e.domain === 'light');
+    const srv = turnOn ? 'turn_on' : 'turn_off';
+
+    for (const l of lights) {
+      callHaService('light', srv, { entity_id: l.entity_id });
+    }
+  }
+
+  function openHaControlModal(entityId) {
+    if (!haCachedData) return;
+    playLcarsBeep(980, 1400);
+
+    let found = null;
+    for (const a of (haCachedData.areas || [])) {
+      found = a.entities.find(e => e.entity_id === entityId);
+      if (found) break;
+    }
+    if (!found && haCachedData.unassigned) {
+      found = haCachedData.unassigned.find(e => e.entity_id === entityId);
+    }
+    if (!found) return;
+
+    const modal = document.getElementById('haControlModal');
+    const iconEl = document.getElementById('haModalIcon');
+    const titleEl = document.getElementById('haModalTitle');
+    const eidEl = document.getElementById('haModalEntityId');
+    const bodyEl = document.getElementById('haModalBody');
+
+    if (!modal || !bodyEl) return;
+
+    iconEl.textContent = found.icon || '💡';
+    titleEl.textContent = found.friendly_name;
+    eidEl.textContent = found.entity_id;
+
+    const ctrl = found.controls || {};
+    const isOn = ['on', 'open', 'playing', 'cleaning'].includes(found.state);
+    let controlsHtml = '';
+
+    // Status Banner
+    controlsHtml += `
+      <div style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:0.85rem 1rem; margin-bottom:1.25rem; display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-size:0.75rem; color:#888; text-transform:uppercase;">Aktueller Status</div>
+          <div style="font-size:1.3rem; font-weight:700; color:${isOn ? '#44dd88' : 'var(--c-primary)'}; font-family:var(--mono-family); margin-top:0.2rem;">
+            ${escapeHtml(found.state.toUpperCase())} ${ctrl.unit ? escapeHtml(ctrl.unit) : ''}
+          </div>
+        </div>
+        ${ctrl.can_toggle ? `
+          <div style="display:flex; gap:0.5rem;">
+            <button class="left-action-btn" onclick="callHaService('${found.domain}', 'turn_off', {entity_id: '${escapeHtml(found.entity_id)}'})" style="padding:0.4rem 0.9rem; font-size:0.85rem; border-color:${!isOn ? 'var(--c-red)' : '#666'}; color:${!isOn ? '#fff' : '#888'}; background:${!isOn ? 'rgba(207,79,79,0.3)' : 'transparent'};">
+              AUS
+            </button>
+            <button class="left-action-btn" onclick="callHaService('${found.domain}', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}'})" style="padding:0.4rem 0.9rem; font-size:0.85rem; border-color:${isOn ? '#44dd88' : '#666'}; color:${isOn ? '#000' : '#888'}; background:${isOn ? '#44dd88' : 'transparent'}; font-weight:700;">
+              AN
+            </button>
+          </div>
+        ` : ''}
+      </div>
+    `;
+
+    // 1. LIGHT CONTROLS
+    if (found.domain === 'light') {
+      const curBri = ctrl.brightness_pct ?? (isOn ? 100 : 0);
+      controlsHtml += `
+        <div class="ha-ctrl-row">
+          <div class="ha-ctrl-label">
+            <span>💡 HELLIGKEIT</span>
+            <span id="haBriVal" style="font-family:var(--mono-family);">${curBri}%</span>
+          </div>
+          <input type="range" min="1" max="100" value="${curBri}" class="ha-slider" 
+                 oninput="document.getElementById('haBriVal').textContent = this.value + '%'"
+                 onchange="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', brightness_pct: parseInt(this.value)})">
+        </div>
+
+        <div class="ha-ctrl-row">
+          <div class="ha-ctrl-label">
+            <span>🌡️ FARBTEMPERATUR</span>
+            <span id="haTempLabel">WEISS-TÖNE</span>
+          </div>
+          <div style="display:flex; gap:0.4rem; margin-top:0.4rem;">
+            <button class="left-action-btn" onclick="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', color_temp_kelvin: 2700})" style="flex:1; padding:0.35rem; font-size:0.75rem; border-color:#ffaa44; color:#ffaa44;">
+              WARM (2700K)
+            </button>
+            <button class="left-action-btn" onclick="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', color_temp_kelvin: 4000})" style="flex:1; padding:0.35rem; font-size:0.75rem; border-color:#ffeecc; color:#ffeecc;">
+              NEUTRAL (4000K)
+            </button>
+            <button class="left-action-btn" onclick="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', color_temp_kelvin: 6500})" style="flex:1; padding:0.35rem; font-size:0.75rem; border-color:#88bbff; color:#88bbff;">
+              KALT (6500K)
+            </button>
+          </div>
+        </div>
+
+        <div class="ha-ctrl-row">
+          <div class="ha-ctrl-label">
+            <span>🎨 FARBAUSWAHL (RGB)</span>
+          </div>
+          <div style="display:flex; gap:0.6rem; flex-wrap:wrap; margin-top:0.4rem;">
+            <div class="ha-color-circle" style="background:#ff3333;" title="Rot" onclick="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', rgb_color: [255, 51, 51]})"></div>
+            <div class="ha-color-circle" style="background:#ff9933;" title="Orange" onclick="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', rgb_color: [255, 153, 51]})"></div>
+            <div class="ha-color-circle" style="background:#ffff33;" title="Gelb" onclick="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', rgb_color: [255, 255, 51]})"></div>
+            <div class="ha-color-circle" style="background:#33cc33;" title="Grün" onclick="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', rgb_color: [51, 204, 51]})"></div>
+            <div class="ha-color-circle" style="background:#33ccff;" title="Cyan" onclick="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', rgb_color: [51, 204, 255]})"></div>
+            <div class="ha-color-circle" style="background:#3366ff;" title="Blau" onclick="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', rgb_color: [51, 102, 255]})"></div>
+            <div class="ha-color-circle" style="background:#cc33ff;" title="Lila" onclick="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', rgb_color: [204, 51, 255]})"></div>
+            <div class="ha-color-circle" style="background:#ffffff;" title="Weiß" onclick="callHaService('light', 'turn_on', {entity_id: '${escapeHtml(found.entity_id)}', rgb_color: [255, 255, 255]})"></div>
+          </div>
+        </div>
+      `;
+    }
+
+    // 2. CLIMATE CONTROLS
+    else if (found.domain === 'climate') {
+      const curTemp = ctrl.current_temperature ?? '--';
+      const targetTemp = ctrl.temperature ?? 21.0;
+      controlsHtml += `
+        <div class="ha-ctrl-row">
+          <div style="display:flex; justify-content:space-around; align-items:center; background:rgba(0,0,0,0.4); border-radius:8px; padding:1rem; margin-bottom:1rem;">
+            <div style="text-align:center;">
+              <div style="font-size:0.75rem; color:#888;">IST-TEMPERATUR</div>
+              <div style="font-size:2rem; font-weight:800; color:var(--c-blue); font-family:var(--mono-family);">${curTemp}°C</div>
+            </div>
+            <div style="text-align:center;">
+              <div style="font-size:0.75rem; color:#888;">SOLL-TEMPERATUR</div>
+              <div style="font-size:2rem; font-weight:800; color:var(--c-gold); font-family:var(--mono-family);" id="haTargetTempVal">${targetTemp}°C</div>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:0.5rem; justify-content:center; align-items:center; margin-bottom:1rem;">
+            <button class="left-action-btn" onclick="adjustClimateTemp('${escapeHtml(found.entity_id)}', -0.5)" style="padding:0.4rem 1rem; font-size:1.1rem; font-weight:700;">- 0.5°</button>
+            <button class="left-action-btn" onclick="adjustClimateTemp('${escapeHtml(found.entity_id)}', +0.5)" style="padding:0.4rem 1rem; font-size:1.1rem; font-weight:700;">+ 0.5°</button>
+          </div>
+
+          <div class="ha-ctrl-label">
+            <span>BETRIEBSMODUS</span>
+          </div>
+          <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+            ${(ctrl.hvac_modes || ['heat', 'cool', 'auto', 'off']).map(m => `
+              <button class="left-action-btn" onclick="callHaService('climate', 'set_hvac_mode', {entity_id: '${escapeHtml(found.entity_id)}', hvac_mode: '${m}'})" style="padding:0.35rem 0.75rem; font-size:0.8rem; text-transform:uppercase; ${found.state === m ? 'border-color:var(--c-primary); color:var(--c-primary); font-weight:700;' : 'color:#aaa;'}">
+                ${m}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    // 3. COVER / ROLLO CONTROLS
+    else if (found.domain === 'cover') {
+      const pos = ctrl.current_position ?? 50;
+      controlsHtml += `
+        <div class="ha-ctrl-row">
+          <div class="ha-ctrl-label">
+            <span>STEUERUNG</span>
+          </div>
+          <div style="display:flex; gap:0.6rem; justify-content:space-between; margin-bottom:1.2rem;">
+            <button class="left-action-btn" onclick="callHaService('cover', 'open_cover', {entity_id: '${escapeHtml(found.entity_id)}'})" style="flex:1; padding:0.6rem; font-size:0.9rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+              ▲ ÖFFNEN
+            </button>
+            <button class="left-action-btn" onclick="callHaService('cover', 'stop_cover', {entity_id: '${escapeHtml(found.entity_id)}'})" style="flex:1; padding:0.6rem; font-size:0.9rem; border-color:var(--c-red); color:var(--c-red);">
+              ■ STOPP
+            </button>
+            <button class="left-action-btn" onclick="callHaService('cover', 'close_cover', {entity_id: '${escapeHtml(found.entity_id)}'})" style="flex:1; padding:0.6rem; font-size:0.9rem; border-color:var(--c-blue); color:var(--c-blue);">
+              ▼ SCHLIESSEN
+            </button>
+          </div>
+
+          <div class="ha-ctrl-label">
+            <span>POSITION</span>
+            <span id="haCoverPosVal" style="font-family:var(--mono-family);">${pos}%</span>
+          </div>
+          <input type="range" min="0" max="100" value="${pos}" class="ha-slider" 
+                 oninput="document.getElementById('haCoverPosVal').textContent = this.value + '%'"
+                 onchange="callHaService('cover', 'set_cover_position', {entity_id: '${escapeHtml(found.entity_id)}', position: parseInt(this.value)})">
+        </div>
+      `;
+    }
+
+    // 4. MEDIA PLAYER CONTROLS
+    else if (found.domain === 'media_player') {
+      const vol = ctrl.volume_pct ?? 50;
+      controlsHtml += `
+        <div class="ha-ctrl-row">
+          ${ctrl.media_title ? `
+            <div style="background:rgba(0,0,0,0.4); border-radius:6px; padding:0.75rem; margin-bottom:1rem; text-align:center;">
+              <div style="font-size:1.1rem; font-weight:700; color:#fff;">${escapeHtml(ctrl.media_title)}</div>
+              <div style="font-size:0.85rem; color:var(--c-gold);">${escapeHtml(ctrl.media_artist || '')}</div>
+            </div>
+          ` : ''}
+
+          <div class="ha-ctrl-label">
+            <span>WIEDERGABE</span>
+          </div>
+          <div style="display:flex; gap:0.4rem; justify-content:center; margin-bottom:1.2rem;">
+            <button class="left-action-btn" onclick="callHaService('media_player', 'media_previous_track', {entity_id: '${escapeHtml(found.entity_id)}'})" style="padding:0.5rem 0.8rem; font-size:1rem;">⏮</button>
+            <button class="left-action-btn" onclick="callHaService('media_player', 'media_play_pause', {entity_id: '${escapeHtml(found.entity_id)}'})" style="padding:0.5rem 1.2rem; font-size:1.1rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">⏯ PLAY / PAUSE</button>
+            <button class="left-action-btn" onclick="callHaService('media_player', 'media_stop', {entity_id: '${escapeHtml(found.entity_id)}'})" style="padding:0.5rem 0.8rem; font-size:1rem;">⏹</button>
+            <button class="left-action-btn" onclick="callHaService('media_player', 'media_next_track', {entity_id: '${escapeHtml(found.entity_id)}'})" style="padding:0.5rem 0.8rem; font-size:1rem;">⏭</button>
+          </div>
+
+          <div class="ha-ctrl-label">
+            <span>LAUTSTÄRKE</span>
+            <span id="haVolVal" style="font-family:var(--mono-family);">${vol}%</span>
+          </div>
+          <input type="range" min="0" max="100" value="${vol}" class="ha-slider" 
+                 oninput="document.getElementById('haVolVal').textContent = this.value + '%'"
+                 onchange="callHaService('media_player', 'volume_set', {entity_id: '${escapeHtml(found.entity_id)}', volume_level: parseFloat(this.value) / 100})">
+        </div>
+      `;
+    }
+
+    // 5. VACUUM CONTROLS
+    else if (found.domain === 'vacuum') {
+      const bat = ctrl.battery_level;
+      controlsHtml += `
+        <div class="ha-ctrl-row">
+          ${bat !== undefined ? `
+            <div style="background:rgba(0,0,0,0.4); border-radius:6px; padding:0.6rem 1rem; margin-bottom:1rem; display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:0.85rem; color:#aaa;">BATTERIE</span>
+              <span style="font-size:1.1rem; font-weight:700; color:${bat > 20 ? '#44dd88' : 'var(--c-red)'}; font-family:var(--mono-family);">${bat}% 🔋</span>
+            </div>
+          ` : ''}
+
+          <div class="ha-ctrl-label">
+            <span>REINIGUNG STEUERN</span>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.6rem; margin-top:0.4rem;">
+            <button class="left-action-btn" onclick="callHaService('vacuum', 'start', {entity_id: '${escapeHtml(found.entity_id)}'})" style="padding:0.6rem; font-size:0.85rem; border-color:#44dd88; color:#44dd88; font-weight:700;">
+              ▶ REINIGEN STARTEN
+            </button>
+            <button class="left-action-btn" onclick="callHaService('vacuum', 'pause', {entity_id: '${escapeHtml(found.entity_id)}'})" style="padding:0.6rem; font-size:0.85rem; border-color:var(--c-gold); color:var(--c-gold);">
+              ⏸ PAUSIEREN
+            </button>
+            <button class="left-action-btn" onclick="callHaService('vacuum', 'return_to_base', {entity_id: '${escapeHtml(found.entity_id)}'})" style="padding:0.6rem; font-size:0.85rem; border-color:var(--c-blue); color:var(--c-blue); font-weight:700;">
+              🏠 ZUR LADESTATION
+            </button>
+            <button class="left-action-btn" onclick="callHaService('vacuum', 'locate', {entity_id: '${escapeHtml(found.entity_id)}'})" style="padding:0.6rem; font-size:0.85rem; border-color:var(--c-secondary); color:var(--c-secondary);">
+              🔊 LOKALISIEREN (BEEP)
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    // 6. NUMBER CONTROLS
+    else if (found.domain === 'number' || found.domain === 'input_number') {
+      const min = ctrl.min_val ?? 0;
+      const max = ctrl.max_val ?? 255;
+      const step = ctrl.step_val ?? 1;
+      const cur = parseFloat(found.state) || min;
+      controlsHtml += `
+        <div class="ha-ctrl-row">
+          <div class="ha-ctrl-label">
+            <span>WERT EINSTELLEN</span>
+            <span id="haNumVal" style="font-family:var(--mono-family);">${cur}</span>
+          </div>
+          <input type="range" min="${min}" max="${max}" step="${step}" value="${cur}" class="ha-slider" 
+                 oninput="document.getElementById('haNumVal').textContent = this.value"
+                 onchange="callHaService('${found.domain}', 'set_value', {entity_id: '${escapeHtml(found.entity_id)}', value: parseFloat(this.value)})">
+        </div>
+      `;
+    }
+
+    // 7. SELECT CONTROLS
+    else if (found.domain === 'select' || found.domain === 'input_select') {
+      const opts = ctrl.options || [];
+      controlsHtml += `
+        <div class="ha-ctrl-row">
+          <div class="ha-ctrl-label">
+            <span>OPTION WÄHLEN</span>
+          </div>
+          <select class="lcars-input" style="width:100%; margin-top:0.4rem;" onchange="callHaService('${found.domain}', 'select_option', {entity_id: '${escapeHtml(found.entity_id)}', option: this.value})">
+            ${opts.map(o => `
+              <option value="${escapeHtml(o)}" ${found.state === o ? 'selected' : ''}>${escapeHtml(o)}</option>
+            `).join('')}
+          </select>
+        </div>
+      `;
+    }
+
+    // 8. BUTTON / SCENE / SCRIPT
+    else if (['button', 'scene', 'script', 'input_button'].includes(found.domain)) {
+      const srv = found.domain === 'scene' ? 'turn_on' : (found.domain === 'button' ? 'press' : 'turn_on');
+      controlsHtml += `
+        <div class="ha-ctrl-row" style="text-align:center; padding:1rem 0;">
+          <button class="left-action-btn" onclick="callHaService('${found.domain}', '${srv}', {entity_id: '${escapeHtml(found.entity_id)}'})" style="padding:0.75rem 2rem; font-size:1.1rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+            🔘 AKTION JETZT AUSFÜHREN
+          </button>
+        </div>
+      `;
+    }
+
+    // 9. SENSORS & ATTRIBUTES
+    else {
+      controlsHtml += `
+        <div class="ha-ctrl-row">
+          <div style="background:rgba(0,0,0,0.4); border-radius:6px; padding:1rem; font-family:var(--mono-family); font-size:0.85rem; color:#ccc;">
+            <div style="margin-bottom:0.4rem;"><strong style="color:var(--c-gold);">Zustand:</strong> ${escapeHtml(found.state)} ${escapeHtml(ctrl.unit || '')}</div>
+            <div style="margin-bottom:0.4rem;"><strong style="color:var(--c-gold);">Typ:</strong> ${escapeHtml(ctrl.device_class || found.domain)}</div>
+            ${found.last_changed ? `<div><strong style="color:var(--c-gold);">Aktualisiert:</strong> ${escapeHtml(found.last_changed.replace('T', ' ').slice(0, 19))}</div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    bodyEl.innerHTML = controlsHtml;
+    modal.style.display = 'flex';
+  }
+
+  function closeHaControlModal() {
+    playLcarsBeep(880, 440);
+    const modal = document.getElementById('haControlModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function handleModalBackdropClick(e) {
+    if (e.target && e.target.id === 'haControlModal') {
+      closeHaControlModal();
+    }
+  }
+
+  async function adjustClimateTemp(entityId, delta) {
+    if (!haCachedData) return;
+    let found = null;
+    for (const a of (haCachedData.areas || [])) {
+      found = a.entities.find(e => e.entity_id === entityId);
+      if (found) break;
+    }
+    if (!found) return;
+
+    const cur = found.controls?.temperature || 21.0;
+    const next = Math.round((cur + delta) * 10) / 10;
+    const labelEl = document.getElementById('haTargetTempVal');
+    if (labelEl) labelEl.textContent = next + '°C';
+    await callHaService('climate', 'set_temperature', { entity_id: entityId, temperature: next });
+  }
+
+  async function callHaService(domain, service, serviceData) {
+    playLcarsBeep(1200, 1600);
+    try {
+      const resp = await fetch('/api/homeassistant/service', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain, service, service_data: serviceData })
+      });
+      const res = await resp.json();
+      if (!res.success) {
+        console.warn('Service Call Error:', res.error);
+        playLcarsBeep(440, 220);
+      }
+      setTimeout(() => { loadHomeAssistantData(true); }, 350);
+    } catch(err) {
+      console.warn('callHaService error:', err);
+      playLcarsBeep(440, 220);
+    }
+  }
+
+  function startHaAutoRefresh() {
+    if (haAutoRefreshTimer) clearInterval(haAutoRefreshTimer);
+    haCountdownSeconds = 15;
+    updateHaCountdownUI();
+
+    haAutoRefreshTimer = setInterval(() => {
+      const sec = document.getElementById('section-homeassistant');
+      const isVisible = sec && sec.classList.contains('active-section') && !document.hidden;
+
+      if (!isVisible) {
+        haCountdownSeconds = 15;
+        return;
+      }
+
+      haCountdownSeconds--;
+      if (haCountdownSeconds <= 0) {
+        haCountdownSeconds = 15;
+        updateHaCountdownUI();
+        loadHomeAssistantData(false);
+      } else {
+        updateHaCountdownUI();
+      }
+    }, 1000);
+  }
+
   function playRedAlertKlaxon() {
     if (!soundEnabled) return;
     try {
@@ -7784,6 +9038,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       initHermesChart();
     });
     startFantasyAutoRefresh();
+    checkHomeAssistantConfig();
+    startHaAutoRefresh();
   }
 
   if (document.readyState === 'loading') {
@@ -7989,6 +9245,53 @@ if USE_FLASK:
             return jsonify(espn_client.fetch(force=True))
         return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
 
+    @app.route("/api/homeassistant/config", methods=["GET"])
+    def api_ha_config():
+        if ha_service:
+            return jsonify(ha_service.get_config(safe=True))
+        return jsonify({"configured": False, "error": "ha_service nicht verfügbar"}), 503
+
+    @app.route("/api/config/homeassistant", methods=["POST"])
+    def api_config_ha():
+        if not ha_service:
+            return jsonify({"success": False, "error": "ha_service nicht verfügbar"}), 503
+        data = request.get_json(silent=True) or {}
+        res = ha_service.save_config(data)
+        return jsonify(res)
+
+    @app.route("/api/homeassistant/test", methods=["POST"])
+    def api_ha_test():
+        if not ha_service:
+            return jsonify({"success": False, "error": "ha_service nicht verfügbar"}), 503
+        data = request.get_json(silent=True) or {}
+        res = ha_service.test_connection(
+            url=data.get("url"),
+            token=data.get("token"),
+            username=data.get("username"),
+            password=data.get("password")
+        )
+        return jsonify(res)
+
+    @app.route("/api/homeassistant/data", methods=["GET"])
+    def api_ha_data():
+        if not ha_service:
+            return jsonify({"success": False, "error": "ha_service nicht verfügbar"}), 503
+        return jsonify(ha_service.get_rooms_and_entities())
+
+    @app.route("/api/homeassistant/service", methods=["POST"])
+    def api_ha_service():
+        if not ha_service:
+            return jsonify({"success": False, "error": "ha_service nicht verfügbar"}), 503
+        data = request.get_json(silent=True) or {}
+        domain = data.get("domain", "")
+        service = data.get("service", "")
+        service_data = data.get("service_data", {})
+        if not domain or not service:
+            return jsonify({"success": False, "error": "Domain und Service erforderlich"}), 400
+        res = ha_service.call_service(domain, service, service_data)
+        return jsonify(res)
+
+
     def run_server():
         print("[START] Starte System Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
         app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
@@ -8075,6 +9378,22 @@ else:
                 force_val = (parsed.path == "/api/fantasy/refresh")
                 f_data = espn_client.fetch(force=force_val) if espn_client else {"status": "error", "message": "ESPN Service nicht verfügbar"}
                 data = json.dumps(f_data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/homeassistant/config":
+                cfg = ha_service.get_config(safe=True) if ha_service else {"configured": False}
+                data = json.dumps(cfg).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/homeassistant/data":
+                ha_data = ha_service.get_rooms_and_entities() if ha_service else {"success": False, "error": "ha_service nicht verfügbar"}
+                data = json.dumps(ha_data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
@@ -8207,6 +9526,56 @@ else:
                     resp = json.dumps({"error": "URL erforderlich"}).encode("utf-8")
                     status = 400
                 self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/config/homeassistant":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                res = ha_service.save_config(data) if ha_service else {"success": False}
+                resp = json.dumps(res).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/homeassistant/test":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                res = ha_service.test_connection(
+                    url=data.get("url"),
+                    token=data.get("token"),
+                    username=data.get("username"),
+                    password=data.get("password")
+                ) if ha_service else {"success": False}
+                resp = json.dumps(res).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/homeassistant/service":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                domain = data.get("domain", "")
+                service = data.get("service", "")
+                service_data = data.get("service_data", {})
+                res = ha_service.call_service(domain, service, service_data) if ha_service else {"success": False}
+                resp = json.dumps(res).encode("utf-8")
+                self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()
