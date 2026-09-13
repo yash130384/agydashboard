@@ -6,5 +6,13 @@
   "duration_seconds": 60,
   "gateway_check_interval_seconds": 600,
   "gateway_url": "http://127.0.0.1:20128",
-  "antigravity_ide_url": "https://antigravity.google.com/r/f9e18040-ab9a-4f0c-9d4a-2b4f5281af22-v2?p=c%2F3a633d37-def3-419b-ab1e-8498973ae694%3Fsection%3Dc15db4e2-c36e-442e-850b-0d28e944e2c6"
+  "antigravity_ide_url": "https://antigravity.google.com/r/f9e18040-ab9a-4f0c-9d4a-2b4f5281af22-v2?p=c%2F3a633d37-def3-419b-ab1e-8498973ae694%3Fsection%3Dc15db4e2-c36e-442e-850b-0d28e944e2c6",
+  "espn_fantasy": {
+    "enabled": true,
+    "league_id": 378649793,
+    "team_id": 17,
+    "season_year": 2026,
+    "swid": "{553C1E20-D00A-4967-8DEB-7B50CB7C5914}",
+    "espn_s2": "AEAgQbeHCIrgaePAfzf1jGiVgIXZHv1%2Fb%2FMKQqE5y3o%2BikszTjFrlNubnn6zhkwFO44Mmgeyp0I67iLVPFdi8rMZ35Ybn791r%2Bme9n7RhB4xwWMFeRGYA8aY7cBwOK%2FluIRBBkatk98g9Jr2GKcumt8l%2F0EfaY9woFIjTVciAlkduD6992NYqolAklw6xbENwSj66vG563%2FOqer82hZ%2BcnrnjlVNNSbwp0dfGVqCPjSSiR68ALYIqWju2lWVkC0jCh1oIasi2lO1B6biDYDQ9IUv8nQdGhmhpJgikUEkidht1ZRV4xKkZSLfnVqkSNXULY6aNzYwDRe414TgfTBOdYsa"
+  }
 }

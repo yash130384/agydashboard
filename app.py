@@ -66,6 +66,13 @@ except ImportError:
     USE_FLASK = False
     from http.server import HTTPServer, BaseHTTPRequestHandler
 
+# ESPN Fantasy Service Import
+try:
+    from espn_service import espn_client
+except Exception as _espn_err:
+    espn_client = None
+    print(f"[WARN] espn_service konnte nicht importiert werden: {_espn_err}", file=sys.stderr)
+
 
 # ---------------------------------------------------------------------------
 # Basis Service-Registry für Web-Services
@@ -2953,6 +2960,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .pill-ai    { background-color: var(--c-secondary); }
     .pill-info  { background-color: var(--c-butterscotch); }
     .pill-cfg   { background-color: var(--c-gold); }
+    .pill-fantasy { background-color: var(--c-almond); }
+
+    @keyframes pulseScoreGain {
+      0% {
+        background-color: rgba(68, 221, 136, 0.28);
+        box-shadow: inset 0 0 14px rgba(68, 221, 136, 0.5);
+      }
+      50% {
+        background-color: rgba(68, 221, 136, 0.08);
+        box-shadow: inset 0 0 4px rgba(68, 221, 136, 0.2);
+      }
+      100% {
+        background-color: rgba(68, 221, 136, 0.28);
+        box-shadow: inset 0 0 14px rgba(68, 221, 136, 0.5);
+      }
+    }
+    .player-scored-highlight {
+      animation: pulseScoreGain 2.4s infinite ease-in-out !important;
+      border-left: 4px solid #44dd88 !important;
+    }
 
     .left-frame-lower {
       display: flex;
@@ -3972,6 +3999,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </button>
         <button class="lcars-pill-btn pill-cfg" onclick="switchCategory('config')" id="btn-cat-config">
           CONFIG
+        </button>
+        <button class="lcars-pill-btn pill-fantasy" onclick="switchCategory('fantasy')" id="btn-cat-fantasy">
+          FANTASY
         </button>
       </nav>
 
@@ -5070,6 +5100,166 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
+        <!-- KATEGORIE 6: ESPN FANTASY FOOTBALL (INCOMPLETE PASS) -->
+        <section class="lcars-section" id="section-fantasy">
+          <div class="lcars-header-bar">
+            <span class="lcars-pill-tag">ESPN // LIVE METRIKEN</span>
+            <h2 id="fantasySectionTitle">LCARS SUBRAUM RELAY // INCOMPLETE PASS LIGA</h2>
+            <div style="margin-left:auto; display:flex; gap:0.6rem; align-items:center;">
+              <span style="font-size:0.75rem; color:#44dd88; background:rgba(68,221,136,0.15); border:1px solid rgba(68,221,136,0.4); padding:0.2rem 0.5rem; border-radius:10px; font-family:var(--mono-family);">
+                ● AUTO 30S
+              </span>
+              <span id="fantasyLastUpdate" style="font-size:0.8rem; color:var(--c-gold); font-family:var(--mono-family);">LÄDT...</span>
+              <button class="left-action-btn" style="border-radius:14px; min-height:32px; padding:0.3rem 0.8rem;" onclick="loadFantasyData(true)">
+                <span>⟳</span> <span>AKTUALISIEREN</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- STATUS & OVERVIEW CARDS -->
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:1rem; margin-top:1rem; width:100%;">
+            <div class="lcars-card">
+              <div class="card-head-title">MEIN TEAM</div>
+              <div style="font-size:1.4rem; font-weight:700; color:var(--c-primary); letter-spacing:0.04em; margin-top:0.3rem;" id="fantasyCardTeamName">
+                NORDERSTEDT RAILSGUNS
+              </div>
+              <div style="font-size:0.85rem; color:#aaa; margin-top:0.25rem;">
+                Liga: <strong style="color:var(--c-gold);" id="fantasyCardLeagueName">Incomplete Pass</strong> (16 Teams)
+              </div>
+            </div>
+
+            <div class="lcars-card">
+              <div class="card-head-title">LIGA POSITION & BILANZ</div>
+              <div style="display:flex; align-items:baseline; gap:0.6rem; margin-top:0.3rem;">
+                <span style="font-size:1.6rem; font-weight:700; color:var(--c-gold);" id="fantasyCardRank">RANG #--</span>
+                <span style="font-size:0.9rem; color:#aaa;" id="fantasyCardRecord">(0-0-0)</span>
+              </div>
+              <div style="font-size:0.85rem; color:#aaa; margin-top:0.25rem;">
+                Gesamtpunkte: <strong style="color:var(--c-blue);" id="fantasyCardTotalPoints">-- PTS</strong>
+              </div>
+            </div>
+
+            <div class="lcars-card">
+              <div class="card-head-title">SPIELTAGS-STATUS</div>
+              <div style="font-size:1.4rem; font-weight:700; color:var(--c-secondary); margin-top:0.3rem;" id="fantasyCardWeek">
+                WEEK 1
+              </div>
+              <div style="font-size:0.85rem; color:#44dd88; margin-top:0.25rem;" id="fantasyCardMatchupStatus">
+                ● LIVE IN PROGRESS
+              </div>
+            </div>
+          </div>
+
+          <!-- MATCHUP CARD -->
+          <div class="lcars-card" style="margin-top:1.25rem;">
+            <div class="card-head-title">AKTUELLER SPIELTAG // MATCHUP DUELL</div>
+            <div id="fantasyMatchupContainer" style="margin-top:0.8rem;">
+              <div style="display:grid; grid-template-columns: 1fr auto 1fr; gap:1rem; align-items:center; text-align:center;">
+                
+                <!-- My Team -->
+                <div style="padding:1rem; background:rgba(235,148,58,0.08); border:1px solid rgba(235,148,58,0.3); border-radius:10px;">
+                  <div style="font-size:0.8rem; color:var(--c-primary); font-weight:700; letter-spacing:0.06em;">MEIN TEAM</div>
+                  <div style="font-size:1.3rem; font-weight:700; color:#fff; margin:0.3rem 0;" id="fantasyMatchupMyName">Norderstedt Railsguns</div>
+                  <div style="font-size:2.4rem; font-weight:800; color:var(--c-gold); font-family:var(--mono-family);" id="fantasyMatchupMyScore">0.0</div>
+                  <div style="font-size:0.85rem; color:#aaa; margin-top:0.2rem;">
+                    Prognose: <span style="color:var(--c-blue);" id="fantasyMatchupMyProj">--</span> PTS
+                  </div>
+                  <div style="font-size:0.85rem; color:var(--c-primary); font-weight:700; margin-top:0.4rem;">
+                    Siegchance: <span id="fantasyMatchupMyWinProb">--</span>%
+                  </div>
+                </div>
+
+                <!-- VS Badge -->
+                <div style="display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                  <span style="font-size:1.4rem; font-weight:800; color:var(--c-red); font-family:var(--font-family); letter-spacing:0.1em;">VS</span>
+                  <span style="font-size:0.75rem; color:#888; margin-top:0.2rem;" id="fantasyMatchupWeekBadge">WEEK 1</span>
+                </div>
+
+                <!-- Opponent Team -->
+                <div style="padding:1rem; background:rgba(136,153,255,0.08); border:1px solid rgba(136,153,255,0.3); border-radius:10px;">
+                  <div style="font-size:0.8rem; color:var(--c-blue); font-weight:700; letter-spacing:0.06em;">GEGNER</div>
+                  <div style="font-size:1.3rem; font-weight:700; color:#fff; margin:0.3rem 0;" id="fantasyMatchupOppName">Opponent</div>
+                  <div style="font-size:2.4rem; font-weight:800; color:var(--c-gold); font-family:var(--mono-family);" id="fantasyMatchupOppScore">0.0</div>
+                  <div style="font-size:0.85rem; color:#aaa; margin-top:0.2rem;">
+                    Prognose: <span style="color:var(--c-blue);" id="fantasyMatchupOppProj">--</span> PTS
+                  </div>
+                  <div style="font-size:0.85rem; color:var(--c-blue); font-weight:700; margin-top:0.4rem;">
+                    Siegchance: <span id="fantasyMatchupOppWinProb">--</span>%
+                  </div>
+                </div>
+
+              </div>
+
+              <!-- Win Probability Progress Bar -->
+              <div style="margin-top:1.2rem;">
+                <div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:0.3rem; font-family:var(--mono-family);">
+                  <span style="color:var(--c-primary);" id="fantasyProbLabelMy">Norderstedt Railsguns: 50%</span>
+                  <span style="color:var(--c-blue);" id="fantasyProbLabelOpp">Gegner: 50%</span>
+                </div>
+                <div style="height:10px; width:100%; background:rgba(255,255,255,0.1); border-radius:5px; display:flex; overflow:hidden;">
+                  <div id="fantasyProbBarMy" style="width:50%; background:var(--c-primary); transition:width 0.4s ease;"></div>
+                  <div id="fantasyProbBarOpp" style="width:50%; background:var(--c-blue); transition:width 0.4s ease;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ROSTER & STANDINGS 2-COLUMN GRID -->
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap:1.25rem; margin-top:1.25rem; width:100%;">
+            
+            <!-- KADER & AUFSTELLUNG -->
+            <div class="lcars-card">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                <div class="card-head-title" style="margin-bottom:0;">AUFSTELLUNG & KADER</div>
+                <span class="lcars-pill-tag" style="font-size:0.75rem;">STARTERS & BENCH</span>
+              </div>
+              <div style="overflow-x:auto; max-height:480px; overflow-y:auto;">
+                <table style="width:100%; border-collapse:collapse; font-size:0.86rem; text-align:left;">
+                  <thead>
+                    <tr style="border-bottom:2px solid var(--c-primary); color:var(--c-primary); font-family:var(--font-family); letter-spacing:0.06em; position:sticky; top:0; background:var(--c-card-bg); z-index:1;">
+                      <th style="padding:0.4rem 0.3rem;">SLOT</th>
+                      <th style="padding:0.4rem 0.4rem;">SPIELER</th>
+                      <th style="padding:0.4rem 0.3rem;">TEAM</th>
+                      <th style="padding:0.4rem 0.3rem;">STATUS</th>
+                      <th style="padding:0.4rem 0.4rem; text-align:right;">PROJ</th>
+                      <th style="padding:0.4rem 0.4rem; text-align:right;">LIVE</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fantasyRosterBody">
+                    <tr><td colspan="6" style="padding:1rem; text-align:center; color:#888;">Lade Kaderdaten...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- LIGA-TABELLE (STANDINGS) -->
+            <div class="lcars-card">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                <div class="card-head-title" style="margin-bottom:0;">LIGA-TABELLE // STANDINGS</div>
+                <span class="lcars-pill-tag" style="font-size:0.75rem;">16 TEAMS</span>
+              </div>
+              <div style="overflow-x:auto; max-height:480px; overflow-y:auto;">
+                <table style="width:100%; border-collapse:collapse; font-size:0.86rem; text-align:left;">
+                  <thead>
+                    <tr style="border-bottom:2px solid var(--c-primary); color:var(--c-primary); font-family:var(--font-family); letter-spacing:0.06em; position:sticky; top:0; background:var(--c-card-bg); z-index:1;">
+                      <th style="padding:0.4rem 0.3rem;">#</th>
+                      <th style="padding:0.4rem 0.4rem;">TEAM</th>
+                      <th style="padding:0.4rem 0.4rem; text-align:center;">W-L-T</th>
+                      <th style="padding:0.4rem 0.4rem; text-align:right;">PF</th>
+                      <th style="padding:0.4rem 0.4rem; text-align:right;">PA</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fantasyStandingsBody">
+                    <tr><td colspan="5" style="padding:1rem; text-align:center; color:#888;">Lade Tabelle...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+
+        </section>
+
       </main>
     </div>
   </div>
@@ -5223,13 +5413,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   });
 
-  // 5 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
+  // 6 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
   const CATEGORY_NAMES = {
     'system': 'SYSTEM & SENSOR VERLAUF',
     'services': 'SERVICES & PROZESS-SCANNER',
     'agents': 'LCARS SUBRAUM COMM-LINK // KI-AGENTEN',
     'ai-info': 'KI-INFO // 9ROUTER & NEURAL TELEMETRIE',
-    'config': 'SYSTEM CONFIG & FARBMODI'
+    'config': 'SYSTEM CONFIG & FARBMODI',
+    'fantasy': 'ESPN FANTASY FOOTBALL // INCOMPLETE PASS'
   };
 
   function switchCategory(catId) {
@@ -5280,6 +5471,197 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         initHermesChart();
       }, 60);
     }
+    if (catId === 'fantasy') {
+      setTimeout(() => {
+        loadFantasyData(false);
+      }, 60);
+    }
+  }
+
+  // ESPN FANTASY CONTROLLER
+  let isFantasyLoading = false;
+  async function loadFantasyData(force = false) {
+    if (isFantasyLoading) return;
+    isFantasyLoading = true;
+    const lastUpdateEl = document.getElementById('fantasyLastUpdate');
+    if (lastUpdateEl) lastUpdateEl.textContent = force ? 'AKTUALISIERE...' : 'LÄDT...';
+
+    try {
+      const url = force ? '/api/fantasy/refresh' : '/api/fantasy';
+      const resp = await fetch(url);
+      const data = await resp.json();
+
+      if (data.status === 'error') {
+        if (lastUpdateEl) lastUpdateEl.textContent = 'FEHLER: ' + (data.message || 'ESPN API');
+        isFantasyLoading = false;
+        return;
+      }
+
+      // League & Team info
+      if (document.getElementById('fantasySectionTitle') && data.league_name) {
+        document.getElementById('fantasySectionTitle').textContent = `LCARS SUBRAUM RELAY // ${data.league_name.toUpperCase()} LIGA`;
+      }
+      if (document.getElementById('fantasyCardTeamName')) {
+        document.getElementById('fantasyCardTeamName').textContent = data.team_name || 'NORDERSTEDT RAILSGUNS';
+      }
+      if (document.getElementById('fantasyCardLeagueName')) {
+        document.getElementById('fantasyCardLeagueName').textContent = data.league_name || 'Incomplete Pass';
+      }
+      if (document.getElementById('fantasyCardRank')) {
+        document.getElementById('fantasyCardRank').textContent = `RANG #${data.my_rank || '--'}`;
+      }
+
+      // My team record & points in standings
+      const myTeamStanding = (data.standings || []).find(s => s.is_my_team);
+      if (myTeamStanding) {
+        if (document.getElementById('fantasyCardRecord')) {
+          document.getElementById('fantasyCardRecord').textContent = `(${myTeamStanding.wins}-${myTeamStanding.losses}-${myTeamStanding.ties})`;
+        }
+        if (document.getElementById('fantasyCardTotalPoints')) {
+          document.getElementById('fantasyCardTotalPoints').textContent = `${Number(myTeamStanding.points_for).toFixed(1)} PTS`;
+        }
+      }
+
+      if (document.getElementById('fantasyCardWeek')) {
+        document.getElementById('fantasyCardWeek').textContent = `WEEK ${data.current_week || 1}`;
+      }
+
+      // Matchup
+      if (data.matchup) {
+        const m = data.matchup;
+        if (document.getElementById('fantasyMatchupWeekBadge')) {
+          document.getElementById('fantasyMatchupWeekBadge').textContent = `WEEK ${m.week}`;
+        }
+        if (document.getElementById('fantasyMatchupMyName')) {
+          document.getElementById('fantasyMatchupMyName').textContent = m.my_team.name;
+        }
+        if (document.getElementById('fantasyMatchupMyScore')) {
+          document.getElementById('fantasyMatchupMyScore').textContent = Number(m.my_team.score).toFixed(1);
+        }
+        if (document.getElementById('fantasyMatchupMyProj')) {
+          document.getElementById('fantasyMatchupMyProj').textContent = m.my_team.projected != null ? Number(m.my_team.projected).toFixed(1) : '--';
+        }
+        if (document.getElementById('fantasyMatchupMyWinProb')) {
+          document.getElementById('fantasyMatchupMyWinProb').textContent = m.my_team.win_prob;
+        }
+
+        if (document.getElementById('fantasyMatchupOppName')) {
+          document.getElementById('fantasyMatchupOppName').textContent = m.opponent.name;
+        }
+        if (document.getElementById('fantasyMatchupOppScore')) {
+          document.getElementById('fantasyMatchupOppScore').textContent = Number(m.opponent.score).toFixed(1);
+        }
+        if (document.getElementById('fantasyMatchupOppProj')) {
+          document.getElementById('fantasyMatchupOppProj').textContent = m.opponent.projected != null ? Number(m.opponent.projected).toFixed(1) : '--';
+        }
+        if (document.getElementById('fantasyMatchupOppWinProb')) {
+          document.getElementById('fantasyMatchupOppWinProb').textContent = m.opponent.win_prob;
+        }
+
+        // Win prob bar
+        if (document.getElementById('fantasyProbLabelMy')) {
+          document.getElementById('fantasyProbLabelMy').textContent = `${m.my_team.name}: ${m.my_team.win_prob}%`;
+        }
+        if (document.getElementById('fantasyProbLabelOpp')) {
+          document.getElementById('fantasyProbLabelOpp').textContent = `${m.opponent.name}: ${m.opponent.win_prob}%`;
+        }
+        if (document.getElementById('fantasyProbBarMy')) {
+          document.getElementById('fantasyProbBarMy').style.width = `${Math.max(5, Math.min(95, m.my_team.win_prob))}%`;
+        }
+        if (document.getElementById('fantasyProbBarOpp')) {
+          document.getElementById('fantasyProbBarOpp').style.width = `${Math.max(5, Math.min(95, m.opponent.win_prob))}%`;
+        }
+      }
+
+      // Roster Table
+      const rosterBody = document.getElementById('fantasyRosterBody');
+      if (rosterBody && data.roster) {
+        let html = '';
+        let benchStarted = false;
+        data.roster.forEach(p => {
+          if (!p.is_starter && !benchStarted) {
+            benchStarted = true;
+            html += `<tr style="border-top:2px solid var(--c-primary); background:rgba(255,255,255,0.03);">
+              <td colspan="6" style="padding:0.4rem; font-size:0.75rem; color:var(--c-gold); font-weight:700; letter-spacing:0.08em;">-- BENCH & RESERVES --</td>
+            </tr>`;
+          }
+
+          let injBadge = '<span style="color:#44dd88; font-size:0.75rem;">AKTIV</span>';
+          if (p.injury === 'QUESTIONABLE') {
+            injBadge = '<span style="color:var(--c-gold); font-weight:700; font-size:0.75rem;">QUESTIONABLE</span>';
+          } else if (p.injury === 'DOUBTFUL') {
+            injBadge = '<span style="color:var(--c-butterscotch); font-weight:700; font-size:0.75rem;">DOUBTFUL</span>';
+          } else if (p.injury === 'OUT') {
+            injBadge = '<span style="color:var(--c-red); font-weight:700; font-size:0.75rem;">OUT</span>';
+          } else if (p.injury === 'INJURY_RESERVE') {
+            injBadge = '<span style="color:var(--c-secondary); font-weight:700; font-size:0.75rem;">IR</span>';
+          }
+
+          const slotColor = p.is_starter ? 'var(--c-primary)' : '#888';
+          const pointsColor = (p.actual > 0) ? 'var(--c-gold)' : '#aaa';
+          const isRecentScore = !!p.is_recently_scored;
+          const rowClass = isRecentScore ? 'class="player-scored-highlight"' : '';
+          const scoreBadge = isRecentScore 
+            ? `<span style="display:inline-block; margin-left:6px; background:#44dd88; color:#000; font-weight:800; font-size:0.7rem; padding:1px 5px; border-radius:4px; vertical-align:middle;" title="Punkte vor ca. ${p.gain_minutes_ago || 1} Min. erhalten">▲ +${p.score_gain || ''}</span>` 
+            : '';
+
+          html += `<tr ${rowClass} style="border-bottom:1px solid rgba(255,255,255,0.06); font-family:var(--mono-family);">
+            <td style="padding:0.4rem 0.3rem; font-weight:700; color:${slotColor};">${p.slot}</td>
+            <td style="padding:0.4rem 0.4rem; font-family:var(--font-family); font-weight:600; color:#fff;">${p.name}${scoreBadge}</td>
+            <td style="padding:0.4rem 0.3rem; color:var(--c-blue);">${p.pro_team}</td>
+            <td style="padding:0.4rem 0.3rem;">${injBadge}</td>
+            <td style="padding:0.4rem 0.4rem; text-align:right; color:#888;">${p.projected != null ? Number(p.projected).toFixed(1) : '--'}</td>
+            <td style="padding:0.4rem 0.4rem; text-align:right; font-weight:700; color:${isRecentScore ? '#44dd88' : pointsColor}; font-size:0.95rem;">${Number(p.actual).toFixed(1)}</td>
+          </tr>`;
+        });
+        rosterBody.innerHTML = html;
+      }
+
+      // Standings Table
+      const standingsBody = document.getElementById('fantasyStandingsBody');
+      if (standingsBody && data.standings) {
+        let html = '';
+        data.standings.forEach((s, idx) => {
+          const isMe = s.is_my_team;
+          const rowBg = isMe ? 'background:rgba(235,148,58,0.18); border-left:3px solid var(--c-primary);' : 'border-bottom:1px solid rgba(255,255,255,0.06);';
+          const nameColor = isMe ? 'var(--c-gold)' : '#fff';
+          const fontW = isMe ? 'font-weight:700;' : '';
+
+          html += `<tr style="${rowBg} font-family:var(--mono-family);">
+            <td style="padding:0.4rem 0.3rem; color:var(--c-primary); font-weight:700;">#${idx + 1}</td>
+            <td style="padding:0.4rem 0.4rem; font-family:var(--font-family); ${fontW} color:${nameColor};">
+              ${s.name} ${isMe ? '<span style="font-size:0.75rem; color:var(--c-primary); margin-left:4px;">★ MEIN TEAM</span>' : ''}
+            </td>
+            <td style="padding:0.4rem 0.4rem; text-align:center; color:#ccc;">${s.wins}-${s.losses}-${s.ties}</td>
+            <td style="padding:0.4rem 0.4rem; text-align:right; font-weight:700; color:var(--c-blue);">${Number(s.points_for).toFixed(1)}</td>
+            <td style="padding:0.4rem 0.4rem; text-align:right; color:#888;">${Number(s.points_against).toFixed(1)}</td>
+          </tr>`;
+        });
+        standingsBody.innerHTML = html;
+      }
+
+      if (lastUpdateEl && data.updated_at) {
+        lastUpdateEl.textContent = 'STAND: ' + data.updated_at;
+      }
+
+    } catch (e) {
+      console.error('ESPN Fantasy Ladefehler:', e);
+      if (lastUpdateEl) lastUpdateEl.textContent = 'FEHLER BEIM LADEN';
+    } finally {
+      isFantasyLoading = false;
+    }
+  }
+
+  // Auto-Refresh für Fantasy (alle 30 Sekunden wenn Tab geöffnet ist)
+  let fantasyAutoRefreshTimer = null;
+  function startFantasyAutoRefresh() {
+    if (fantasyAutoRefreshTimer) clearInterval(fantasyAutoRefreshTimer);
+    fantasyAutoRefreshTimer = setInterval(() => {
+      const sec = document.getElementById('section-fantasy');
+      if (sec && sec.classList.contains('active-section') && !document.hidden) {
+        loadFantasyData(false);
+      }
+    }, 30000);
   }
 
   // Red Alert Klaxon Alarm Sound (Authentischer Star Trek Doppel-Sirenen-Warble)
@@ -7363,6 +7745,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       initNineRouterCharts();
       initHermesChart();
     });
+    startFantasyAutoRefresh();
   }
 
   if (document.readyState === 'loading') {
@@ -7556,6 +7939,18 @@ if USE_FLASK:
             return jsonify({"error": "URL erforderlich"}), 400
         return jsonify({"url": alert_monitor.config.get("antigravity_ide_url", "")})
 
+    @app.route("/api/fantasy")
+    def api_fantasy():
+        if espn_client:
+            return jsonify(espn_client.fetch(force=False))
+        return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
+
+    @app.route("/api/fantasy/refresh", methods=["GET", "POST"])
+    def api_fantasy_refresh():
+        if espn_client:
+            return jsonify(espn_client.fetch(force=True))
+        return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
+
     def run_server():
         print("[START] Starte System Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
         app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
@@ -7633,6 +8028,15 @@ else:
                 self.wfile.write(data)
             elif parsed.path == "/api/config/ide-url":
                 data = json.dumps({"url": alert_monitor.config.get("antigravity_ide_url", "")}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path in ("/api/fantasy", "/api/fantasy/refresh"):
+                force_val = (parsed.path == "/api/fantasy/refresh")
+                f_data = espn_client.fetch(force=force_val) if espn_client else {"status": "error", "message": "ESPN Service nicht verfügbar"}
+                data = json.dumps(f_data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
