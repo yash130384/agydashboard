@@ -2438,79 +2438,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       flex-direction: column;
       background-color: var(--elbow-top);
       border-radius: var(--elbow-radius);
-      padding: 0.5rem 0.65rem;
+      padding: 0.5rem;
       text-align: right;
       color: #000;
       font-weight: 700;
       justify-content: space-between;
       min-height: 120px;
-      user-select: none;
-      transition: background-color 0.25s ease;
     }
-    .left-frame-top:hover {
-      filter: brightness(1.05);
-    }
-    .top-stardate-block {
-      text-align: right;
-      line-height: 1.1;
-      padding-bottom: 0.25rem;
-      border-bottom: 2px solid rgba(0, 0, 0, 0.25);
-    }
-    .top-stardate-label {
-      font-size: 0.72rem;
-      font-family: var(--font-family);
-      letter-spacing: 1px;
-      color: rgba(0, 0, 0, 0.75);
-      font-weight: 800;
-    }
-    .top-stardate-value {
-      font-size: 1.15rem;
-      font-family: var(--mono-family);
-      font-weight: 800;
+    .left-frame-top button {
+      background: transparent;
+      border: none;
       color: #000;
-      letter-spacing: 0.5px;
-    }
-    .top-vitals-container {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.25rem 0.35rem;
-      margin-top: 0.35rem;
-    }
-    .top-vital-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-family: var(--mono-family);
-      font-size: 0.76rem;
+      font-family: var(--font-family);
+      font-size: 1.35rem;
       font-weight: 700;
-      color: #000;
-      background: rgba(0, 0, 0, 0.12);
-      padding: 0.18rem 0.35rem;
-      border-radius: 4px;
-      white-space: nowrap;
-      transition: background-color 0.25s ease, color 0.25s ease;
-    }
-    .top-vital-item.vital-alert {
-      background: #cf3030 !important;
-      color: #ffffff !important;
-      animation: pulse-vital 0.8s infinite alternate;
-    }
-    @keyframes pulse-vital {
-      from { opacity: 0.85; filter: brightness(1); }
-      to { opacity: 1; filter: brightness(1.3); }
-    }
-    .top-vital-icon {
-      font-size: 0.75rem;
-      line-height: 1;
-    }
-    .top-vital-label {
-      font-family: var(--font-family);
-      font-size: 0.68rem;
-      opacity: 0.85;
-      margin-right: 2px;
-    }
-    .top-vital-num {
-      font-weight: 800;
+      text-transform: uppercase;
+      text-align: right;
+      cursor: pointer;
+      line-height: 1.1;
+      padding: 0;
     }
 
     /* Red Alert Alarm Banner */
@@ -2649,27 +2595,89 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       padding-bottom: 0.35rem;
       overflow: hidden;
     }
-    .data-cascade {
+    .top-vitals-cascade {
       display: flex;
-      gap: 0.5rem;
-      font-family: var(--mono-family);
-      font-size: 0.75rem;
-      color: var(--data-cascade-color);
+      align-items: center;
+      gap: 0.45rem;
       user-select: none;
     }
-    .dc-col {
-      display: flex;
-      flex-direction: column;
-      line-height: 1.1;
-      text-align: right;
+    .top-vital-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.32rem;
+      padding: 0.2rem 0.55rem;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
+      font-weight: 700;
+      color: var(--data-cascade-color);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background-color 0.2s, border-color 0.2s, transform 0.15s;
     }
-    .dc-flash-1 { animation: dc-blink 2.2s infinite; }
-    .dc-flash-2 { animation: dc-blink 3.1s infinite 0.5s; }
-    .dc-flash-3 { animation: dc-blink 1.8s infinite 1s; }
-    @keyframes dc-blink {
-      0%, 100% { opacity: 0.9; color: var(--c-primary); }
-      50% { opacity: 0.3; color: var(--c-secondary); }
-      75% { opacity: 1; color: #fff; }
+    .top-vital-badge:hover {
+      background: rgba(255, 255, 255, 0.12);
+      transform: translateY(-1px);
+    }
+    .vital-badge-icon {
+      font-size: 0.76rem;
+      line-height: 1;
+    }
+    .vital-badge-label {
+      font-family: var(--font-family);
+      font-size: 0.72rem;
+      letter-spacing: 0.5px;
+      opacity: 0.85;
+    }
+    .vital-badge-num {
+      font-family: var(--mono-family);
+      font-weight: 800;
+      font-size: 0.82rem;
+      letter-spacing: 0.3px;
+    }
+
+    /* Pulsieren wie die bisherigen Fake-Zahlen (authentischer LCARS Telemetrie-Blink) */
+    .dc-pulse-1 { animation: vital-dc-blink 2.2s infinite; }
+    .dc-pulse-2 { animation: vital-dc-blink 3.1s infinite 0.5s; }
+    .dc-pulse-3 { animation: vital-dc-blink 2.6s infinite 1.0s; }
+    .dc-pulse-4 { animation: vital-dc-blink 2.0s infinite 1.5s; }
+
+    @keyframes vital-dc-blink {
+      0%, 100% {
+        opacity: 0.95;
+        color: var(--c-primary);
+        border-color: rgba(255, 170, 0, 0.45);
+      }
+      50% {
+        opacity: 0.45;
+        color: var(--c-secondary);
+        border-color: rgba(255, 170, 0, 0.12);
+      }
+      75% {
+        opacity: 1;
+        color: #ffffff;
+        border-color: rgba(255, 255, 255, 0.5);
+      }
+    }
+
+    /* Roter Alarm Modus für Badges */
+    .top-vital-badge.vital-alert {
+      background: rgba(207, 48, 48, 0.45) !important;
+      border-color: #ff3333 !important;
+      color: #ffffff !important;
+      animation: vital-alarm-flash 0.7s infinite alternate !important;
+    }
+    @keyframes vital-alarm-flash {
+      from {
+        opacity: 0.8;
+        border-color: #cf3030;
+        box-shadow: 0 0 5px rgba(255, 0, 0, 0.5);
+      }
+      to {
+        opacity: 1;
+        border-color: #ffffff;
+        box-shadow: 0 0 14px rgba(255, 0, 0, 0.9);
+      }
     }
 
     /* Segmentierte Balken */
@@ -3500,7 +3508,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
        ========================================================================== */
     @media (max-width: 860px) {
       :root { --lfw: 150px; --pill-height: 48px; }
-      .data-cascade { display: none; }
+      .top-vital-badge { padding: 0.12rem 0.35rem; font-size: 0.72rem; }
       .banner-title { font-size: 1.15rem; }
       main { padding: 0.6rem; }
     }
@@ -3512,6 +3520,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       .right-frame-top::before, .right-frame-top::after,
       .right-frame::after, .right-frame-inner-corner { display: none; }
       .banner-container { padding-left: 0.6rem; }
+      .data-cascade-bar { justify-content: flex-start; padding-left: 0.6rem; flex-wrap: wrap; }
       main { max-height: none; overflow: visible; }
     }
   </style>
@@ -3521,33 +3530,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <section class="wrap-standard">
   <!-- OBERER RAHMEN -->
   <div class="wrap">
-    <div class="left-frame-top" onclick="playLcarsBeep(880, 1760); switchCategory('system')" style="cursor:pointer;" title="ODN Telemetrie // Klicken für System-Details">
-      <div class="top-stardate-block">
-        <div class="top-stardate-label">STARDATE</div>
-        <div class="top-stardate-value" id="topStardateVal">{{ stats.stardate or '--------.-' }}</div>
-      </div>
-      <div class="top-vitals-container">
-        <div class="top-vital-item" id="topVitalCpu" title="CPU Auslastung">
-          <span class="top-vital-icon">⚡</span>
-          <span class="top-vital-label">CPU</span>
-          <span class="top-vital-num" id="topCpuVal">{{ stats.cpu.percent or 0 }}%</span>
-        </div>
-        <div class="top-vital-item" id="topVitalRam" title="Arbeitsspeicher (RAM)">
-          <span class="top-vital-icon">💾</span>
-          <span class="top-vital-label">RAM</span>
-          <span class="top-vital-num" id="topRamVal">{{ stats.ram.percent or 0 }}%</span>
-        </div>
-        <div class="top-vital-item" id="topVitalDisk" title="Festplatte (Root /)">
-          <span class="top-vital-icon">💽</span>
-          <span class="top-vital-label">DSK</span>
-          <span class="top-vital-num" id="topDiskVal">{{ stats.disk.percent or 0 }}%</span>
-        </div>
-        <div class="top-vital-item" id="topVitalTemp" title="SoC Temperatur">
-          <span class="top-vital-icon">🌡️</span>
-          <span class="top-vital-label">TMP</span>
-          <span class="top-vital-num" id="topTempVal">{{ (stats.temperature.value|round|int) if stats.temperature.value else '--' }}°</span>
-        </div>
-      </div>
+    <div class="left-frame-top">
+      <button onclick="playLcarsBeep(880, 1760); switchCategory('system')" title="Terminal 47 // Klicken für System-Details">TERMINAL 47<br><span style="font-size:0.8rem; opacity:0.85;">AGY-PI</span></button>
+      <div style="font-size: 0.8rem; font-family: var(--mono-family);">ONLINE</div>
     </div>
     <div class="right-frame-top">
       <div class="banner-container">
@@ -3558,11 +3543,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
       <div class="data-cascade-bar">
-        <div class="data-cascade">
-          <div class="dc-col dc-flash-1"><span>4701</span><span>8824</span><span>1209</span><span>9941</span></div>
-          <div class="dc-col dc-flash-2"><span>10482</span><span>33918</span><span>7402</span><span>18293</span></div>
-          <div class="dc-col dc-flash-3"><span>2904</span><span>5518</span><span>8024</span><span>3102</span></div>
-          <div class="dc-col dc-flash-1"><span>99104</span><span>44812</span><span>66301</span><span>77219</span></div>
+        <!-- PULSIERENDE TELEMETRIE STATUS-BADGES UNTER STARDATE -->
+        <div class="top-vitals-cascade" id="topVitalsCascade">
+          <div class="top-vital-badge dc-pulse-1" id="topVitalCpu" onclick="playLcarsBeep(880, 1760); switchCategory('system')" title="CPU Auslastung // Klicken für Details">
+            <span class="vital-badge-icon">⚡</span>
+            <span class="vital-badge-label">CPU</span>
+            <span class="vital-badge-num" id="topCpuVal">{{ stats.cpu.percent or 0 }}%</span>
+          </div>
+          <div class="top-vital-badge dc-pulse-2" id="topVitalRam" onclick="playLcarsBeep(880, 1760); switchCategory('system')" title="Arbeitsspeicher (RAM) // Klicken für Details">
+            <span class="vital-badge-icon">💾</span>
+            <span class="vital-badge-label">RAM</span>
+            <span class="vital-badge-num" id="topRamVal">{{ stats.ram.percent or 0 }}%</span>
+          </div>
+          <div class="top-vital-badge dc-pulse-3" id="topVitalDisk" onclick="playLcarsBeep(880, 1760); switchCategory('system')" title="Festplatte (Root /) // Klicken für Details">
+            <span class="vital-badge-icon">💽</span>
+            <span class="vital-badge-label">DSK</span>
+            <span class="vital-badge-num" id="topDiskVal">{{ stats.disk.percent or 0 }}%</span>
+          </div>
+          <div class="top-vital-badge dc-pulse-4" id="topVitalTemp" onclick="playLcarsBeep(880, 1760); switchCategory('system')" title="SoC Temperatur // Klicken für Details">
+            <span class="vital-badge-icon">🌡️</span>
+            <span class="vital-badge-label">TMP</span>
+            <span class="vital-badge-num" id="topTempVal">{{ (stats.temperature.value|round|int) if stats.temperature.value else '--' }}°</span>
+          </div>
         </div>
       </div>
       <div class="bar-panel">
