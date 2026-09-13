@@ -5,5 +5,6 @@
   "temp_threshold": 80.0,
   "duration_seconds": 60,
   "gateway_check_interval_seconds": 600,
-  "gateway_url": "http://127.0.0.1:20128"
+  "gateway_url": "http://127.0.0.1:20128",
+  "antigravity_ide_url": "https://antigravity.google.com/r/f9e18040-ab9a-4f0c-9d4a-2b4f5281af22-v2?p=c%2F3a633d37-def3-419b-ab1e-8498973ae694%3Fsection%3Dc15db4e2-c36e-442e-850b-0d28e944e2c6"
 }

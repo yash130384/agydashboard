@@ -32,6 +32,11 @@ import urllib.parse
 import urllib.request
 from collections import deque
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 # Automatische Installation von psutil falls nicht vorhanden
 try:
     import psutil
@@ -1862,6 +1867,7 @@ DEFAULT_ALERT_CONFIG = {
     "duration_seconds": 60,
     "gateway_check_interval_seconds": 600,
     "gateway_url": "http://127.0.0.1:20128",
+    "antigravity_ide_url": "https://antigravity.google.com/r/f9e18040-ab9a-4f0c-9d4a-2b4f5281af22-v2?p=c%2F3a633d37-def3-419b-ab1e-8498973ae694%3Fsection%3Dc15db4e2-c36e-442e-850b-0d28e944e2c6",
 }
 
 
@@ -1928,7 +1934,7 @@ class AlertMonitor:
                             self.config[k] = int(v)
                         except (ValueError, TypeError):
                             pass
-                    elif k == "gateway_url":
+                    elif k in ("gateway_url", "antigravity_ide_url"):
                         self.config[k] = str(v).strip()
             try:
                 with open(self.config_path, "w", encoding="utf-8") as f:
@@ -2103,6 +2109,187 @@ class AlertMonitor:
 
 alert_monitor = AlertMonitor()
 alert_monitor.start()
+
+
+# ---------------------------------------------------------------------------
+# Hermes Agent Helper Functions
+# ---------------------------------------------------------------------------
+def get_hermes_profiles():
+    """Liest alle verfügbaren Hermes Profile auf dem System aus (~/.hermes)."""
+    base = os.path.expanduser("~/.hermes")
+    if not os.path.isdir(base):
+        return []
+
+    try:
+        ps_out = subprocess.check_output(["ps", "aux"]).decode("utf-8", errors="ignore")
+    except Exception:
+        ps_out = ""
+
+    profiles = []
+
+    # 1. Default-Profil in ~/.hermes
+    cfg_file = os.path.join(base, "config.yaml")
+    model = "ag/gemini-3-flash"
+    provider = "custom (9Router)"
+    personality = "Standard System-Agent"
+    if os.path.exists(cfg_file):
+        try:
+            if yaml:
+                with open(cfg_file, "r", encoding="utf-8") as f:
+                    c = yaml.safe_load(f) or {}
+                    m = c.get("model", {})
+                    if isinstance(m, dict):
+                        model = m.get("default", model)
+                        provider = m.get("provider", provider)
+                    elif isinstance(m, str):
+                        model = m
+                    if c.get("personality"):
+                        personality = c.get("personality")
+        except Exception:
+            pass
+
+    def_gw = ("hermes_cli.main gateway run" in ps_out) or os.path.exists(os.path.join(base, "gateway.sock"))
+    profiles.append({
+        "name": "default",
+        "display_name": "Default Agent",
+        "is_default": True,
+        "model": model,
+        "provider": provider,
+        "personality": personality,
+        "gateway_running": def_gw,
+        "path": base,
+        "description": "Zentraler Hermes System-Agent // Star Trek ODN Core"
+    })
+
+    # 2. Named Profiles in ~/.hermes/profiles/*
+    p_dir = os.path.join(base, "profiles")
+    if os.path.isdir(p_dir):
+        for name in sorted(os.listdir(p_dir)):
+            p_path = os.path.join(p_dir, name)
+            if not os.path.isdir(p_path) or name.startswith("."):
+                continue
+            cfg_p = os.path.join(p_path, "config.yaml")
+            p_model = "ag/gemini-3-flash"
+            p_provider = "custom"
+            p_desc = ""
+            p_personality = ""
+            if os.path.exists(cfg_p):
+                try:
+                    if yaml:
+                        with open(cfg_p, "r", encoding="utf-8") as f:
+                            c = yaml.safe_load(f) or {}
+                            m = c.get("model", {})
+                            if isinstance(m, dict):
+                                p_model = m.get("default", p_model)
+                                p_provider = m.get("provider", p_provider)
+                            elif isinstance(m, str):
+                                p_model = m
+                            p_personality = c.get("personality", "")
+                            p_desc = c.get("description", "") or p_personality
+                except Exception:
+                    pass
+            soul_p = os.path.join(p_path, "SOUL.md")
+            if os.path.exists(soul_p) and not p_desc:
+                try:
+                    with open(soul_p, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line_s = line.strip()
+                            if line_s and not line_s.startswith("#"):
+                                p_desc = line_s[:100]
+                                break
+                except Exception:
+                    pass
+            gw_running = (f"--profile {name}" in ps_out)
+            profiles.append({
+                "name": name,
+                "display_name": name.capitalize(),
+                "is_default": False,
+                "model": p_model,
+                "provider": p_provider,
+                "personality": p_personality or name,
+                "gateway_running": gw_running,
+                "path": p_path,
+                "description": p_desc or f"Profil {name}"
+            })
+    return profiles
+
+
+def create_hermes_profile(name, description="", clone_from="default", model=""):
+    """Erstellt einen neuen Hermes Agenten über hermes profile create."""
+    clean_name = re.sub(r"[^a-z0-9_-]", "", name.lower().strip())
+    if not clean_name:
+        return {"success": False, "error": "Ungültiger Agenten-Name. Nur Kleinbuchstaben, Ziffern und Bindestriche erlaubt."}
+    if clean_name == "default":
+        return {"success": False, "error": "Der Name 'default' ist für das Hauptprofil reserviert."}
+
+    hermes_bin = "/home/yash/.local/bin/hermes"
+    if not os.path.exists(hermes_bin):
+        hermes_bin = "hermes"
+
+    cmd = [hermes_bin, "profile", "create", clean_name, "--clone"]
+    if clone_from and clone_from != "default":
+        cmd = [hermes_bin, "profile", "create", clean_name, "--clone-from", clone_from]
+    if description:
+        cmd.extend(["--description", description.strip()])
+
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=45)
+        out_combined = f"{res.stdout} {res.stderr}".lower()
+        if res.returncode != 0 and "already exists" not in out_combined:
+            return {"success": False, "error": f"Fehler beim Erstellen: {res.stderr or res.stdout}"}
+    except Exception as e:
+        return {"success": False, "error": f"Ausführungsfehler: {str(e)}"}
+
+    # Optionales Modell in der neu angelegten config.yaml hinterlegen
+    profile_cfg = os.path.expanduser(f"~/.hermes/profiles/{clean_name}/config.yaml")
+    if model and os.path.exists(profile_cfg) and yaml:
+        try:
+            with open(profile_cfg, "r", encoding="utf-8") as f:
+                c = yaml.safe_load(f) or {}
+            if "model" not in c or not isinstance(c["model"], dict):
+                c["model"] = {}
+            c["model"]["default"] = model.strip()
+            with open(profile_cfg, "w", encoding="utf-8") as f:
+                yaml.safe_dump(c, f)
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "name": clean_name,
+        "message": f"Hermes Agent '{clean_name}' erfolgreich initialisiert.",
+        "profiles": get_hermes_profiles()
+    }
+
+
+def hermes_chat_prompt(profile, message):
+    """Sendet einen Prompt an einen ausgewählten Hermes Agenten via One-Shot CLI."""
+    if not message or not message.strip():
+        return {"success": False, "error": "Leere Nachricht übermittelt."}
+
+    python_bin = "/home/yash/.hermes/hermes-agent/venv/bin/python"
+    if not os.path.exists(python_bin):
+        python_bin = sys.executable
+
+    cmd = [python_bin, "-m", "hermes_cli.main"]
+    if profile and profile != "default":
+        cmd.extend(["--profile", profile])
+    cmd.extend(["-z", message.strip()])
+
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=90)
+        output = (res.stdout or "").strip()
+        if not output and res.stderr:
+            output = f"[Hermes Fehler]: {res.stderr.strip()}"
+        return {
+            "success": res.returncode == 0,
+            "reply": output or "Keine Ausgabe vom Hermes-Agenten erhalten.",
+            "profile": profile or "default"
+        }
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Zeitüberschreitung (90s Timeout) beim Kommunizieren mit Hermes.", "reply": ""}
+    except Exception as e:
+        return {"success": False, "error": f"Verbindungsfehler: {str(e)}", "reply": ""}
 
 
 def fetch_chat_models():
@@ -3426,6 +3613,195 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       .lcars-chat-select { max-width: 180px; }
     }
 
+    /* ==========================================================================
+       KI-AGENTEN SUBGRUPPEN (9ROUTER, HERMES, ANTIGRAVITY IDE)
+       ========================================================================== */
+    .lcars-subnav-bar {
+      display: flex;
+      gap: 0.65rem;
+      margin: 0.6rem 0 1.1rem 0;
+      flex-wrap: wrap;
+      border-bottom: 2px solid rgba(255, 255, 255, 0.12);
+      padding-bottom: 0.8rem;
+    }
+    .lcars-subnav-pill {
+      background: rgba(0, 0, 0, 0.6);
+      border: 2px solid var(--c-primary);
+      color: var(--c-primary);
+      font-family: var(--font-family);
+      font-size: 0.95rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 0.5rem 1.25rem;
+      border-radius: 24px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.2s ease;
+      user-select: none;
+    }
+    .lcars-subnav-pill:hover {
+      background: rgba(255, 255, 255, 0.12);
+      transform: translateY(-1px);
+    }
+    .lcars-subnav-pill.active {
+      background: var(--c-primary);
+      color: #000;
+      box-shadow: 0 0 14px var(--c-primary);
+    }
+    .agent-subview {
+      display: none;
+    }
+    .agent-subview.active-subview {
+      display: block;
+      animation: subviewFadeIn 0.25s ease-out;
+    }
+    @keyframes subviewFadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Hermes Agent Cards & Interface */
+    .hermes-profiles-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+      margin-top: 0.75rem;
+      margin-bottom: 1.2rem;
+    }
+    .hermes-card {
+      background: rgba(12, 15, 24, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-left: 6px solid var(--c-secondary);
+      border-radius: 8px;
+      padding: 1rem 1.1rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 0.8rem;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+      transition: all 0.2s ease;
+    }
+    .hermes-card:hover {
+      border-color: var(--c-secondary);
+      box-shadow: 0 0 14px rgba(186, 164, 229, 0.3);
+      transform: translateY(-2px);
+    }
+    .hermes-card.active-card {
+      border-left-color: var(--c-primary);
+      border-color: var(--c-primary);
+      box-shadow: 0 0 15px rgba(235, 148, 58, 0.35);
+    }
+    .hermes-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding-bottom: 0.5rem;
+    }
+    .hermes-card-name {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--c-gold);
+      letter-spacing: 0.06em;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .hermes-card-meta {
+      font-family: var(--mono-family);
+      font-size: 0.8rem;
+      color: #cbd5e1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+    .hermes-meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.15rem 0;
+    }
+    .hermes-meta-lbl {
+      color: #94a3b8;
+      font-family: var(--font-family);
+      font-size: 0.72rem;
+      letter-spacing: 0.05em;
+    }
+    .hermes-meta-val {
+      font-weight: 700;
+      color: #fff;
+    }
+
+    /* Antigravity IDE Hero & Param Readouts */
+    .ide-hero-card {
+      background: linear-gradient(135deg, rgba(16, 24, 42, 0.9) 0%, rgba(10, 14, 26, 0.95) 100%);
+      border: 2px solid var(--c-primary);
+      border-radius: 10px;
+      padding: 1.5rem;
+      margin-top: 0.5rem;
+      margin-bottom: 1.2rem;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+    }
+    .lcars-btn-ide-launch {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.65rem;
+      background: var(--c-primary);
+      color: #000;
+      font-family: var(--font-family);
+      font-size: 1.18rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      text-decoration: none;
+      padding: 0.85rem 1.8rem;
+      border-radius: 30px;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 0 16px var(--c-primary);
+      transition: all 0.25s ease;
+      user-select: none;
+    }
+    .lcars-btn-ide-launch:hover {
+      background: #ffffff;
+      color: #000;
+      box-shadow: 0 0 25px var(--c-primary);
+      transform: scale(1.02);
+    }
+    .ide-param-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 0.8rem;
+      margin: 1.2rem 0;
+    }
+    .ide-param-item {
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-left: 4px solid var(--c-gold);
+      border-radius: 4px;
+      padding: 0.6rem 0.8rem;
+    }
+    .ide-param-lbl {
+      font-family: var(--font-family);
+      font-size: 0.72rem;
+      color: var(--c-gold);
+      letter-spacing: 0.06em;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .ide-param-val {
+      font-family: var(--mono-family);
+      font-size: 0.84rem;
+      color: #fff;
+      margin-top: 0.25rem;
+      word-break: break-all;
+    }
+
     /* Theme Buttons in Config */
     .theme-selector-grid {
       display: grid;
@@ -3826,96 +4202,358 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
-        <!-- KATEGORIE 3: KI-AGENTEN (EXKLUSIV CHAT-TERMINAL) -->
+        <!-- KATEGORIE 3: KI-AGENTEN (3 UNTERGRUPPEN: 9ROUTER, HERMES, ANTIGRAVITY IDE) -->
         <section class="lcars-section" id="section-agents">
           <div class="lcars-header-bar">
-            <h2>LCARS SUBRAUM COMM-LINK // KI-AGENTEN TERMINAL</h2>
-            <span class="lcars-pill-tag">ODN TRANSCEIVER // PORT 20128</span>
+            <h2>LCARS SUBRAUM COMM-LINK // KI-AGENTEN MATRIX</h2>
+            <span class="lcars-pill-tag">ODN MULTI-AGENT TRANSCEIVER</span>
           </div>
 
-          <!-- LCARS KI-AGENTEN CHAT-TERMINAL -->
-          <div class="lcars-card lcars-chat-card" style="margin-top: 0.5rem;">
-            <!-- Header-Leiste des Chat Terminals -->
-            <div class="card-head" style="flex-wrap: wrap; gap: 0.6rem; border-bottom: 2px solid var(--c-primary); padding-bottom: 0.6rem; margin-bottom: 0.8rem;">
-              <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
-                <span class="card-head-title" style="color: var(--c-primary); font-size: 1.1rem; letter-spacing: 0.08em;">
-                  SUBRAUM TRANSMISSIONSTERMINAL
-                </span>
-                <span class="badge-status badge-online" id="chatProxyStatusBadge">
-                  <span class="lcars-status-dot"></span>
-                  <span id="chatProxyStatusText">PROXY BEREIT</span>
-                </span>
-              </div>
+          <!-- SUBGRUPPEN NAVIGATION -->
+          <div class="lcars-subnav-bar">
+            <button type="button" class="lcars-subnav-pill active" id="subtab-btn-9router" onclick="switchAgentSubgroup('9router')">
+              <span>⚡</span> 1. 9ROUTER COMM-LINK
+            </button>
+            <button type="button" class="lcars-subnav-pill" id="subtab-btn-hermes" onclick="switchAgentSubgroup('hermes')">
+              <span>🤖</span> 2. HERMES SYSTEM-AGENTEN
+            </button>
+            <button type="button" class="lcars-subnav-pill" id="subtab-btn-ide" onclick="switchAgentSubgroup('ide')">
+              <span>🚀</span> 3. ANTIGRAVITY IDE
+            </button>
+          </div>
 
-              <!-- Modell-Auswahl & LCARS Steuerung -->
-              <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-                <label for="chatModelSelect" style="font-family: var(--font-family); font-size: 0.82rem; font-weight: 700; color: var(--c-secondary); text-transform: uppercase; letter-spacing: 0.05em;">
-                  AGENT / MODELL:
-                </label>
-                <div class="lcars-select-wrap">
-                  <select id="chatModelSelect" class="lcars-chat-select" onchange="onChatModelChange()">
-                    <option value="ag/gemini-3-flash">ag/gemini-3-flash</option>
-                    <option value="openrouter/openrouter/free">openrouter/openrouter/free</option>
-                  </select>
+          <!-- UNTERGRUPPE 1: 9ROUTER COMM-LINK (AKTUELLES CHAT-TERMINAL) -->
+          <div class="agent-subview active-subview" id="agent-subview-9router">
+            <div class="lcars-card lcars-chat-card" style="margin-top: 0.2rem;">
+              <!-- Header-Leiste des Chat Terminals -->
+              <div class="card-head" style="flex-wrap: wrap; gap: 0.6rem; border-bottom: 2px solid var(--c-primary); padding-bottom: 0.6rem; margin-bottom: 0.8rem;">
+                <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                  <span class="card-head-title" style="color: var(--c-primary); font-size: 1.1rem; letter-spacing: 0.08em;">
+                    9ROUTER SUBRAUM-COMM
+                  </span>
+                  <span class="badge-status badge-online" id="chatProxyStatusBadge">
+                    <span class="lcars-status-dot"></span>
+                    <span id="chatProxyStatusText">PROXY BEREIT</span>
+                  </span>
                 </div>
-                <button type="button" class="left-action-btn" onclick="loadChatModels(true)" title="Modell-Liste neu laden" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">
-                  <span>⟳</span>
-                </button>
-                <button type="button" class="left-action-btn" onclick="clearChatHistory()" title="Dialog zurücksetzen" style="padding: 0.3rem 0.7rem; font-size: 0.8rem; border-color: var(--c-red); color: var(--c-red);">
-                  <span>🗑️ RESET</span>
-                </button>
-              </div>
-            </div>
 
-            <!-- Chat Verlauf / ODN Log Screen -->
-            <div id="lcarsChatLog" class="lcars-chat-log" role="log" aria-live="polite">
-              <!-- Initialnachricht -->
-              <div class="lcars-msg lcars-msg-agent">
-                <div class="lcars-msg-header">
-                  <span class="lcars-msg-sender">▶ AGENT // SUBRAUM-COMM</span>
-                  <span class="lcars-msg-time" id="chatInitialTime">--:--:--</span>
+                <!-- Modell-Auswahl & LCARS Steuerung -->
+                <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                  <label for="chatModelSelect" style="font-family: var(--font-family); font-size: 0.82rem; font-weight: 700; color: var(--c-secondary); text-transform: uppercase; letter-spacing: 0.05em;">
+                    MODELL:
+                  </label>
+                  <div class="lcars-select-wrap">
+                    <select id="chatModelSelect" class="lcars-chat-select" onchange="onChatModelChange()">
+                      <option value="ag/gemini-3-flash">ag/gemini-3-flash</option>
+                      <option value="openrouter/openrouter/free">openrouter/openrouter/free</option>
+                    </select>
+                  </div>
+                  <button type="button" class="left-action-btn" onclick="loadChatModels(true)" title="Modell-Liste neu laden" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">
+                    <span>⟳</span>
+                  </button>
+                  <button type="button" class="left-action-btn" onclick="clearChatHistory()" title="Dialog zurücksetzen" style="padding: 0.3rem 0.7rem; font-size: 0.8rem; border-color: var(--c-red); color: var(--c-red);">
+                    <span>🗑️ RESET</span>
+                  </button>
                 </div>
-                <div class="lcars-msg-body">LCARS Subraum-Transceiver initialisiert. Kanal zum lokalen KI-Proxy (Port 20128) etabliert. Geben Sie einen Befehl oder eine Frage ein, um eine Kommunikation mit dem ausgewählten KI-Agenten zu starten.</div>
+              </div>
+
+              <!-- Chat Verlauf / ODN Log Screen -->
+              <div id="lcarsChatLog" class="lcars-chat-log" role="log" aria-live="polite">
+                <div class="lcars-msg lcars-msg-agent">
+                  <div class="lcars-msg-header">
+                    <span class="lcars-msg-sender">▶ 9ROUTER // SUBRAUM-COMM</span>
+                    <span class="lcars-msg-time" id="chatInitialTime">--:--:--</span>
+                  </div>
+                  <div class="lcars-msg-body">LCARS Subraum-Transceiver initialisiert. Kanal zum lokalen 9Router Proxy (Port 20128) etabliert. Wählen Sie ein Modell und geben Sie eine Anweisung ein.</div>
+                </div>
+              </div>
+
+              <!-- LCARS Ladeanzeige -->
+              <div id="lcarsChatLoading" class="lcars-chat-loading" style="display: none;">
+                <div class="lcars-loading-bars">
+                  <div class="lcars-loading-bar"></div>
+                  <div class="lcars-loading-bar"></div>
+                  <div class="lcars-loading-bar"></div>
+                </div>
+                <span id="lcarsChatLoadingText">KOGNITIVER PROZESSOR AKTIV // VERARBEITE SUBRAUM-TRANSMISSION...</span>
+              </div>
+
+              <!-- Eingabebereich mit LCARS Send-Button -->
+              <form id="lcarsChatForm" onsubmit="handleChatSubmit(event)" style="margin-top: 0.75rem; width: 100%; min-width: 0;">
+                <div class="lcars-chat-input-row">
+                  <input
+                    type="text"
+                    id="lcarsChatInput"
+                    class="lcars-chat-input"
+                    placeholder="BEFEHL AN 9ROUTER AGENTEN EINGEBEN..."
+                    autocomplete="off"
+                    required
+                  />
+                  <button type="submit" id="lcarsChatSendBtn" class="lcars-chat-btn-send">
+                    <span id="lcarsChatSendLabel">TRANSMIT</span> <span>↵</span>
+                  </button>
+                </div>
+              </form>
+
+              <!-- Schnellbefehle & Statusleiste -->
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.65rem;">
+                <div class="lcars-chat-quick-actions">
+                  <span style="font-size: 0.75rem; color: rgba(255,255,255,0.5); align-self: center; font-family: var(--mono-family);">SCHNELL-BEFEHLE:</span>
+                  <button type="button" class="lcars-quick-btn" onclick="sendQuickPrompt('Statusbericht aller Subsysteme anfordern.')">STATUSBERICHT</button>
+                  <button type="button" class="lcars-quick-btn" onclick="sendQuickPrompt('Welche Webdienste laufen aktuell auf dem Server?')">DIENSTE ANALYSIEREN</button>
+                  <button type="button" class="lcars-quick-btn" onclick="sendQuickPrompt('Wer bist du und welche Aufgaben kannst du übernehmen?')">IDENTIFIKATION</button>
+                </div>
+                <div id="chatMetaStatus" style="font-family: var(--mono-family); font-size: 0.76rem; color: var(--c-gold);">
+                  BEREIT // PROXY: 127.0.0.1:20128
+                </div>
               </div>
             </div>
+          </div>
 
-            <!-- LCARS Ladeanzeige mit Blinken/Pulsieren während Generierung -->
-            <div id="lcarsChatLoading" class="lcars-chat-loading" style="display: none;">
-              <div class="lcars-loading-bars">
-                <div class="lcars-loading-bar"></div>
-                <div class="lcars-loading-bar"></div>
-                <div class="lcars-loading-bar"></div>
+          <!-- UNTERGRUPPE 2: HERMES SYSTEM-AGENTEN -->
+          <div class="agent-subview" id="agent-subview-hermes">
+            <!-- Kopfzeile mit Steuerknöpfen -->
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.2rem; margin-bottom: 0.85rem;">
+              <div>
+                <span style="font-family: var(--font-family); font-size: 1.15rem; font-weight: 700; color: var(--c-secondary); letter-spacing: 0.06em;">
+                  HERMES AUTONOMOUS RUNTIME // SYSTEM-AGENTEN
+                </span>
+                <div style="font-family: var(--mono-family); font-size: 0.78rem; color: #888; margin-top: 2px;">
+                  Installiert unter ~/.hermes // Autonomes Multi-Agent Framework auf dem Raspberry Pi
+                </div>
               </div>
-              <span id="lcarsChatLoadingText">KOGNITIVER PROZESSOR AKTIV // VERARBEITE SUBRAUM-TRANSMISSION...</span>
-            </div>
-
-            <!-- Eingabebereich mit LCARS Send-Button -->
-            <form id="lcarsChatForm" onsubmit="handleChatSubmit(event)" style="margin-top: 0.75rem; width: 100%; min-width: 0;">
-              <div class="lcars-chat-input-row">
-                <input
-                  type="text"
-                  id="lcarsChatInput"
-                  class="lcars-chat-input"
-                  placeholder="BEFEHL AN KI-AGENTEN EINGEBEN..."
-                  autocomplete="off"
-                  required
-                />
-                <button type="submit" id="lcarsChatSendBtn" class="lcars-chat-btn-send">
-                  <span id="lcarsChatSendLabel">TRANSMIT</span> <span>↵</span>
+              <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <button type="button" class="left-action-btn" onclick="loadHermesProfiles(true)" style="padding: 0.4rem 0.8rem; font-size: 0.82rem;">
+                  <span>⟳</span> <span>PROFILES NEU LADEN</span>
+                </button>
+                <button type="button" class="left-action-btn" onclick="toggleHermesCreateForm()" id="btnToggleHermesCreate" style="padding: 0.4rem 0.9rem; font-size: 0.82rem; border-color: var(--c-primary); color: var(--c-primary); font-weight: 700;">
+                  <span>➕</span> <span>NEUEN AGENTEN ANLEGEN</span>
                 </button>
               </div>
-            </form>
+            </div>
 
-            <!-- Schnellbefehle & Telemetrie Statusleiste -->
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.65rem;">
-              <div class="lcars-chat-quick-actions">
-                <span style="font-size: 0.75rem; color: rgba(255,255,255,0.5); align-self: center; font-family: var(--mono-family);">SCHNELL-BEFEHLE:</span>
-                <button type="button" class="lcars-quick-btn" onclick="sendQuickPrompt('Statusbericht aller Subsysteme anfordern.')">STATUSBERICHT</button>
-                <button type="button" class="lcars-quick-btn" onclick="sendQuickPrompt('Welche Webdienste laufen aktuell auf dem Server?')">DIENSTE ANALYSIEREN</button>
-                <button type="button" class="lcars-quick-btn" onclick="sendQuickPrompt('Wer bist du und welche Aufgaben kannst du übernehmen?')">IDENTIFIKATION</button>
+            <!-- Aufklappbares Formular: Neuen Agenten anlegen -->
+            <div id="hermesCreateAgentCard" class="lcars-card" style="display: none; margin-bottom: 1.25rem; border-left: 6px solid var(--c-primary); background: rgba(18, 14, 28, 0.95);">
+              <div class="card-head" style="border-bottom: 1px solid var(--c-primary); padding-bottom: 0.5rem; margin-bottom: 0.8rem;">
+                <span class="card-head-title" style="color: var(--c-primary);">NEUEN HERMES SYSTEM-AGENTEN INITIALISIEREN</span>
+                <button type="button" class="left-action-btn" onclick="toggleHermesCreateForm(false)" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;">✕ SCHLIESSEN</button>
               </div>
-              <div id="chatMetaStatus" style="font-family: var(--mono-family); font-size: 0.76rem; color: var(--c-gold);">
-                BEREIT // PROXY: 127.0.0.1:20128
+              <form id="hermesCreateForm" onsubmit="handleCreateHermesAgent(event)">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.85rem; margin-bottom: 1rem;">
+                  <div class="config-field">
+                    <label for="newAgentName" style="font-size: 0.8rem; font-weight: 700; color: var(--c-gold); display: block; margin-bottom: 0.3rem;">
+                      AGENTEN-NAME (KENNUNG):
+                    </label>
+                    <input type="text" id="newAgentName" class="lcars-input" placeholder="z. B. scotty, data, spock" pattern="[a-z0-9_-]+" required>
+                    <div style="font-size: 0.72rem; color: #888; margin-top: 0.2rem;">Nur Kleinbuchstaben, Ziffern und Bindestriche</div>
+                  </div>
+                  <div class="config-field">
+                    <label for="newAgentCloneFrom" style="font-size: 0.8rem; font-weight: 700; color: var(--c-secondary); display: block; margin-bottom: 0.3rem;">
+                      BASIS-VORLAGE (CLONE):
+                    </label>
+                    <select id="newAgentCloneFrom" class="lcars-input" style="cursor: pointer;">
+                      <option value="default">default (Standard ODN)</option>
+                      <option value="jennifer">jennifer</option>
+                    </select>
+                    <div style="font-size: 0.72rem; color: #888; margin-top: 0.2rem;">Übernimmt API-Keys & Grundkonfiguration</div>
+                  </div>
+                  <div class="config-field">
+                    <label for="newAgentModel" style="font-size: 0.8rem; font-weight: 700; color: var(--c-primary); display: block; margin-bottom: 0.3rem;">
+                      STANDARD-MODELL:
+                    </label>
+                    <input type="text" id="newAgentModel" class="lcars-input" value="ag/gemini-3-flash" placeholder="z. B. ag/gemini-3-flash">
+                    <div style="font-size: 0.72rem; color: #888; margin-top: 0.2rem;">Modell für diesen Agenten</div>
+                  </div>
+                  <div class="config-field" style="grid-column: 1 / -1;">
+                    <label for="newAgentDesc" style="font-size: 0.8rem; font-weight: 700; color: var(--c-gold); display: block; margin-bottom: 0.3rem;">
+                      BESCHREIBUNG / ROLLE / FÄHIGKEITEN:
+                    </label>
+                    <input type="text" id="newAgentDesc" class="lcars-input" placeholder="z. B. Chefingenieur für ODN, Wartung & Shell-Automatisierung">
+                  </div>
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 0.6rem;">
+                  <button type="button" class="left-action-btn" onclick="toggleHermesCreateForm(false)" style="padding: 0.45rem 1rem;">ABBRECHEN</button>
+                  <button type="submit" class="left-action-btn" id="btnSubmitCreateAgent" style="padding: 0.45rem 1.4rem; font-weight: 700; border-color: var(--c-primary); color: var(--c-primary);">
+                    <span>⚡ AGENT ANLEGEN</span>
+                  </button>
+                </div>
+                <div id="hermesCreateStatus" style="margin-top: 0.5rem; font-family: var(--mono-family); font-size: 0.8rem; display: none;"></div>
+              </form>
+            </div>
+
+            <!-- Raster aller Hermes Profile -->
+            <div id="hermesProfilesGrid" class="hermes-profiles-grid">
+              <!-- Dynamisch via JavaScript gefüllt -->
+              <div style="color: #888; font-family: var(--mono-family); padding: 1rem;">Lade Hermes System-Agenten...</div>
+            </div>
+
+            <!-- Hermes Direkter Kommunikationskanal -->
+            <div class="lcars-card lcars-chat-card" style="margin-top: 0.5rem; border-left-color: var(--c-secondary);">
+              <div class="card-head" style="flex-wrap: wrap; gap: 0.6rem; border-bottom: 2px solid var(--c-secondary); padding-bottom: 0.6rem; margin-bottom: 0.8rem;">
+                <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                  <span class="card-head-title" style="color: var(--c-secondary); font-size: 1.1rem; letter-spacing: 0.08em;">
+                    HERMES DIREKT-COMM // <span id="hermesActiveProfileHeader" style="color: var(--c-gold);">DEFAULT</span>
+                  </span>
+                  <span class="badge-status badge-online" id="hermesGatewayStatusBadge">
+                    <span class="lcars-status-dot"></span>
+                    <span>HERMES BEREIT</span>
+                  </span>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                  <label for="hermesProfileSelect" style="font-family: var(--font-family); font-size: 0.82rem; font-weight: 700; color: var(--c-gold); text-transform: uppercase;">
+                    ZIEL-AGENT:
+                  </label>
+                  <div class="lcars-select-wrap">
+                    <select id="hermesProfileSelect" class="lcars-chat-select" onchange="onHermesProfileChange()" style="border-color: var(--c-secondary);">
+                      <option value="default">default (Core)</option>
+                      <option value="jennifer">jennifer</option>
+                    </select>
+                  </div>
+                  <button type="button" class="left-action-btn" onclick="clearHermesChatHistory()" title="Dialog zurücksetzen" style="padding: 0.3rem 0.7rem; font-size: 0.8rem; border-color: var(--c-red); color: var(--c-red);">
+                    <span>🗑️ RESET</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Hermes Chat Log -->
+              <div id="hermesChatLog" class="lcars-chat-log" role="log" aria-live="polite">
+                <div class="lcars-msg lcars-msg-agent" style="border-left-color: var(--c-secondary); background: rgba(186, 164, 229, 0.08);">
+                  <div class="lcars-msg-header">
+                    <span class="lcars-msg-sender" style="color: var(--c-secondary);">▶ HERMES // SYSTEM COMM-LINK</span>
+                    <span class="lcars-msg-time" id="hermesInitialTime">--:--:--</span>
+                  </div>
+                  <div class="lcars-msg-body">Direkter ODN-Kommunikationskanal zum lokalen Hermes Agenten etabliert. Anfragen werden direkt an den Agentenprozess auf dem System übermittelt.</div>
+                </div>
+              </div>
+
+              <!-- Hermes Ladeanzeige -->
+              <div id="hermesChatLoading" class="lcars-chat-loading" style="display: none;">
+                <div class="lcars-loading-bars">
+                  <div class="lcars-loading-bar" style="background-color: var(--c-secondary);"></div>
+                  <div class="lcars-loading-bar" style="background-color: var(--c-primary);"></div>
+                  <div class="lcars-loading-bar" style="background-color: var(--c-gold);"></div>
+                </div>
+                <span id="hermesChatLoadingText">HERMES AGENT VERARBEITET ANFRAGE...</span>
+              </div>
+
+              <!-- Hermes Eingabeformular -->
+              <form id="hermesChatForm" onsubmit="handleHermesChatSubmit(event)" style="margin-top: 0.75rem; width: 100%; min-width: 0;">
+                <div class="lcars-chat-input-row">
+                  <input
+                    type="text"
+                    id="hermesChatInput"
+                    class="lcars-chat-input"
+                    placeholder="BEFEHL ODER FRAGE AN HERMES AGENTEN SENDEN..."
+                    autocomplete="off"
+                    required
+                    style="border-color: var(--c-secondary);"
+                  />
+                  <button type="submit" id="hermesChatSendBtn" class="lcars-chat-btn-send" style="background: var(--c-secondary); border-color: var(--c-secondary); color: #000;">
+                    <span id="hermesChatSendLabel">SENDEN</span> <span>↵</span>
+                  </button>
+                </div>
+              </form>
+
+              <!-- Schnellbefehle für Hermes -->
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.65rem;">
+                <div class="lcars-chat-quick-actions">
+                  <span style="font-size: 0.75rem; color: rgba(255,255,255,0.5); align-self: center; font-family: var(--mono-family);">HERMES SCHNELL-BEFEHLE:</span>
+                  <button type="button" class="lcars-quick-btn" onclick="sendHermesQuickPrompt('Gib einen kurzen Statusbericht über deine aktuellen Aufgaben und Systemzustand.')">STATUSBERICHT</button>
+                  <button type="button" class="lcars-quick-btn" onclick="sendHermesQuickPrompt('Welche Modelle und Fähigkeiten stehen dir zur Verfügung?')">FÄHIGKEITEN</button>
+                  <button type="button" class="lcars-quick-btn" onclick="sendHermesQuickPrompt('Wer bist du und was ist deine Rolle?')">IDENTIFIKATION</button>
+                </div>
+                <div id="hermesMetaStatus" style="font-family: var(--mono-family); font-size: 0.76rem; color: var(--c-gold);">
+                  HERMES CLI EXEC // LOCALHOST
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- UNTERGRUPPE 3: ANTIGRAVITY IDE (ENTWICKLUNGSUMGEBUNG) -->
+          <div class="agent-subview" id="agent-subview-ide">
+            <div class="ide-hero-card">
+              <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
+                <div>
+                  <h3 style="font-size: 1.5rem; color: var(--c-primary); letter-spacing: 0.06em; margin-bottom: 0.35rem;">
+                    GOOGLE ANTIGRAVITY // WEBBASIERTE ENTWICKLUNGSUMGEBUNG
+                  </h3>
+                  <p style="color: var(--c-gold); font-size: 0.95rem; max-width: 800px; line-height: 1.4;">
+                    Direkter Zugriff auf die Cloud-basierte Google Antigravity Agentic IDE für dieses Dashboard-Projekt. Hier arbeiten Sie mit dem KI-Coding-Agenten an diesem Dashboard.
+                  </p>
+                </div>
+                <span class="badge-status badge-online" style="font-size: 0.85rem; padding: 0.35rem 0.8rem;">
+                  ODN SUBRAUM-LINK AKTIV
+                </span>
+              </div>
+
+              <!-- Großer Launch-Button -->
+              <div style="text-align: center; margin: 1.5rem 0;">
+                <a
+                  id="ideLaunchBtn"
+                  href="https://antigravity.google.com/r/f9e18040-ab9a-4f0c-9d4a-2b4f5281af22-v2?p=c%2F3a633d37-def3-419b-ab1e-8498973ae694%3Fsection%3Dc15db4e2-c36e-442e-850b-0d28e944e2c6"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="lcars-btn-ide-launch"
+                  onclick="playLcarsBeep(1200, 2400)"
+                >
+                  <span>🚀</span> <span>ANTIGRAVITY IDE ÖFFNEN // ZUR ENTWICKLUNGSUMGEBUNG ↗</span>
+                </a>
+                <div style="font-family: var(--mono-family); font-size: 0.8rem; color: #94a3b8; margin-top: 0.4rem;">
+                  Öffnet in neuem Browser-Tab // Sichere Google Antigravity Session
+                </div>
+              </div>
+
+              <!-- Parameter Telemetrie Readouts -->
+              <div class="ide-param-grid">
+                <div class="ide-param-item">
+                  <div class="ide-param-lbl">RUNNER / WORKSPACE ID</div>
+                  <div class="ide-param-val" id="ideRunnerId">f9e18040-ab9a-4f0c-9d4a-2b4f5281af22-v2</div>
+                </div>
+                <div class="ide-param-item">
+                  <div class="ide-param-lbl">KONVERSATION / SESSION</div>
+                  <div class="ide-param-val" id="ideConvId">3a633d37-def3-419b-ab1e-8498973ae694</div>
+                </div>
+                <div class="ide-param-item">
+                  <div class="ide-param-lbl">AKTIVER THREAD-ABSCHNITT</div>
+                  <div class="ide-param-val" id="ideSectionId">c15db4e2-c36e-442e-850b-0d28e944e2c6</div>
+                </div>
+                <div class="ide-param-item">
+                  <div class="ide-param-lbl">LOKALER PROJEKT-PFAD</div>
+                  <div class="ide-param-val">/home/yash/Projects/agydashboard</div>
+                </div>
+              </div>
+
+              <!-- Konfigurierbare / Dynamische URL Box -->
+              <div style="background: rgba(0, 0, 0, 0.5); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; padding: 1.1rem; margin-top: 1.2rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.6rem;">
+                  <span style="font-family: var(--font-family); font-size: 0.9rem; font-weight: 700; color: var(--c-primary); letter-spacing: 0.05em;">
+                    DYNAMISCHE IDE-URL VERWALTUNG
+                  </span>
+                  <span style="font-size: 0.75rem; color: #888;">(Persistent in config.json gespeichert)</span>
+                </div>
+                <p style="font-size: 0.82rem; color: #cbd5e1; margin-bottom: 0.8rem; line-height: 1.4;">
+                  Falls eine neue Entwicklungs-Session oder ein anderer Workspace verwendet wird, kann der Link hier angepasst werden. Klick auf „SPEICHERN“ aktualisiert den Button dauerhaft.
+                </p>
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+                  <input
+                    type="url"
+                    id="ideUrlInput"
+                    class="lcars-input"
+                    style="flex: 1; min-width: 280px;"
+                    value="https://antigravity.google.com/r/f9e18040-ab9a-4f0c-9d4a-2b4f5281af22-v2?p=c%2F3a633d37-def3-419b-ab1e-8498973ae694%3Fsection%3Dc15db4e2-c36e-442e-850b-0d28e944e2c6"
+                  />
+                  <button type="button" class="left-action-btn" onclick="saveIdeUrl()" style="border-color: var(--c-primary); color: var(--c-primary); font-weight: 700; padding: 0.45rem 1rem;">
+                    <span>💾</span> <span>SPEICHERN</span>
+                  </button>
+                  <button type="button" class="left-action-btn" onclick="copyIdeUrl()" style="padding: 0.45rem 0.8rem;">
+                    <span>📋</span> <span>KOPIEREN</span>
+                  </button>
+                  <button type="button" class="left-action-btn" onclick="resetIdeUrl()" style="padding: 0.45rem 0.8rem; border-color: #888; color: #bbb;">
+                    <span>↺</span> <span>STANDARD</span>
+                  </button>
+                </div>
+                <div id="ideSaveStatus" style="font-family: var(--mono-family); font-size: 0.8rem; margin-top: 0.5rem; display: none;"></div>
               </div>
             </div>
           </div>
@@ -4356,6 +4994,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                   <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Lokaler 9Router Proxy & KI-Gateway Dienst (Port 20128)</div>
                 </div>
 
+                <!-- Antigravity IDE URL -->
+                <div class="config-field" style="grid-column: 1 / -1;">
+                  <label for="cfgIdeUrl" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-gold);">
+                    <span>🚀 ANTIGRAVITY IDE URL // ENTWICKLUNGSUMGEBUNG</span>
+                  </label>
+                  <input type="text" id="cfgIdeUrl" value="https://antigravity.google.com/r/f9e18040-ab9a-4f0c-9d4a-2b4f5281af22-v2?p=c%2F3a633d37-def3-419b-ab1e-8498973ae694%3Fsection%3Dc15db4e2-c36e-442e-850b-0d28e944e2c6" class="lcars-input">
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Cloud-Link zur Google Antigravity Agentic IDE für dieses Dashboard</div>
+                </div>
+
               </div>
 
               <!-- Live Gateway & Alert Status Box -->
@@ -4614,9 +5261,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     if (catId === 'agents') {
       setTimeout(() => {
-        loadChatModels();
-        const inp = document.getElementById('lcarsChatInput');
-        if (inp) inp.focus();
+        if (activeAgentSubgroup === '9router') {
+          loadChatModels();
+          const inp = document.getElementById('lcarsChatInput');
+          if (inp) inp.focus();
+        } else if (activeAgentSubgroup === 'hermes') {
+          loadHermesProfiles();
+          const inp = document.getElementById('hermesChatInput');
+          if (inp) inp.focus();
+        } else if (activeAgentSubgroup === 'ide') {
+          loadIdeConfig();
+        }
       }, 60);
     }
     if (catId === 'ai-info') {
@@ -4715,6 +5370,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const el = document.getElementById('cfgGwUrl');
       if (el) el.value = th.gateway_url;
     }
+    if (th.antigravity_ide_url) {
+      const elCfg = document.getElementById('cfgIdeUrl');
+      if (elCfg) elCfg.value = th.antigravity_ide_url;
+      const elIde = document.getElementById('ideUrlInput');
+      if (elIde && (!elIde.value || elIde.value.indexOf('antigravity.google.com') !== -1)) {
+        elIde.value = th.antigravity_ide_url;
+      }
+      const launchBtn = document.getElementById('ideLaunchBtn');
+      if (launchBtn) launchBtn.href = th.antigravity_ide_url;
+    }
   }
 
   // Red Alert Status Handler
@@ -4777,6 +5442,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const duration = parseInt(document.getElementById('cfgDuration').value);
     const gwIntervalMin = parseInt(document.getElementById('cfgGwInterval').value);
     const gwUrl = document.getElementById('cfgGwUrl').value.trim();
+    const ideUrl = (document.getElementById('cfgIdeUrl')?.value || '').trim();
 
     const payload = {
       cpu_threshold: cpu,
@@ -4787,6 +5453,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       gateway_check_interval_seconds: gwIntervalMin * 60,
       gateway_url: gwUrl
     };
+    if (ideUrl) payload.antigravity_ide_url = ideUrl;
 
     const msgEl = document.getElementById('cfgSaveMsg');
     try {
@@ -6202,6 +6869,470 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
+  // ==========================================================================
+  // KI-AGENTEN SUBGRUPPEN & HERMES & ANTIGRAVITY IDE INTERFACE
+  // ==========================================================================
+  let activeAgentSubgroup = '9router';
+  let hermesProfilesList = [];
+  let currentHermesProfile = 'default';
+  let isHermesGenerating = false;
+
+  function switchAgentSubgroup(subgroup) {
+    playLcarsBeep(1100, 1600);
+    activeAgentSubgroup = subgroup;
+
+    // Subnav Pills
+    document.querySelectorAll('.lcars-subnav-pill').forEach(btn => btn.classList.remove('active'));
+    const activeBtn = document.getElementById('subtab-btn-' + subgroup);
+    if (activeBtn) activeBtn.classList.add('active');
+
+    // Views
+    document.querySelectorAll('.agent-subview').forEach(view => view.classList.remove('active-subview'));
+    const activeView = document.getElementById('agent-subview-' + subgroup);
+    if (activeView) activeView.classList.add('active-subview');
+
+    if (subgroup === '9router') {
+      loadChatModels();
+      const inp = document.getElementById('lcarsChatInput');
+      if (inp) inp.focus();
+    } else if (subgroup === 'hermes') {
+      loadHermesProfiles();
+      const inp = document.getElementById('hermesChatInput');
+      if (inp) inp.focus();
+    } else if (subgroup === 'ide') {
+      loadIdeConfig();
+    }
+  }
+
+  // --- HERMES AGENTEN VERWALTUNG & CHAT ---
+  async function loadHermesProfiles(playSound = false) {
+    if (playSound) playLcarsBeep(1200, 1800);
+    try {
+      const resp = await fetch('/api/hermes/profiles');
+      if (resp.ok) {
+        const data = await resp.json();
+        hermesProfilesList = data.profiles || [];
+        renderHermesProfiles(hermesProfilesList);
+      }
+    } catch (e) {
+      console.warn("Fehler beim Laden der Hermes Profile:", e);
+      const grid = document.getElementById('hermesProfilesGrid');
+      if (grid) grid.innerHTML = `<div style="color:var(--c-red); font-family:var(--mono-family); padding:0.5rem;">Fehler beim Laden der Profile: ${e.message}</div>`;
+    }
+  }
+
+  function renderHermesProfiles(profiles) {
+    const grid = document.getElementById('hermesProfilesGrid');
+    const select = document.getElementById('hermesProfileSelect');
+    const cloneSelect = document.getElementById('newAgentCloneFrom');
+
+    if (select) {
+      const cur = select.value || currentHermesProfile;
+      select.innerHTML = '';
+      profiles.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.name;
+        opt.textContent = `${p.name} (${p.display_name})`;
+        if (p.name === cur) opt.selected = true;
+        select.appendChild(opt);
+      });
+      if (select.value) currentHermesProfile = select.value;
+    }
+
+    if (cloneSelect) {
+      cloneSelect.innerHTML = '';
+      profiles.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.name;
+        opt.textContent = p.name;
+        cloneSelect.appendChild(opt);
+      });
+    }
+
+    if (!grid) return;
+    if (profiles.length === 0) {
+      grid.innerHTML = '<div style="color:#888; font-family:var(--mono-family); padding:1rem;">Keine Profile in ~/.hermes gefunden.</div>';
+      return;
+    }
+
+    grid.innerHTML = profiles.map(p => {
+      const isGw = p.gateway_running;
+      const statusBadge = isGw
+        ? '<span class="badge-status badge-online" style="font-size:0.75rem;"><span class="lcars-status-dot"></span> GATEWAY AKTIV</span>'
+        : '<span class="badge-status badge-offline" style="font-size:0.75rem;">BEREIT / STANDBY</span>';
+
+      const isActive = p.name === currentHermesProfile;
+
+      return `
+        <div class="hermes-card ${isActive ? 'active-card' : ''}" id="hermes-card-${p.name}">
+          <div>
+            <div class="hermes-card-head">
+              <div class="hermes-card-name">
+                <span>🤖</span> <span>${p.name.toUpperCase()}</span>
+                ${p.is_default ? '<span style="font-size:0.7rem; background:rgba(235,148,58,0.25); color:var(--c-primary); padding:1px 5px; border-radius:3px;">CORE</span>' : ''}
+              </div>
+              ${statusBadge}
+            </div>
+            <div style="font-size:0.84rem; color:var(--c-gold); margin:0.4rem 0;">${p.description || p.personality || 'Autonomer System-Agent'}</div>
+            <div class="hermes-card-meta">
+              <div class="hermes-meta-row">
+                <span class="hermes-meta-lbl">MODELL:</span>
+                <span class="hermes-meta-val">${p.model || 'ag/gemini-3-flash'}</span>
+              </div>
+              <div class="hermes-meta-row">
+                <span class="hermes-meta-lbl">PROVIDER:</span>
+                <span class="hermes-meta-val">${p.provider || 'custom'}</span>
+              </div>
+              <div class="hermes-meta-row">
+                <span class="hermes-meta-lbl">PFAD:</span>
+                <span class="hermes-meta-val" style="font-size:0.72rem; opacity:0.8;">${p.path}</span>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:0.4rem; margin-top:0.4rem;">
+            <button type="button" class="left-action-btn" onclick="selectHermesProfile('${p.name}')" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
+              💬 MIT AGENT SPRECHEN
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function selectHermesProfile(name) {
+    playLcarsBeep(980, 1400);
+    currentHermesProfile = name;
+    const select = document.getElementById('hermesProfileSelect');
+    if (select) select.value = name;
+    const header = document.getElementById('hermesActiveProfileHeader');
+    if (header) header.textContent = name.toUpperCase();
+
+    document.querySelectorAll('.hermes-card').forEach(c => c.classList.remove('active-card'));
+    const activeC = document.getElementById('hermes-card-' + name);
+    if (activeC) activeC.classList.add('active-card');
+
+    const inp = document.getElementById('hermesChatInput');
+    if (inp) {
+      inp.placeholder = `BEFEHL AN AGENT '${name.toUpperCase()}' SENDEN...`;
+      inp.focus();
+    }
+  }
+
+  function onHermesProfileChange() {
+    const select = document.getElementById('hermesProfileSelect');
+    if (select) {
+      selectHermesProfile(select.value);
+    }
+  }
+
+  function toggleHermesCreateForm(show) {
+    playLcarsBeep(880, 1320);
+    const card = document.getElementById('hermesCreateAgentCard');
+    if (!card) return;
+    if (show === undefined) {
+      card.style.display = (card.style.display === 'none' || !card.style.display) ? 'block' : 'none';
+    } else {
+      card.style.display = show ? 'block' : 'none';
+    }
+    if (card.style.display === 'block') {
+      const inp = document.getElementById('newAgentName');
+      if (inp) inp.focus();
+    }
+  }
+
+  async function handleCreateHermesAgent(e) {
+    e.preventDefault();
+    const btn = document.getElementById('btnSubmitCreateAgent');
+    const status = document.getElementById('hermesCreateStatus');
+    const nameInp = document.getElementById('newAgentName');
+    const cloneInp = document.getElementById('newAgentCloneFrom');
+    const modelInp = document.getElementById('newAgentModel');
+    const descInp = document.getElementById('newAgentDesc');
+
+    const name = nameInp ? nameInp.value.trim().toLowerCase() : '';
+    if (!name) return;
+
+    if (btn) btn.disabled = true;
+    if (status) {
+      status.style.display = 'block';
+      status.style.color = 'var(--c-primary)';
+      status.textContent = `INITIALISIERE HERMES PROFIL '${name}' (bitte kurz warten)...`;
+    }
+
+    try {
+      const resp = await fetch('/api/hermes/profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: name,
+          clone_from: cloneInp ? cloneInp.value : 'default',
+          model: modelInp ? modelInp.value.trim() : 'ag/gemini-3-flash',
+          description: descInp ? descInp.value.trim() : ''
+        })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        if (status) {
+          status.style.color = '#10b981';
+          status.textContent = `✓ Profil '${name}' erfolgreich angelegt!`;
+        }
+        playLcarsBeep(1200, 2400);
+        await loadHermesProfiles();
+        selectHermesProfile(name);
+        setTimeout(() => {
+          toggleHermesCreateForm(false);
+          if (status) status.style.display = 'none';
+        }, 1200);
+      } else {
+        if (status) {
+          status.style.color = 'var(--c-red)';
+          status.textContent = `Fehler: ${data.error || 'Profil konnte nicht erstellt werden'}`;
+        }
+        playLcarsBeep(440, 220);
+      }
+    } catch (err) {
+      if (status) {
+        status.style.color = 'var(--c-red)';
+        status.textContent = `Netzwerkfehler: ${err.message}`;
+      }
+      playLcarsBeep(440, 220);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function appendHermesMessage(role, content, senderName, isError = false) {
+    const log = document.getElementById('hermesChatLog');
+    if (!log) return;
+
+    const timeStr = formatTimeNow();
+    const msgDiv = document.createElement('div');
+    const cssClass = role === 'user'
+      ? 'lcars-msg lcars-msg-user'
+      : (isError ? 'lcars-msg lcars-msg-error' : 'lcars-msg lcars-msg-agent');
+
+    const senderLabel = role === 'user' ? 'USER // ODN TERMINAL' : `HERMES // ${senderName.toUpperCase()}`;
+
+    msgDiv.className = cssClass;
+    if (role !== 'user' && !isError) {
+      msgDiv.style.borderLeftColor = 'var(--c-secondary)';
+      msgDiv.style.background = 'rgba(186, 164, 229, 0.08)';
+    }
+
+    msgDiv.innerHTML = `
+      <div class="lcars-msg-header">
+        <span class="lcars-msg-sender" style="${role !== 'user' ? 'color:var(--c-secondary);' : ''}">${senderLabel}</span>
+        <span class="lcars-msg-time">${timeStr}</span>
+      </div>
+      <div class="lcars-msg-body">${formatMessageText(content)}</div>
+    `;
+
+    log.appendChild(msgDiv);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function handleHermesChatSubmit(e) {
+    if (e) e.preventDefault();
+    if (isHermesGenerating) return;
+
+    const input = document.getElementById('hermesChatInput');
+    const sendBtn = document.getElementById('hermesChatSendBtn');
+    const sendLabel = document.getElementById('hermesChatSendLabel');
+    const loading = document.getElementById('hermesChatLoading');
+    const meta = document.getElementById('hermesMetaStatus');
+
+    if (!input) return;
+    const message = input.value.trim();
+    if (!message) return;
+
+    input.value = '';
+    appendHermesMessage('user', message, currentHermesProfile);
+    playLcarsBeep(880, 1320);
+
+    isHermesGenerating = true;
+    input.disabled = true;
+    if (sendBtn) sendBtn.disabled = true;
+    if (sendLabel) sendLabel.textContent = 'WAIT...';
+    if (loading) loading.style.display = 'flex';
+    if (meta) meta.textContent = `HERMES VERARBEITET ANFRAGE AN '${currentHermesProfile.toUpperCase()}'...`;
+
+    try {
+      const resp = await fetch('/api/hermes/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          profile: currentHermesProfile,
+          message: message
+        })
+      });
+
+      const data = await resp.json();
+
+      if (resp.ok && data.success) {
+        appendHermesMessage('assistant', data.reply || 'Keine Antwort erhalten.', currentHermesProfile);
+        playLcarsBeep(980, 1400);
+        if (meta) meta.textContent = `ANTWORT EMPFANGEN // AGENT: ${currentHermesProfile.toUpperCase()}`;
+      } else {
+        const err = data.error || data.reply || 'Fehler bei Hermes Ausführung.';
+        appendHermesMessage('assistant', err, currentHermesProfile, true);
+        playLcarsBeep(440, 220);
+        if (meta) meta.textContent = 'HERMES AUSFÜHRUNGSFEHLER';
+      }
+    } catch (err) {
+      appendHermesMessage('assistant', `Verbindungsfehler zu Hermes: ${err.message}`, currentHermesProfile, true);
+      playLcarsBeep(440, 220);
+      if (meta) meta.textContent = 'NETZWERKFEHLER';
+    } finally {
+      isHermesGenerating = false;
+      input.disabled = false;
+      if (sendBtn) sendBtn.disabled = false;
+      if (sendLabel) sendLabel.textContent = 'SENDEN';
+      if (loading) loading.style.display = 'none';
+      input.focus();
+    }
+  }
+
+  function sendHermesQuickPrompt(text) {
+    const inp = document.getElementById('hermesChatInput');
+    if (inp) {
+      inp.value = text;
+      handleHermesChatSubmit(null);
+    }
+  }
+
+  function clearHermesChatHistory() {
+    playLcarsBeep(600, 300);
+    const log = document.getElementById('hermesChatLog');
+    if (log) {
+      log.innerHTML = `
+        <div class="lcars-msg lcars-msg-agent" style="border-left-color: var(--c-secondary); background: rgba(186, 164, 229, 0.08);">
+          <div class="lcars-msg-header">
+            <span class="lcars-msg-sender" style="color: var(--c-secondary);">▶ HERMES // SYSTEM COMM-LINK</span>
+            <span class="lcars-msg-time">${formatTimeNow()}</span>
+          </div>
+          <div class="lcars-msg-body">Chat-Verlauf zurückgesetzt. Neuer Dialog mit Agent '${currentHermesProfile.toUpperCase()}'.</div>
+        </div>
+      `;
+    }
+  }
+
+  // --- ANTIGRAVITY IDE URL & KONFIGURATION ---
+  const DEFAULT_ANTIGRAVITY_IDE_URL = 'https://antigravity.google.com/r/f9e18040-ab9a-4f0c-9d4a-2b4f5281af22-v2?p=c%2F3a633d37-def3-419b-ab1e-8498973ae694%3Fsection%3Dc15db4e2-c36e-442e-850b-0d28e944e2c6';
+
+  function parseIdeUrlParams(url) {
+    try {
+      const u = new URL(url);
+      const runnerMatch = u.pathname.match(new RegExp('/r/([^/?#]+)'));
+      const runnerId = runnerMatch ? runnerMatch[1] : '--';
+
+      const p = u.searchParams.get('p') || '';
+      let convId = '--';
+      let sectionId = '--';
+      if (p) {
+        const decodedP = decodeURIComponent(p);
+        const convMatch = decodedP.match(new RegExp('c/([^/?#]+)'));
+        if (convMatch) convId = convMatch[1];
+        const secMatch = decodedP.match(new RegExp('section=([^/?#&]+)'));
+        if (secMatch) sectionId = secMatch[1];
+      }
+      return { runnerId, convId, sectionId };
+    } catch (e) {
+      return { runnerId: '--', convId: '--', sectionId: '--' };
+    }
+  }
+
+  function loadIdeConfig() {
+    const inp = document.getElementById('ideUrlInput');
+    const launchBtn = document.getElementById('ideLaunchBtn');
+    const cfgInp = document.getElementById('cfgIdeUrl');
+
+    let curUrl = DEFAULT_ANTIGRAVITY_IDE_URL;
+    if (inp && inp.value) curUrl = inp.value;
+
+    if (launchBtn) launchBtn.href = curUrl;
+    if (cfgInp && !cfgInp.value) cfgInp.value = curUrl;
+
+    const parsed = parseIdeUrlParams(curUrl);
+    const rEl = document.getElementById('ideRunnerId');
+    if (rEl) rEl.textContent = parsed.runnerId;
+    const cEl = document.getElementById('ideConvId');
+    if (cEl) cEl.textContent = parsed.convId;
+    const sEl = document.getElementById('ideSectionId');
+    if (sEl) sEl.textContent = parsed.sectionId;
+  }
+
+  async function saveIdeUrl() {
+    playLcarsBeep(980, 1400);
+    const inp = document.getElementById('ideUrlInput');
+    const status = document.getElementById('ideSaveStatus');
+    const cfgInp = document.getElementById('cfgIdeUrl');
+    const launchBtn = document.getElementById('ideLaunchBtn');
+
+    if (!inp) return;
+    const url = inp.value.trim();
+    if (!url) return;
+
+    try {
+      const resp = await fetch('/api/config/ide-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        if (launchBtn) launchBtn.href = url;
+        if (cfgInp) cfgInp.value = url;
+        loadIdeConfig();
+        if (status) {
+          status.style.display = 'block';
+          status.style.color = '#10b981';
+          status.textContent = '✓ IDE-URL erfolgreich persistent gespeichert!';
+          setTimeout(() => { status.style.display = 'none'; }, 3000);
+        }
+        playLcarsBeep(1200, 2400);
+      } else {
+        if (status) {
+          status.style.display = 'block';
+          status.style.color = 'var(--c-red)';
+          status.textContent = 'Fehler beim Speichern der URL.';
+        }
+      }
+    } catch (e) {
+      if (status) {
+        status.style.display = 'block';
+        status.style.color = 'var(--c-red)';
+        status.textContent = `Netzwerkfehler: ${e.message}`;
+      }
+    }
+  }
+
+  function copyIdeUrl() {
+    playLcarsBeep(880, 1320);
+    const inp = document.getElementById('ideUrlInput');
+    const status = document.getElementById('ideSaveStatus');
+    if (inp) {
+      navigator.clipboard.writeText(inp.value).then(() => {
+        if (status) {
+          status.style.display = 'block';
+          status.style.color = 'var(--c-gold)';
+          status.textContent = '📋 URL in Zwischenablage kopiert!';
+          setTimeout(() => { status.style.display = 'none'; }, 2500);
+        }
+      }).catch(err => {
+        alert('Konnte Zwischenablage nicht öffnen: ' + err);
+      });
+    }
+  }
+
+  function resetIdeUrl() {
+    playLcarsBeep(600, 400);
+    const inp = document.getElementById('ideUrlInput');
+    if (inp) {
+      inp.value = DEFAULT_ANTIGRAVITY_IDE_URL;
+      saveIdeUrl();
+    }
+  }
+
   // Window Resize Listener
   window.addEventListener('resize', () => {
     if (historyChart) historyChart.resize();
@@ -6394,6 +7525,37 @@ if USE_FLASK:
         res_data, status_code = forward_chat_completion(model, messages, auth_header)
         return jsonify(res_data), status_code
 
+    @app.route("/api/hermes/profiles", methods=["GET", "POST"])
+    def api_hermes_profiles_route():
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            name = data.get("name", "")
+            desc = data.get("description", "")
+            clone_from = data.get("clone_from", "default")
+            model = data.get("model", "")
+            res = create_hermes_profile(name, desc, clone_from, model)
+            return jsonify(res), (200 if res.get("success") else 400)
+        return jsonify({"profiles": get_hermes_profiles()})
+
+    @app.route("/api/hermes/chat", methods=["POST"])
+    def api_hermes_chat_route():
+        data = request.get_json(silent=True) or {}
+        profile = data.get("profile", "default")
+        message = data.get("message", "")
+        res = hermes_chat_prompt(profile, message)
+        return jsonify(res), (200 if res.get("success") else 500)
+
+    @app.route("/api/config/ide-url", methods=["GET", "POST"])
+    def api_ide_url_route():
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            url = data.get("url", "").strip()
+            if url:
+                alert_monitor.save_config({"antigravity_ide_url": url})
+                return jsonify({"success": True, "url": url})
+            return jsonify({"error": "URL erforderlich"}), 400
+        return jsonify({"url": alert_monitor.config.get("antigravity_ide_url", "")})
+
     def run_server():
         print("[START] Starte System Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
         app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
@@ -6457,6 +7619,20 @@ else:
                 self.wfile.write(data)
             elif parsed.path == "/api/chat/models":
                 data = json.dumps(fetch_chat_models()).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/hermes/profiles":
+                data = json.dumps({"profiles": get_hermes_profiles()}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/config/ide-url":
+                data = json.dumps({"url": alert_monitor.config.get("antigravity_ide_url", "")}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
@@ -6535,6 +7711,60 @@ else:
                 res = alert_monitor.check_gateway()
                 resp = json.dumps(res).encode("utf-8")
                 self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/hermes/profiles":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                name = data.get("name", "")
+                desc = data.get("description", "")
+                clone_from = data.get("clone_from", "default")
+                model = data.get("model", "")
+                res = create_hermes_profile(name, desc, clone_from, model)
+                resp = json.dumps(res).encode("utf-8")
+                self.send_response(200 if res.get("success") else 400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/hermes/chat":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                profile = data.get("profile", "default")
+                message = data.get("message", "")
+                res = hermes_chat_prompt(profile, message)
+                resp = json.dumps(res).encode("utf-8")
+                self.send_response(200 if res.get("success") else 500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/config/ide-url":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                url = data.get("url", "").strip()
+                if url:
+                    alert_monitor.save_config({"antigravity_ide_url": url})
+                    resp = json.dumps({"success": True, "url": url}).encode("utf-8")
+                    status = 200
+                else:
+                    resp = json.dumps({"error": "URL erforderlich"}).encode("utf-8")
+                    status = 400
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()
