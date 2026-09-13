@@ -5633,6 +5633,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
               <select id="haDomainFilter" onchange="filterHaEntities()" class="lcars-input" style="padding:0.35rem 0.65rem; font-size:0.82rem; width:auto;">
                 <option value="all">ALLE TYPEN</option>
+                <option value="automation">⚡ AUTOMATIONEN</option>
                 <option value="light">💡 LICHTER</option>
                 <option value="switch">🔌 SCHALTER / STECKDOSEN</option>
                 <option value="climate">🌡️ KLIMA &amp; HEIZUNG</option>
@@ -6518,11 +6519,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function renderHaEntityTile(e) {
+    const isAuto = (e.domain === 'automation');
     const isOn = ['on', 'open', 'playing', 'cleaning'].includes(e.state);
     const isActiveState = (isOn || (e.domain === 'vacuum' && e.state !== 'docked') || (e.domain === 'climate' && e.state !== 'off'));
     
     let displayState = e.state;
-    if (e.state === 'on') displayState = 'AN';
+    if (isAuto) {
+      displayState = (e.state === 'on') ? 'AKTIV' : 'INAKTIV';
+    } else if (e.state === 'on') displayState = 'AN';
     else if (e.state === 'off') displayState = 'AUS';
     else if (e.state === 'docked') displayState = 'DOCK';
     else if (e.state === 'cleaning') displayState = 'REINIGT';
@@ -6548,7 +6552,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div class="ha-tile-bottom">
           <span class="${badgeClass}">${escapeHtml(displayState)}</span>
-          ${e.controls?.can_toggle ? `
+          ${isAuto ? `
+            <div style="display:flex; gap:0.35rem; align-items:center;" onclick="event.stopPropagation()">
+              <button class="ha-tile-toggle-btn" style="border-color:var(--c-primary); color:var(--c-primary); padding:0.2rem 0.5rem; font-size:0.75rem;" 
+                      onclick="triggerHaAutomation(event, '${escapeHtml(e.entity_id)}')" title="Automation jetzt ausführen">
+                ▶ START
+              </button>
+              <button class="ha-tile-toggle-btn ${isOn ? 'btn-active' : ''}" 
+                      onclick="toggleHaEntity(event, '${escapeHtml(e.entity_id)}', '${escapeHtml(e.domain)}')" title="${isOn ? 'Deaktivieren' : 'Aktivieren'}">
+                ${isOn ? 'AUS' : 'AN'}
+              </button>
+            </div>
+          ` : (e.controls?.can_toggle ? `
             <button class="ha-tile-toggle-btn ${isOn ? 'btn-active' : ''}" 
                     onclick="toggleHaEntity(event, '${escapeHtml(e.entity_id)}', '${escapeHtml(e.domain)}')">
               ${isOn ? 'AUS' : 'AN'}
@@ -6557,17 +6572,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span style="font-size:0.75rem; color:var(--c-primary); font-family:var(--mono-family); font-weight:700;">
               STEUERN ▶
             </span>
-          ` : '')}
+          ` : ''))}
         </div>
       </div>
     `;
+  }
+
+  async function triggerHaAutomation(event, entityId) {
+    if (event) event.stopPropagation();
+    playLcarsBeep(1400, 1800);
+    await callHaService('automation', 'trigger', { entity_id: entityId });
   }
 
   async function toggleHaEntity(event, entityId, domain) {
     if (event) event.stopPropagation();
     playLcarsBeep(1200, 1600);
 
-    const srv = (domain === 'light' || domain === 'switch' || domain === 'input_boolean') ? 'toggle' : 'toggle';
+    const srv = (domain === 'light' || domain === 'switch' || domain === 'input_boolean' || domain === 'automation') ? 'toggle' : 'toggle';
     await callHaService(domain, srv, { entity_id: entityId });
   }
 
@@ -6856,7 +6877,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       `;
     }
 
-    // 8. BUTTON / SCENE / SCRIPT
+    // 8. AUTOMATION CONTROLS
+    else if (found.domain === 'automation') {
+      const lastTrig = ctrl.last_triggered ? ctrl.last_triggered.replace('T', ' ').slice(0, 19) : 'Nie';
+      const mode = ctrl.mode || 'single';
+      controlsHtml += `
+        <div class="ha-ctrl-row" style="text-align:center; padding:0.5rem 0 1rem 0;">
+          <button class="left-action-btn" onclick="callHaService('automation', 'trigger', {entity_id: '${escapeHtml(found.entity_id)}'})" style="width:100%; padding:0.85rem 1.25rem; font-size:1.05rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700; background:rgba(255,153,0,0.12);">
+            ⚡ AUTOMATION JETZT AUSFÜHREN (TRIGGERN)
+          </button>
+        </div>
+        <div class="ha-ctrl-row">
+          <div style="background:rgba(0,0,0,0.4); border-radius:6px; padding:1rem; font-family:var(--mono-family); font-size:0.85rem; color:#ccc;">
+            <div style="margin-bottom:0.5rem;"><strong style="color:var(--c-gold);">Status:</strong> ${isOn ? '<span style="color:#44dd88; font-weight:bold;">AKTIV (Eingeschaltet)</span>' : '<span style="color:#888; font-weight:bold;">INAKTIV (Deaktiviert)</span>'}</div>
+            <div style="margin-bottom:0.5rem;"><strong style="color:var(--c-gold);">Modus:</strong> ${escapeHtml(mode)}</div>
+            <div><strong style="color:var(--c-gold);">Zuletzt ausgeführt:</strong> ${escapeHtml(lastTrig)}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    // 9. BUTTON / SCENE / SCRIPT
     else if (['button', 'scene', 'script', 'input_button'].includes(found.domain)) {
       const srv = found.domain === 'scene' ? 'turn_on' : (found.domain === 'button' ? 'press' : 'turn_on');
       controlsHtml += `
@@ -9286,7 +9327,7 @@ if USE_FLASK:
         data = request.get_json(silent=True) or {}
         domain = data.get("domain", "")
         service = data.get("service", "")
-        service_data = data.get("service_data", {})
+        service_data = data.get("service_data") or data.get("data") or {}
         if not domain or not service:
             return jsonify({"success": False, "error": "Domain und Service erforderlich"}), 400
         res = ha_service.call_service(domain, service, service_data)
@@ -9573,7 +9614,7 @@ else:
                     data = {}
                 domain = data.get("domain", "")
                 service = data.get("service", "")
-                service_data = data.get("service_data", {})
+                service_data = data.get("service_data") or data.get("data") or {}
                 res = ha_service.call_service(domain, service, service_data) if ha_service else {"success": False}
                 resp = json.dumps(res).encode("utf-8")
                 self.send_response(200)

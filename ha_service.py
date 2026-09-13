@@ -76,13 +76,15 @@ DOMAIN_ICONS = {
     "remote": "📱",
     "person": "👤",
     "sun": "☀️",
-    "weather": "🌤️"
+    "weather": "🌤️",
+    "automation": "⚡"
 }
 
 CONTROLLABLE_DOMAINS = {
     "light", "switch", "climate", "cover", "media_player", "vacuum",
     "fan", "lock", "button", "scene", "script", "number", "select",
-    "input_boolean", "input_number", "input_select", "input_button", "remote"
+    "input_boolean", "input_number", "input_select", "input_button", "remote",
+    "automation"
 }
 
 class HomeAssistantService:
@@ -423,7 +425,26 @@ class HomeAssistantService:
                     "active_count": active_entities
                 })
 
-        # 3. Unassigned entities (filter out noisy internals unless useful)
+        # 3. Collect Automations into dedicated card
+        automations_list = []
+        for eid, st in states_map.items():
+            if eid.startswith("automation."):
+                assigned_entity_ids.add(eid)
+                automations_list.append(self._format_entity(st))
+
+        automations_list.sort(key=lambda x: x["friendly_name"].lower())
+        if automations_list:
+            active_auto = sum(1 for e in automations_list if e["state"] == "on")
+            areas_list.append({
+                "id": "automations",
+                "name": "Automationen",
+                "icon": "⚡",
+                "entities": automations_list,
+                "entity_count": len(automations_list),
+                "active_count": active_auto
+            })
+
+        # 4. Unassigned entities (filter out noisy internals unless useful)
         unassigned_entities = []
         for eid, st in states_map.items():
             if eid in assigned_entity_ids:
@@ -449,13 +470,15 @@ class HomeAssistantService:
             "name": cfg.get("name", "Assistant"),
             "url": cfg.get("url", ""),
             "areas": areas_list,
+            "automations": automations_list,
             "unassigned": unassigned_entities,
             "unassigned_active": unassigned_active,
             "stats": {
                 "total_entities": total_entities,
                 "areas_count": len(areas_list),
                 "active_count": total_active,
-                "controllable_count": controllable_count
+                "controllable_count": controllable_count,
+                "automations_count": len(automations_list)
             },
             "timestamp": time.strftime("%H:%M:%S")
         }
@@ -475,7 +498,11 @@ class HomeAssistantService:
 
         ctrl_details = {
             "domain": domain,
-            "can_toggle": domain in ("light", "switch", "input_boolean", "fan"),
+            "can_toggle": domain in ("light", "switch", "input_boolean", "fan", "automation"),
+            "can_trigger": domain in ("automation", "scene", "script", "button", "input_button"),
+            "last_triggered": attrs.get("last_triggered"),
+            "mode": attrs.get("mode"),
+            "current": attrs.get("current"),
             "has_brightness": domain == "light" and ("brightness" in attrs or "supported_color_modes" in attrs),
             "brightness": attrs.get("brightness"),
             "brightness_pct": round(attrs.get("brightness", 0) / 255 * 100) if attrs.get("brightness") is not None else None,
