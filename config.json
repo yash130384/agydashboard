@@ -1,0 +1,9 @@
+{
+  "cpu_threshold": 90.0,
+  "ram_threshold": 90.0,
+  "disk_threshold": 90.0,
+  "temp_threshold": 80.0,
+  "duration_seconds": 60,
+  "gateway_check_interval_seconds": 600,
+  "gateway_url": "http://127.0.0.1:20128"
+}

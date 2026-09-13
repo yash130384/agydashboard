@@ -6,10 +6,12 @@ Lauscht auf Port 5000 (bind 0.0.0.0) und bietet:
 - 5 Hauptkategorien ohne Nummern: SYSTEM, SERVICES, KI-AGENTEN, KI-INFO, CONFIG
 - System & 24h Sensor-Verlauf in einer gemeinsamen Kategorie (SYSTEM)
 - Web-Services & 5-Minuten Webserver-Scanner in einer gemeinsamen Kategorie (SERVICES)
-- 5 umschaltbare LCARS Farbmodi (Classic, Nemesis Blue, Lower Decks, Red Alert, Voyager Bio-Neural)
+- 6 umschaltbare LCARS Farbmodi (Classic, Nemesis Blue, Lower Decks, Lower Decks PADD, Picard, Voyager)
+- Automatischer Red Alert Alarm bei Schwellwert-Überschreitung (CPU, RAM, Disk, Temp > 1 Min) oder Ausfall des 9Router Gateways
 - Keine horizontalen Scrollbalken (alle Inhalte responsive und bildschirmgerecht aufbereitet)
 - Zuverlässig initialisierte Chart.js Diagramme für Systemverlauf und KI-Modell-Verbrauch
 - 5-Minuten Hintergrund-Scanner für alle laufenden Prozesse mit LAN-, Tailscale- und Cloudflared-Adressen
+- Echtes Stardate und Live-Vitals im oberen LCARS-Terminal-Rahmen
 """
 
 import atexit
@@ -219,6 +221,35 @@ def get_temperature():
             pass
 
     return None, "N/A"
+
+
+def calculate_stardate(dt=None):
+    """Berechnet das echte Star Trek Stardate gemäß offizieller LCARS-Formel (thelcars.com)."""
+    if dt is None:
+        dt = datetime.datetime.now()
+    current_hour = dt.hour
+    date_for_calc = dt
+    if current_hour == 0:
+        date_for_calc = dt + datetime.timedelta(days=1)
+    first_number = date_for_calc.year - 1946
+    start_of_year = datetime.datetime(date_for_calc.year, 1, 1)
+    diff_days = (date_for_calc - start_of_year).days + 1
+    calculated_second_number = int(diff_days * 2.732)
+    second_number = f"{calculated_second_number:03d}"
+    if current_hour == 0:
+        final_number = "0"
+    elif 1 <= current_hour <= 9:
+        final_number = f"{current_hour:02d}"
+    elif 10 <= current_hour <= 11:
+        final_number = str(current_hour)
+    elif 12 <= current_hour <= 21:
+        h12 = current_hour % 12
+        if h12 == 0:
+            h12 = 12
+        final_number = str(h12)
+    else:  # 22 <= current_hour <= 23
+        final_number = str(current_hour)
+    return f"{first_number}{second_number}.{final_number}"
 
 
 def get_throttled_status():
@@ -1671,6 +1702,8 @@ def get_system_stats():
 
     stats["lan_ip"] = get_lan_ip()
     stats["history_samples"] = history_store.get_samples(range_seconds=3600) if "history_store" in globals() else []
+    stats["stardate"] = calculate_stardate()
+    stats["alerts"] = alert_monitor.get_status() if "alert_monitor" in globals() else {"active": False, "reasons": []}
 
     return stats
 
@@ -1752,6 +1785,12 @@ class MetricsHistory:
             "disk": disk_pct,
         }
 
+        if "alert_monitor" in globals():
+            try:
+                alert_monitor.evaluate(cpu_val, ram_pct, disk_pct, temp_c)
+            except Exception:
+                pass
+
         with self._lock:
             self._samples.append(sample)
             cutoff = now_ts - self.retention_seconds
@@ -1810,6 +1849,260 @@ def get_9router_api_key():
         except Exception:
             pass
     return "sk-a83b72936d0528ea-bhpytf-49c7be05"
+
+
+# ---------------------------------------------------------------------------
+# Schwellwert- & Red-Alert-Überwachung (AlertMonitor)
+# ---------------------------------------------------------------------------
+DEFAULT_ALERT_CONFIG = {
+    "cpu_threshold": 90.0,
+    "ram_threshold": 90.0,
+    "disk_threshold": 90.0,
+    "temp_threshold": 80.0,
+    "duration_seconds": 60,
+    "gateway_check_interval_seconds": 600,
+    "gateway_url": "http://127.0.0.1:20128",
+}
+
+
+class AlertMonitor:
+    def __init__(self, config_path=None):
+        self.config_path = config_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+        self.config = self._load_config()
+        self.lock = threading.Lock()
+
+        # High state timestamps
+        self.cpu_high_since = None
+        self.ram_high_since = None
+        self.disk_high_since = None
+        self.temp_high_since = None
+
+        # Current metrics snapshot
+        self.last_cpu = 0.0
+        self.last_ram = 0.0
+        self.last_disk = 0.0
+        self.last_temp = 0.0
+
+        # Gateway state
+        self.gateway_last_check = 0
+        self.gateway_last_check_str = "Noch nicht geprüft"
+        self.gateway_status = "ok"
+        self.gateway_error = ""
+
+        # Overall alert state
+        self.is_red_alert = False
+        self.active_reasons = []
+
+        self._running = False
+        self._thread = None
+
+    def _load_config(self):
+        cfg = dict(DEFAULT_ALERT_CONFIG)
+        if os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        cfg.update(data)
+            except Exception as e:
+                print(f"[WARN] AlertMonitor: Fehler beim Laden von config.json: {e}", file=sys.stderr)
+        else:
+            try:
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    json.dump(cfg, f, indent=2)
+            except Exception:
+                pass
+        return cfg
+
+    def save_config(self, updates):
+        with self.lock:
+            for k, v in updates.items():
+                if k in self.config:
+                    if k in ("cpu_threshold", "ram_threshold", "disk_threshold", "temp_threshold"):
+                        try:
+                            self.config[k] = float(v)
+                        except (ValueError, TypeError):
+                            pass
+                    elif k in ("duration_seconds", "gateway_check_interval_seconds"):
+                        try:
+                            self.config[k] = int(v)
+                        except (ValueError, TypeError):
+                            pass
+                    elif k == "gateway_url":
+                        self.config[k] = str(v).strip()
+            try:
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    json.dump(self.config, f, indent=2)
+            except Exception as e:
+                print(f"[WARN] AlertMonitor: Fehler beim Speichern von config.json: {e}", file=sys.stderr)
+        return self.get_status()
+
+    def check_gateway(self):
+        url = self.config.get("gateway_url", "http://127.0.0.1:20128").rstrip("/")
+        success = False
+        err_msg = ""
+        now_ts = int(time.time())
+
+        # Test both /v1/models and base url
+        check_endpoints = [f"{url}/v1/models", url]
+        last_err = ""
+        for ep in check_endpoints:
+            try:
+                headers = {}
+                api_key = get_9router_api_key()
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                req = urllib.request.Request(ep, headers=headers)
+                opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+                with opener.open(req, timeout=5) as resp:
+                    code = resp.getcode()
+                    if code in (200, 301, 302, 307, 308):
+                        success = True
+                        break
+            except urllib.error.HTTPError as he:
+                if he.code in (200, 301, 302, 307, 308, 401, 403):
+                    success = True
+                    break
+                last_err = f"HTTP {he.code}"
+            except Exception as e:
+                last_err = str(e)
+
+        if not success:
+            err_msg = last_err or "Keine Antwort vom 9Router Gateway"
+
+        with self.lock:
+            self.gateway_last_check = now_ts
+            self.gateway_last_check_str = datetime.datetime.fromtimestamp(now_ts).strftime("%Y-%m-%d %H:%M:%S")
+            if success:
+                self.gateway_status = "ok"
+                self.gateway_error = ""
+            else:
+                self.gateway_status = "error"
+                self.gateway_error = err_msg
+
+        return {"status": self.gateway_status, "error": self.gateway_error, "time": self.gateway_last_check_str}
+
+    def evaluate(self, cpu_val, ram_pct, disk_pct, temp_c):
+        now_ts = int(time.time())
+        with self.lock:
+            self.last_cpu = cpu_val
+            self.last_ram = ram_pct
+            self.last_disk = disk_pct
+            self.last_temp = temp_c or 0.0
+
+            cpu_th = float(self.config.get("cpu_threshold", 90.0))
+            ram_th = float(self.config.get("ram_threshold", 90.0))
+            disk_th = float(self.config.get("disk_threshold", 90.0))
+            temp_th = float(self.config.get("temp_threshold", 80.0))
+            dur_sec = int(self.config.get("duration_seconds", 60))
+            gw_int = int(self.config.get("gateway_check_interval_seconds", 600))
+
+            # Gateway check due?
+            if (now_ts - self.gateway_last_check) >= gw_int or self.gateway_last_check == 0:
+                threading.Thread(target=self.check_gateway, daemon=True).start()
+
+            # Check CPU
+            if cpu_val >= cpu_th:
+                if self.cpu_high_since is None:
+                    self.cpu_high_since = now_ts
+            else:
+                self.cpu_high_since = None
+
+            # Check RAM
+            if ram_pct >= ram_th:
+                if self.ram_high_since is None:
+                    self.ram_high_since = now_ts
+            else:
+                self.ram_high_since = None
+
+            # Check Disk
+            if disk_pct >= disk_th:
+                if self.disk_high_since is None:
+                    self.disk_high_since = now_ts
+            else:
+                self.disk_high_since = None
+
+            # Check Temp
+            if (temp_c or 0.0) >= temp_th:
+                if self.temp_high_since is None:
+                    self.temp_high_since = now_ts
+            else:
+                self.temp_high_since = None
+
+            reasons = []
+            if self.cpu_high_since and (now_ts - self.cpu_high_since) >= dur_sec:
+                reasons.append(f"CPU Auslastung ({cpu_val:.1f}%) > {cpu_th:.0f}% seit {now_ts - self.cpu_high_since}s")
+            if self.ram_high_since and (now_ts - self.ram_high_since) >= dur_sec:
+                reasons.append(f"RAM Belegung ({ram_pct:.1f}%) > {ram_th:.0f}% seit {now_ts - self.ram_high_since}s")
+            if self.disk_high_since and (now_ts - self.disk_high_since) >= dur_sec:
+                reasons.append(f"Festplatte ({disk_pct:.1f}%) > {disk_th:.0f}% seit {now_ts - self.disk_high_since}s")
+            if self.temp_high_since and (now_ts - self.temp_high_since) >= dur_sec:
+                reasons.append(f"Temperatur ({temp_c:.1f}°C) > {temp_th:.0f}°C seit {now_ts - self.temp_high_since}s")
+
+            if self.gateway_status == "error":
+                reasons.append(f"9Router Gateway nicht funktionsfähig: {self.gateway_error or 'Offline'}")
+
+            self.is_red_alert = len(reasons) > 0
+            self.active_reasons = reasons
+
+    def get_status(self):
+        now_ts = int(time.time())
+        with self.lock:
+            return {
+                "active": self.is_red_alert,
+                "reasons": list(self.active_reasons),
+                "thresholds": dict(self.config),
+                "gateway": {
+                    "status": self.gateway_status,
+                    "error": self.gateway_error,
+                    "last_check": self.gateway_last_check_str,
+                    "url": self.config.get("gateway_url", "http://127.0.0.1:20128"),
+                },
+                "current_values": {
+                    "cpu": self.last_cpu,
+                    "ram": self.last_ram,
+                    "disk": self.last_disk,
+                    "temp": self.last_temp,
+                },
+                "high_durations": {
+                    "cpu_seconds": int(now_ts - self.cpu_high_since) if self.cpu_high_since else 0,
+                    "ram_seconds": int(now_ts - self.ram_high_since) if self.ram_high_since else 0,
+                    "disk_seconds": int(now_ts - self.disk_high_since) if self.disk_high_since else 0,
+                    "temp_seconds": int(now_ts - self.temp_high_since) if self.temp_high_since else 0,
+                },
+                "stardate": calculate_stardate(),
+            }
+
+    def _worker(self):
+        while self._running:
+            try:
+                cpu_val = 0.0
+                if psutil:
+                    try:
+                        cpu_val = round(psutil.cpu_percent(interval=None), 1)
+                    except Exception:
+                        pass
+                temp_c, _ = get_temperature()
+                ram_pct = get_ram_metrics().get("percent", 0.0)
+                disk_pct = get_disk_metrics().get("percent", 0.0)
+                self.evaluate(cpu_val, ram_pct, disk_pct, temp_c)
+            except Exception as e:
+                print(f"[WARN] AlertMonitor worker error: {e}", file=sys.stderr)
+            time.sleep(3)
+
+    def start(self):
+        if not self._running:
+            self._running = True
+            threading.Thread(target=self.check_gateway, daemon=True).start()
+            self._thread = threading.Thread(target=self._worker, name="AlertMonitorWorker", daemon=True)
+            self._thread.start()
+
+    def stop(self):
+        self._running = False
+
+
+alert_monitor = AlertMonitor()
+alert_monitor.start()
 
 
 def fetch_chat_models():
@@ -2026,7 +2319,55 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       --c-card-border: rgba(255, 170, 68, 0.4);
     }
 
-    /* Red Alert Combat Theme */
+    /* Lower Decks PADD Theme */
+    [data-theme="lowerdecks-padd"] {
+      --c-primary: #5588ee;
+      --c-secondary: #66ccff;
+      --c-blue: #7799dd;
+      --c-almond: #88eeff;
+      --c-butterscotch: #455580;
+      --c-red: #ff3500;
+      --c-gold: #f3f3fc;
+      --elbow-top: #5588ee;
+      --elbow-bottom: #344470;
+      --banner-color: #66ccff;
+      --data-cascade-color: #5588ee;
+      --c-card-border: rgba(85, 136, 238, 0.4);
+    }
+
+    /* Picard 25th Century Theme */
+    [data-theme="picard"] {
+      --c-primary: #37a6d1;
+      --c-secondary: #41c4f7;
+      --c-blue: #2a7193;
+      --c-almond: #9ea5ba;
+      --c-butterscotch: #ff6753;
+      --c-red: #e7442a;
+      --c-gold: #f3f4f7;
+      --elbow-top: #37a6d1;
+      --elbow-bottom: #1c3c55;
+      --banner-color: #41c4f7;
+      --data-cascade-color: #37a6d1;
+      --c-card-border: rgba(55, 166, 209, 0.4);
+    }
+
+    /* Voyager Theme */
+    [data-theme="voyager"] {
+      --c-primary: #55a7ff;
+      --c-secondary: #fb9004;
+      --c-blue: #2288ff;
+      --c-almond: #ffe1ca;
+      --c-butterscotch: #ffbb33;
+      --c-red: #ff3300;
+      --c-gold: #94b300;
+      --elbow-top: #828cad;
+      --elbow-bottom: #74788b;
+      --banner-color: #55a7ff;
+      --data-cascade-color: #55a7ff;
+      --c-card-border: rgba(85, 167, 255, 0.4);
+    }
+
+    /* Red Alert Combat Theme (Automatisch bei Alarm) */
     [data-theme="redalert"] {
       --c-primary: #cf3030;
       --c-secondary: #ff4444;
@@ -2039,23 +2380,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       --elbow-bottom: #881111;
       --banner-color: #ff4444;
       --data-cascade-color: #ff3333;
-      --c-card-border: rgba(207, 48, 48, 0.5);
-    }
-
-    /* Voyager Bio-Neural Theme */
-    [data-theme="voyager"] {
-      --c-primary: #14b8a6;
-      --c-secondary: #38bdf8;
-      --c-blue: #10b981;
-      --c-almond: #a78bfa;
-      --c-butterscotch: #06b6d4;
-      --c-red: #f43f5e;
-      --c-gold: #f59e0b;
-      --elbow-top: #14b8a6;
-      --elbow-bottom: #38bdf8;
-      --banner-color: #38bdf8;
-      --data-cascade-color: #14b8a6;
-      --c-card-border: rgba(20, 184, 166, 0.4);
+      --c-card-border: rgba(207, 48, 48, 0.65);
     }
 
     /* ==========================================================================
@@ -2113,24 +2438,144 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       flex-direction: column;
       background-color: var(--elbow-top);
       border-radius: var(--elbow-radius);
-      padding: 0.5rem;
+      padding: 0.5rem 0.65rem;
       text-align: right;
       color: #000;
       font-weight: 700;
       justify-content: space-between;
       min-height: 120px;
+      user-select: none;
+      transition: background-color 0.25s ease;
     }
-    .left-frame-top button {
-      background: transparent;
-      border: none;
-      color: #000;
-      font-family: var(--font-family);
-      font-size: 1.35rem;
-      font-weight: 700;
-      text-transform: uppercase;
+    .left-frame-top:hover {
+      filter: brightness(1.05);
+    }
+    .top-stardate-block {
       text-align: right;
-      cursor: pointer;
       line-height: 1.1;
+      padding-bottom: 0.25rem;
+      border-bottom: 2px solid rgba(0, 0, 0, 0.25);
+    }
+    .top-stardate-label {
+      font-size: 0.72rem;
+      font-family: var(--font-family);
+      letter-spacing: 1px;
+      color: rgba(0, 0, 0, 0.75);
+      font-weight: 800;
+    }
+    .top-stardate-value {
+      font-size: 1.15rem;
+      font-family: var(--mono-family);
+      font-weight: 800;
+      color: #000;
+      letter-spacing: 0.5px;
+    }
+    .top-vitals-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.25rem 0.35rem;
+      margin-top: 0.35rem;
+    }
+    .top-vital-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: var(--mono-family);
+      font-size: 0.76rem;
+      font-weight: 700;
+      color: #000;
+      background: rgba(0, 0, 0, 0.12);
+      padding: 0.18rem 0.35rem;
+      border-radius: 4px;
+      white-space: nowrap;
+      transition: background-color 0.25s ease, color 0.25s ease;
+    }
+    .top-vital-item.vital-alert {
+      background: #cf3030 !important;
+      color: #ffffff !important;
+      animation: pulse-vital 0.8s infinite alternate;
+    }
+    @keyframes pulse-vital {
+      from { opacity: 0.85; filter: brightness(1); }
+      to { opacity: 1; filter: brightness(1.3); }
+    }
+    .top-vital-icon {
+      font-size: 0.75rem;
+      line-height: 1;
+    }
+    .top-vital-label {
+      font-family: var(--font-family);
+      font-size: 0.68rem;
+      opacity: 0.85;
+      margin-right: 2px;
+    }
+    .top-vital-num {
+      font-weight: 800;
+    }
+
+    /* Red Alert Alarm Banner */
+    .red-alert-banner {
+      background: linear-gradient(90deg, #cf3030 0%, #ff0000 50%, #cf3030 100%);
+      color: #fff;
+      padding: 0.55rem 1rem;
+      border-radius: 6px;
+      margin-bottom: 0.85rem;
+      box-shadow: 0 0 20px rgba(255, 0, 0, 0.65);
+      animation: alert-pulse 1.2s infinite alternate;
+      border: 2px solid #ff4444;
+      font-family: var(--font-family);
+      font-weight: 800;
+      letter-spacing: 1px;
+    }
+    @keyframes alert-pulse {
+      0% { opacity: 0.85; filter: brightness(1); }
+      100% { opacity: 1; filter: brightness(1.35); }
+    }
+    .red-alert-content {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .red-alert-icon {
+      font-size: 1.4rem;
+      animation: icon-bounce 0.6s infinite alternate;
+    }
+    @keyframes icon-bounce {
+      from { transform: scale(1); }
+      to { transform: scale(1.25); }
+    }
+    .red-alert-title {
+      font-size: 1.1rem;
+      text-transform: uppercase;
+      color: #fff;
+    }
+    .red-alert-reasons {
+      font-family: var(--mono-family);
+      font-size: 0.92rem;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      color: #ffea00;
+    }
+
+    /* LCARS Input styling */
+    .lcars-input {
+      width: 100%;
+      background: #000;
+      color: #fff;
+      border: 1px solid var(--c-primary);
+      border-radius: 4px;
+      padding: 0.45rem 0.65rem;
+      font-family: var(--mono-family);
+      font-size: 0.92rem;
+      box-sizing: border-box;
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .lcars-input:focus {
+      border-color: #fff;
+      box-shadow: 0 0 8px var(--c-primary);
     }
 
     .right-frame-top {
@@ -3076,16 +3521,40 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <section class="wrap-standard">
   <!-- OBERER RAHMEN -->
   <div class="wrap">
-    <div class="left-frame-top">
-      <button onclick="playLcarsBeep(880, 1760); switchCategory('system')">TERMINAL 47<br><span style="font-size:0.8rem; opacity:0.85;">AGY-PI</span></button>
-      <div style="font-size: 0.8rem; font-family: var(--mono-family);">ONLINE</div>
+    <div class="left-frame-top" onclick="playLcarsBeep(880, 1760); switchCategory('system')" style="cursor:pointer;" title="ODN Telemetrie // Klicken für System-Details">
+      <div class="top-stardate-block">
+        <div class="top-stardate-label">STARDATE</div>
+        <div class="top-stardate-value" id="topStardateVal">{{ stats.stardate or '--------.-' }}</div>
+      </div>
+      <div class="top-vitals-container">
+        <div class="top-vital-item" id="topVitalCpu" title="CPU Auslastung">
+          <span class="top-vital-icon">⚡</span>
+          <span class="top-vital-label">CPU</span>
+          <span class="top-vital-num" id="topCpuVal">{{ stats.cpu.percent or 0 }}%</span>
+        </div>
+        <div class="top-vital-item" id="topVitalRam" title="Arbeitsspeicher (RAM)">
+          <span class="top-vital-icon">💾</span>
+          <span class="top-vital-label">RAM</span>
+          <span class="top-vital-num" id="topRamVal">{{ stats.ram.percent or 0 }}%</span>
+        </div>
+        <div class="top-vital-item" id="topVitalDisk" title="Festplatte (Root /)">
+          <span class="top-vital-icon">💽</span>
+          <span class="top-vital-label">DSK</span>
+          <span class="top-vital-num" id="topDiskVal">{{ stats.disk.percent or 0 }}%</span>
+        </div>
+        <div class="top-vital-item" id="topVitalTemp" title="SoC Temperatur">
+          <span class="top-vital-icon">🌡️</span>
+          <span class="top-vital-label">TMP</span>
+          <span class="top-vital-num" id="topTempVal">{{ (stats.temperature.value|round|int) if stats.temperature.value else '--' }}°</span>
+        </div>
+      </div>
     </div>
     <div class="right-frame-top">
       <div class="banner-container">
         <div class="banner-title" id="bannerSectionTitle">SYSTEM & SENSOR VERLAUF</div>
         <div class="banner-stardate">
           <span>STARDATE:</span>
-          <span id="stardateValue" style="font-weight:700;">--------.-</span>
+          <span id="stardateValue" style="font-weight:700;">{{ stats.stardate or '--------.-' }}</span>
         </div>
       </div>
       <div class="data-cascade-bar">
@@ -3148,6 +3617,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="right-frame">
       <div class="right-frame-inner-corner"></div>
       <main>
+
+        <!-- RED ALERT ALARM BANNER (WENN STATUS KRITISCH ODER GATEWAY OFFLINE) -->
+        <div id="redAlertBanner" class="red-alert-banner" style="display: none;">
+          <div class="red-alert-content">
+            <span class="red-alert-icon">🚨</span>
+            <span class="red-alert-title">RED ALERT // KRITISCHER STATUS</span>
+            <span class="red-alert-reasons" id="redAlertReasons">ODN SYSTEM LIMIT ÜBERSCHRITTEN</span>
+          </div>
+        </div>
 
         <!-- KATEGORIE 1: SYSTEM & 24H SENSOR VERLAUF (KOMBINIERT) -->
         <section class="lcars-section active-section" id="section-system">
@@ -3718,7 +4196,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <!-- Classic TNG -->
             <button class="theme-btn active-theme" onclick="setLcarsTheme('classic')" id="theme-btn-classic">
               <span style="font-weight:700; font-size:1.15rem;">CLASSIC 24TH C.</span>
-              <span style="font-size:0.8rem; color:#aaa;">TNG / DS9 / VOYAGER OKUDA</span>
+              <span style="font-size:0.8rem; color:#aaa;">TNG / DS9 / OKUDA ORIGINAL</span>
               <div class="theme-swatches">
                 <div class="theme-swatch" style="background-color:#eb943a;"></div>
                 <div class="theme-swatch" style="background-color:#baa4e5;"></div>
@@ -3754,31 +4232,156 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
             </button>
 
-            <!-- Red Alert -->
-            <button class="theme-btn" onclick="setLcarsTheme('redalert')" id="theme-btn-redalert">
-              <span style="font-weight:700; font-size:1.15rem;">RED ALERT</span>
-              <span style="font-size:0.8rem; color:#aaa;">DEFIANT KAMPFSTATION</span>
+            <!-- Lower Decks PADD -->
+            <button class="theme-btn" onclick="setLcarsTheme('lowerdecks-padd')" id="theme-btn-lowerdecks-padd">
+              <span style="font-weight:700; font-size:1.15rem;">LOWER DECKS PADD</span>
+              <span style="font-size:0.8rem; color:#aaa;">USS CERRITOS PADD INTERFACE</span>
               <div class="theme-swatches">
-                <div class="theme-swatch" style="background-color:#cf3030;"></div>
-                <div class="theme-swatch" style="background-color:#ff4444;"></div>
-                <div class="theme-swatch" style="background-color:#ffaa00;"></div>
-                <div class="theme-swatch" style="background-color:#881111;"></div>
-                <div class="theme-swatch" style="background-color:#ff0000;"></div>
+                <div class="theme-swatch" style="background-color:#5588ee;"></div>
+                <div class="theme-swatch" style="background-color:#66ccff;"></div>
+                <div class="theme-swatch" style="background-color:#7799dd;"></div>
+                <div class="theme-swatch" style="background-color:#88eeff;"></div>
+                <div class="theme-swatch" style="background-color:#ff3500;"></div>
               </div>
             </button>
 
-            <!-- Voyager Bio-Neural -->
-            <button class="theme-btn" onclick="setLcarsTheme('voyager')" id="theme-btn-voyager">
-              <span style="font-weight:700; font-size:1.15rem;">BIO-NEURAL</span>
-              <span style="font-size:0.8rem; color:#aaa;">WISSENSCHAFT & SMARAGD</span>
+            <!-- Picard 25th Century -->
+            <button class="theme-btn" onclick="setLcarsTheme('picard')" id="theme-btn-picard">
+              <span style="font-weight:700; font-size:1.15rem;">PICARD 25TH C.</span>
+              <span style="font-size:0.8rem; color:#aaa;">TITAN-A / LA SIRENA MODERN</span>
               <div class="theme-swatches">
-                <div class="theme-swatch" style="background-color:#14b8a6;"></div>
-                <div class="theme-swatch" style="background-color:#38bdf8;"></div>
-                <div class="theme-swatch" style="background-color:#10b981;"></div>
-                <div class="theme-swatch" style="background-color:#a78bfa;"></div>
-                <div class="theme-swatch" style="background-color:#f59e0b;"></div>
+                <div class="theme-swatch" style="background-color:#37a6d1;"></div>
+                <div class="theme-swatch" style="background-color:#41c4f7;"></div>
+                <div class="theme-swatch" style="background-color:#2a7193;"></div>
+                <div class="theme-swatch" style="background-color:#9ea5ba;"></div>
+                <div class="theme-swatch" style="background-color:#e7442a;"></div>
               </div>
             </button>
+
+            <!-- Voyager -->
+            <button class="theme-btn" onclick="setLcarsTheme('voyager')" id="theme-btn-voyager">
+              <span style="font-weight:700; font-size:1.15rem;">VOYAGER</span>
+              <span style="font-size:0.8rem; color:#aaa;">USS VOYAGER NCC-74656</span>
+              <div class="theme-swatches">
+                <div class="theme-swatch" style="background-color:#55a7ff;"></div>
+                <div class="theme-swatch" style="background-color:#fb9004;"></div>
+                <div class="theme-swatch" style="background-color:#ffbb33;"></div>
+                <div class="theme-swatch" style="background-color:#828cad;"></div>
+                <div class="theme-swatch" style="background-color:#2288ff;"></div>
+              </div>
+            </button>
+          </div>
+
+          <!-- ALARM & SCHWELLWERTE (RED ALERT TRIGGER) -->
+          <div class="lcars-card" style="margin-top: 1.25rem; margin-bottom: 1.25rem; width: 100%;">
+            <div class="card-head">
+              <span class="card-head-title" style="color:var(--c-primary); font-size:1.15rem;">ALARM-SCHWELLWERTE // AUTOMATISCHER ROTER ALARM</span>
+              <span class="card-head-icon">🚨</span>
+            </div>
+            <p style="color:var(--c-gold); font-size:0.9rem; margin-bottom:1rem;">
+              RED ALERT WIRD AUTOMATISCH AKTIVIERT, WENN EINER DER 4 WERTE LÄNGER ALS DIE EINGESTELLTE DAUER ÜBER DEM SCHWELLWERT LIEGT ODER DER 9ROUTER GATEWAY AUSFÄLLT.
+            </p>
+
+            <form id="thresholdsForm" onsubmit="saveThresholds(event)">
+              <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.25rem;">
+
+                <!-- CPU Schwellwert -->
+                <div class="config-field">
+                  <label for="cfgCpuThresh" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-primary);">
+                    <span>⚡ CPU SCHWELLWERT</span>
+                    <span id="cfgCpuThreshVal">90%</span>
+                  </label>
+                  <input type="number" id="cfgCpuThresh" min="10" max="100" step="1" value="90" class="lcars-input" required oninput="document.getElementById('cfgCpuThreshVal').textContent = this.value + '%'">
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Aktuell: <span id="curCpuLive">--%</span></div>
+                </div>
+
+                <!-- RAM Schwellwert -->
+                <div class="config-field">
+                  <label for="cfgRamThresh" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-secondary);">
+                    <span>💾 RAM SCHWELLWERT</span>
+                    <span id="cfgRamThreshVal">90%</span>
+                  </label>
+                  <input type="number" id="cfgRamThresh" min="10" max="100" step="1" value="90" class="lcars-input" required oninput="document.getElementById('cfgRamThreshVal').textContent = this.value + '%'">
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Aktuell: <span id="curRamLive">--%</span></div>
+                </div>
+
+                <!-- Speicher/Disk Schwellwert -->
+                <div class="config-field">
+                  <label for="cfgDiskThresh" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-blue);">
+                    <span>💽 SPEICHER (ROOT /) SCHWELLWERT</span>
+                    <span id="cfgDiskThreshVal">90%</span>
+                  </label>
+                  <input type="number" id="cfgDiskThresh" min="10" max="100" step="1" value="90" class="lcars-input" required oninput="document.getElementById('cfgDiskThreshVal').textContent = this.value + '%'">
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Aktuell: <span id="curDiskLive">--%</span></div>
+                </div>
+
+                <!-- Temperatur Schwellwert -->
+                <div class="config-field">
+                  <label for="cfgTempThresh" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-red);">
+                    <span>🌡️ TEMPERATUR SCHWELLWERT</span>
+                    <span id="cfgTempThreshVal">80°C</span>
+                  </label>
+                  <input type="number" id="cfgTempThresh" min="30" max="105" step="1" value="80" class="lcars-input" required oninput="document.getElementById('cfgTempThreshVal').textContent = this.value + '°C'">
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Aktuell: <span id="curTempLive">--°C</span> (Limit ~85°C)</div>
+                </div>
+
+                <!-- Haltezeit / Dauer -->
+                <div class="config-field">
+                  <label for="cfgDuration" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-gold);">
+                    <span>⏱️ ALARM-HALTEZEIT (DAUER)</span>
+                    <span id="cfgDurationVal">60 Sek</span>
+                  </label>
+                  <input type="number" id="cfgDuration" min="5" max="600" step="5" value="60" class="lcars-input" required oninput="document.getElementById('cfgDurationVal').textContent = this.value + ' Sek'">
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Standard: 60s (1 Minute kontinuierlich über Limit)</div>
+                </div>
+
+                <!-- Gateway Check Interval -->
+                <div class="config-field">
+                  <label for="cfgGwInterval" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-primary);">
+                    <span>⚙️ 9ROUTER TEST-INTERVALL</span>
+                    <span id="cfgGwIntervalVal">10 Min</span>
+                  </label>
+                  <input type="number" id="cfgGwInterval" min="1" max="60" step="1" value="10" class="lcars-input" required oninput="document.getElementById('cfgGwIntervalVal').textContent = this.value + ' Min'">
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Standard: Alle 10 Minuten Gateway prüfen</div>
+                </div>
+
+                <!-- Gateway URL -->
+                <div class="config-field" style="grid-column: 1 / -1;">
+                  <label for="cfgGwUrl" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-primary);">
+                    <span>🌐 9ROUTER GATEWAY URL // ENDPUNKT</span>
+                  </label>
+                  <input type="text" id="cfgGwUrl" value="http://127.0.0.1:20128" class="lcars-input" required>
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">Lokaler 9Router Proxy & KI-Gateway Dienst (Port 20128)</div>
+                </div>
+
+              </div>
+
+              <!-- Live Gateway & Alert Status Box -->
+              <div style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:0.85rem 1rem; margin-bottom:1.25rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+                <div>
+                  <div style="font-size:0.75rem; color:#888; text-transform:uppercase;">9Router Gateway Status</div>
+                  <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.25rem;">
+                    <span id="cfgGwBadge" class="badge-status badge-online">ONLINE</span>
+                    <span id="cfgGwTime" style="font-size:0.8rem; color:#bbb;">Letzter Test: --:--:--</span>
+                    <span id="cfgGwErr" style="font-size:0.8rem; color:var(--c-red);"></span>
+                  </div>
+                </div>
+
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                  <button type="button" class="left-action-btn" onclick="testGatewayNow()" id="btnTestGw" style="padding:0.4rem 0.8rem; font-size:0.82rem;">
+                    <span>⚙️</span> <span>GATEWAY JETZT TESTEN</span>
+                  </button>
+                  <button type="button" class="left-action-btn" onclick="resetDefaultThresholds()" style="padding:0.4rem 0.8rem; font-size:0.82rem; border-color:#888; color:#bbb;">
+                    <span>↺</span> <span>STANDARDS</span>
+                  </button>
+                  <button type="submit" class="left-action-btn" id="btnSaveThresholds" style="padding:0.4rem 1rem; font-size:0.85rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+                    <span>💾</span> <span>SCHWELLWERTE SPEICHERN</span>
+                  </button>
+                </div>
+              </div>
+
+              <div id="cfgSaveMsg" style="display:none; font-family:var(--mono-family); font-size:0.85rem; color:var(--c-primary); margin-top:0.5rem;"></div>
+            </form>
           </div>
 
           <!-- Weitere Optionen -->
@@ -3909,22 +4512,44 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (cfgLabel) cfgLabel.textContent = soundEnabled ? 'SOUND EFFEKTE: AKTIV' : 'SOUND EFFEKTE: STUMM';
   }
 
-  // Stardate Berechnung
-  function updateStardate() {
-    const now = new Date();
-    const currentHour = now.getHours();
-    let d = new Date(now);
-    if (currentHour === 0) d.setDate(d.getDate() + 1);
-    const firstNum = d.getFullYear() - 1946;
-    const startOfYear = new Date(d.getFullYear(), 0, 1);
-    const diffDays = Math.ceil(Math.abs(d - startOfYear) / (1000 * 60 * 60 * 24));
-    const secondNum = String(Math.floor(diffDays * 2.732)).padStart(3, '0');
-    let finalNum = (currentHour === 0) ? "0" : ((currentHour >= 12 && currentHour <= 21) ? String(currentHour % 12 || 12) : String(currentHour).padStart(2, '0'));
-    const stardateStr = `${firstNum}${secondNum}.${finalNum}`;
-    const el = document.getElementById('stardateValue');
-    if (el) el.textContent = stardateStr;
+  // Stardate Berechnung gemäß offizieller LCARS-Formel (thelcars.com)
+  function calculateStardate(d = new Date()) {
+    const currentHour = d.getHours();
+    let dateForCalc = new Date(d);
+    if (currentHour === 0) {
+      dateForCalc.setDate(dateForCalc.getDate() + 1);
+    }
+    const firstNum = dateForCalc.getFullYear() - 1946;
+    const startOfYear = new Date(dateForCalc.getFullYear(), 0, 1);
+    const diffTime = Math.abs(dateForCalc - startOfYear);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    const calculatedSecondNumber = Math.floor(diffDays * 2.732);
+    const secondNum = String(calculatedSecondNumber).padStart(3, '0');
+    let finalNum;
+    if (currentHour === 0) {
+      finalNum = "0";
+    } else if (currentHour >= 1 && currentHour <= 9) {
+      finalNum = String(currentHour).padStart(2, '0');
+    } else if (currentHour >= 10 && currentHour <= 11) {
+      finalNum = String(currentHour);
+    } else if (currentHour >= 12 && currentHour <= 21) {
+      let hour12 = currentHour % 12;
+      if (hour12 === 0) hour12 = 12;
+      finalNum = String(hour12);
+    } else {
+      finalNum = String(currentHour);
+    }
+    return `${firstNum}${secondNum}.${finalNum}`;
   }
-  setInterval(updateStardate, 5000);
+
+  function updateStardate() {
+    const stardateStr = calculateStardate();
+    const elBanner = document.getElementById('stardateValue');
+    if (elBanner) elBanner.textContent = stardateStr;
+    const elTop = document.getElementById('topStardateVal');
+    if (elTop) elTop.textContent = stardateStr;
+  }
+  setInterval(updateStardate, 1000);
   updateStardate();
 
   // Fullscreen Handler
@@ -4000,11 +4625,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
+  // Red Alert Klaxon Alarm Sound (Authentischer Star Trek Doppel-Sirenen-Warble)
+  function playRedAlertKlaxon() {
+    if (!soundEnabled) return;
+    try {
+      const ctx = getAudioContext();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      for (let i = 0; i < 2; i++) {
+        const start = now + (i * 0.65);
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(660, start);
+        osc.frequency.exponentialRampToValueAtTime(440, start + 0.42);
+        gain.gain.setValueAtTime(0.01, start);
+        gain.gain.linearRampToValueAtTime(0.2, start + 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.5);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.55);
+      }
+    } catch(e) {
+      console.warn("Red Alert Klaxon audio error:", e);
+    }
+  }
+
   // Theme Switcher (Farbmodi)
+  let lastUserTheme = localStorage.getItem('lcars-theme') || 'classic';
+  if (lastUserTheme === 'redalert') lastUserTheme = 'classic';
+  let isCurrentlyRedAlert = false;
+
   function setLcarsTheme(themeName) {
+    if (themeName === 'redalert') return; // Red Alert kann nicht manuell gewählt werden
     playLcarsBeep(1100, 1800);
-    document.documentElement.setAttribute('data-theme', themeName);
+    lastUserTheme = themeName;
     localStorage.setItem('lcars-theme', themeName);
+
+    if (!isCurrentlyRedAlert) {
+      document.documentElement.setAttribute('data-theme', themeName);
+    }
 
     document.querySelectorAll('.theme-btn').forEach(btn => btn.classList.remove('active-theme'));
     const btn = document.getElementById('theme-btn-' + themeName);
@@ -4013,19 +4674,227 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (historyChart) historyChart.update();
   }
 
-  const savedTheme = localStorage.getItem('lcars-theme') || 'classic';
-  setLcarsTheme(savedTheme);
+  setLcarsTheme(lastUserTheme);
   updateAudioUI();
+
+  // Schwellwert-Initialisierung im Config-Bereich
+  let thresholdsInitialized = false;
+  function initThresholdsConfig(alerts) {
+    if (!alerts || !alerts.thresholds) return;
+    if (thresholdsInitialized) return;
+    thresholdsInitialized = true;
+    const th = alerts.thresholds;
+    if (th.cpu_threshold !== undefined) {
+      const el = document.getElementById('cfgCpuThresh');
+      if (el) { el.value = th.cpu_threshold; document.getElementById('cfgCpuThreshVal').textContent = th.cpu_threshold + '%'; }
+    }
+    if (th.ram_threshold !== undefined) {
+      const el = document.getElementById('cfgRamThresh');
+      if (el) { el.value = th.ram_threshold; document.getElementById('cfgRamThreshVal').textContent = th.ram_threshold + '%'; }
+    }
+    if (th.disk_threshold !== undefined) {
+      const el = document.getElementById('cfgDiskThresh');
+      if (el) { el.value = th.disk_threshold; document.getElementById('cfgDiskThreshVal').textContent = th.disk_threshold + '%'; }
+    }
+    if (th.temp_threshold !== undefined) {
+      const el = document.getElementById('cfgTempThresh');
+      if (el) { el.value = th.temp_threshold; document.getElementById('cfgTempThreshVal').textContent = th.temp_threshold + '°C'; }
+    }
+    if (th.duration_seconds !== undefined) {
+      const el = document.getElementById('cfgDuration');
+      if (el) { el.value = th.duration_seconds; document.getElementById('cfgDurationVal').textContent = th.duration_seconds + ' Sek'; }
+    }
+    if (th.gateway_check_interval_seconds !== undefined) {
+      const minVal = Math.round(th.gateway_check_interval_seconds / 60) || 10;
+      const el = document.getElementById('cfgGwInterval');
+      if (el) { el.value = minVal; document.getElementById('cfgGwIntervalVal').textContent = minVal + ' Min'; }
+    }
+    if (th.gateway_url) {
+      const el = document.getElementById('cfgGwUrl');
+      if (el) el.value = th.gateway_url;
+    }
+  }
+
+  // Red Alert Status Handler
+  function updateAlertUI(alerts) {
+    if (!alerts) return;
+
+    initThresholdsConfig(alerts);
+
+    const banner = document.getElementById('redAlertBanner');
+    const reasonsEl = document.getElementById('redAlertReasons');
+
+    if (alerts.active) {
+      if (!isCurrentlyRedAlert) {
+        isCurrentlyRedAlert = true;
+        const cur = document.documentElement.getAttribute('data-theme');
+        if (cur && cur !== 'redalert') {
+          lastUserTheme = cur;
+        }
+        document.documentElement.setAttribute('data-theme', 'redalert');
+        playRedAlertKlaxon();
+      }
+      if (banner) banner.style.display = 'block';
+      if (reasonsEl && alerts.reasons) reasonsEl.textContent = alerts.reasons.join(' // ');
+    } else {
+      if (isCurrentlyRedAlert) {
+        isCurrentlyRedAlert = false;
+        document.documentElement.setAttribute('data-theme', lastUserTheme || 'classic');
+      }
+      if (banner) banner.style.display = 'none';
+    }
+
+    if (alerts.gateway) {
+      const gwBadge = document.getElementById('cfgGwBadge');
+      const gwTime = document.getElementById('cfgGwTime');
+      const gwErr = document.getElementById('cfgGwErr');
+      if (gwBadge) {
+        if (alerts.gateway.status === 'ok') {
+          gwBadge.className = 'badge-status badge-online';
+          gwBadge.textContent = 'ONLINE';
+          if (gwErr) gwErr.textContent = '';
+        } else {
+          gwBadge.className = 'badge-status badge-offline';
+          gwBadge.textContent = 'OFFLINE';
+          if (gwErr) gwErr.textContent = alerts.gateway.error ? `(${alerts.gateway.error})` : '';
+        }
+      }
+      if (gwTime && alerts.gateway.last_check) {
+        gwTime.textContent = `Letzter Test: ${alerts.gateway.last_check}`;
+      }
+    }
+  }
+
+  async function saveThresholds(e) {
+    if (e) e.preventDefault();
+    playLcarsBeep(1100, 1800);
+    const cpu = parseFloat(document.getElementById('cfgCpuThresh').value);
+    const ram = parseFloat(document.getElementById('cfgRamThresh').value);
+    const disk = parseFloat(document.getElementById('cfgDiskThresh').value);
+    const temp = parseFloat(document.getElementById('cfgTempThresh').value);
+    const duration = parseInt(document.getElementById('cfgDuration').value);
+    const gwIntervalMin = parseInt(document.getElementById('cfgGwInterval').value);
+    const gwUrl = document.getElementById('cfgGwUrl').value.trim();
+
+    const payload = {
+      cpu_threshold: cpu,
+      ram_threshold: ram,
+      disk_threshold: disk,
+      temp_threshold: temp,
+      duration_seconds: duration,
+      gateway_check_interval_seconds: gwIntervalMin * 60,
+      gateway_url: gwUrl
+    };
+
+    const msgEl = document.getElementById('cfgSaveMsg');
+    try {
+      const resp = await fetch('/api/config/thresholds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await resp.json();
+      if (msgEl) {
+        msgEl.style.display = 'block';
+        msgEl.style.color = 'var(--c-primary)';
+        msgEl.textContent = '✓ SCHWELLWERTE ERFOLGREICH GESPEICHERT & AKTIVIERT';
+        setTimeout(() => { msgEl.style.display = 'none'; }, 4000);
+      }
+      playLcarsBeep(1400, 2100);
+      fetchLiveStats(true);
+    } catch(err) {
+      if (msgEl) {
+        msgEl.style.display = 'block';
+        msgEl.style.color = 'var(--c-red)';
+        msgEl.textContent = '✗ FEHLER BEIM SPEICHERN: ' + err;
+      }
+      playLcarsBeep(440, 220);
+    }
+  }
+
+  async function testGatewayNow() {
+    playLcarsBeep(980, 1400);
+    const btn = document.getElementById('btnTestGw');
+    if (btn) btn.disabled = true;
+    const badge = document.getElementById('cfgGwBadge');
+    const timeEl = document.getElementById('cfgGwTime');
+    const errEl = document.getElementById('cfgGwErr');
+    if (badge) {
+      badge.className = 'badge-status';
+      badge.style.background = 'var(--c-gold)';
+      badge.textContent = 'PRÜFE...';
+    }
+
+    try {
+      const resp = await fetch('/api/gateway/test', { method: 'POST' });
+      const data = await resp.json();
+      if (badge) {
+        if (data.status === 'ok') {
+          badge.className = 'badge-status badge-online';
+          badge.textContent = 'ONLINE';
+          if (errEl) errEl.textContent = '';
+          playLcarsBeep(1200, 2400);
+        } else {
+          badge.className = 'badge-status badge-offline';
+          badge.textContent = 'OFFLINE';
+          if (errEl) errEl.textContent = data.error ? `(${data.error})` : '(Fehler)';
+          playLcarsBeep(440, 220);
+        }
+      }
+      if (timeEl && data.time) {
+        timeEl.textContent = `Letzter Test: ${data.time}`;
+      }
+    } catch(err) {
+      if (badge) {
+        badge.className = 'badge-status badge-offline';
+        badge.textContent = 'FEHLER';
+      }
+      if (errEl) errEl.textContent = String(err);
+      playLcarsBeep(440, 220);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function resetDefaultThresholds() {
+    playLcarsBeep(880, 1320);
+    document.getElementById('cfgCpuThresh').value = 90;
+    document.getElementById('cfgCpuThreshVal').textContent = '90%';
+    document.getElementById('cfgRamThresh').value = 90;
+    document.getElementById('cfgRamThreshVal').textContent = '90%';
+    document.getElementById('cfgDiskThresh').value = 90;
+    document.getElementById('cfgDiskThreshVal').textContent = '90%';
+    document.getElementById('cfgTempThresh').value = 80;
+    document.getElementById('cfgTempThreshVal').textContent = '80°C';
+    document.getElementById('cfgDuration').value = 60;
+    document.getElementById('cfgDurationVal').textContent = '60 Sek';
+    document.getElementById('cfgGwInterval').value = 10;
+    document.getElementById('cfgGwIntervalVal').textContent = '10 Min';
+    document.getElementById('cfgGwUrl').value = 'http://127.0.0.1:20128';
+  }
 
   // Telemetrie Aktualisierung & Rendering
   function renderStats(data) {
     if (!data) return;
+
+    // Schwellwerte für Live-Warnung ermitteln
+    const cpuTh = (data.alerts?.thresholds?.cpu_threshold) ?? 90;
+    const ramTh = (data.alerts?.thresholds?.ram_threshold) ?? 90;
+    const diskTh = (data.alerts?.thresholds?.disk_threshold) ?? 90;
+    const tempTh = (data.alerts?.thresholds?.temp_threshold) ?? 80;
 
     // CPU
     if (data.cpu) {
       document.getElementById('sysCpuVal').textContent = data.cpu.percent + '%';
       document.getElementById('sysCpuBar').style.width = data.cpu.percent + '%';
       document.getElementById('sysCpuCores').textContent = `Kerne: ${data.cpu.cores || 1}`;
+
+      const topCpu = document.getElementById('topCpuVal');
+      if (topCpu) topCpu.textContent = Math.round(data.cpu.percent) + '%';
+      const itemCpu = document.getElementById('topVitalCpu');
+      if (itemCpu) itemCpu.classList.toggle('vital-alert', data.cpu.percent >= cpuTh);
+      const liveCpu = document.getElementById('curCpuLive');
+      if (liveCpu) liveCpu.textContent = data.cpu.percent + '%';
     }
 
     // RAM
@@ -4033,6 +4902,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('sysRamVal').textContent = data.ram.percent + '%';
       document.getElementById('sysRamBar').style.width = data.ram.percent + '%';
       document.getElementById('sysRamSub').textContent = `${data.ram.used_gb} GB / ${data.ram.total_gb} GB (${data.ram.available_gb} frei)`;
+
+      const topRam = document.getElementById('topRamVal');
+      if (topRam) topRam.textContent = Math.round(data.ram.percent) + '%';
+      const itemRam = document.getElementById('topVitalRam');
+      if (itemRam) itemRam.classList.toggle('vital-alert', data.ram.percent >= ramTh);
+      const liveRam = document.getElementById('curRamLive');
+      if (liveRam) liveRam.textContent = data.ram.percent + '%';
     }
 
     // Temp
@@ -4041,6 +4917,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (data.temperature.value) {
         document.getElementById('sysTempBar').style.width = Math.min(100, (data.temperature.value / 85) * 100) + '%';
       }
+
+      const topTemp = document.getElementById('topTempVal');
+      if (topTemp) topTemp.textContent = Math.round(data.temperature.value || 0) + '°';
+      const itemTemp = document.getElementById('topVitalTemp');
+      if (itemTemp) itemTemp.classList.toggle('vital-alert', (data.temperature.value || 0) >= tempTh);
+      const liveTemp = document.getElementById('curTempLive');
+      if (liveTemp) liveTemp.textContent = data.temperature.display || '--';
     }
 
     // Throttled
@@ -4058,6 +4941,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('sysDiskVal').textContent = data.disk.percent + '%';
       document.getElementById('sysDiskBar').style.width = data.disk.percent + '%';
       document.getElementById('sysDiskSub').textContent = `${data.disk.used_gb} GB von ${data.disk.total_gb} GB`;
+
+      const topDisk = document.getElementById('topDiskVal');
+      if (topDisk) topDisk.textContent = Math.round(data.disk.percent) + '%';
+      const itemDisk = document.getElementById('topVitalDisk');
+      if (itemDisk) itemDisk.classList.toggle('vital-alert', data.disk.percent >= diskTh);
+      const liveDisk = document.getElementById('curDiskLive');
+      if (liveDisk) liveDisk.textContent = data.disk.percent + '%';
     }
 
     // Uptime
@@ -4090,6 +4980,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     // 9Router Telemetrie Sync
     if (data.nine_router) {
       renderNineRouterStats(data.nine_router);
+    }
+
+    // Red Alert & Schwellwerte
+    if (data.alerts) {
+      updateAlertUI(data.alerts);
     }
 
     // Timestamp
@@ -5384,6 +6279,23 @@ if USE_FLASK:
     def api_stats():
         return jsonify(get_system_stats())
 
+    @app.route("/api/alerts")
+    def api_alerts():
+        return jsonify(alert_monitor.get_status())
+
+    @app.route("/api/config/thresholds", methods=["GET", "POST"])
+    def api_config_thresholds():
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            res = alert_monitor.save_config(data)
+            return jsonify({"success": True, "status": res})
+        return jsonify(alert_monitor.get_status())
+
+    @app.route("/api/gateway/test", methods=["POST"])
+    def api_gateway_test():
+        res = alert_monitor.check_gateway()
+        return jsonify(res)
+
     @app.route("/api/9router/stats")
     def api_9router_stats():
         return jsonify(get_9router_stats())
@@ -5527,6 +6439,20 @@ else:
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+            elif parsed.path == "/api/alerts":
+                data = json.dumps(alert_monitor.get_status()).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/config/thresholds":
+                data = json.dumps(alert_monitor.get_status()).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
             elif parsed.path == "/api/chat/models":
                 data = json.dumps(fetch_chat_models()).encode("utf-8")
                 self.send_response(200)
@@ -5586,6 +6512,28 @@ else:
                 resp = json.dumps(res_data).encode("utf-8")
                 self.send_response(status_code)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/config/thresholds":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                res = alert_monitor.save_config(data)
+                resp = json.dumps({"success": True, "status": res}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/gateway/test":
+                res = alert_monitor.check_gateway()
+                resp = json.dumps(res).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()
                 self.wfile.write(resp)
