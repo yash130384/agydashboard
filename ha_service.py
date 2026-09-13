@@ -8,6 +8,7 @@ Raum- und Geräte-Abfragen sowie Service-Steuerung über die Home Assistant REST
 import json
 import os
 import sys
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -47,6 +48,9 @@ AREA_ICONS = {
     "balkon": "🪴",
     "balcony": "🪴",
     "terrasse": "☀️",
+    "dachterasse": "☀️",
+    "dachterrasse": "☀️",
+    "solar": "☀️",
     "keller": "📦",
     "basement": "📦",
     "garage": "🚗"
@@ -91,6 +95,10 @@ class HomeAssistantService:
     def __init__(self, config_path=None):
         self.config_path = config_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
         self.config = self._load_config()
+        self._states_cache = None
+        self._states_cache_time = 0
+        self._states_cache_lock = threading.Lock()
+        self._last_known_solar = {}
 
     def _load_config(self):
         cfg = dict(DEFAULT_HA_CONFIG)
@@ -372,14 +380,13 @@ class HomeAssistantService:
                 "stats": {"total_entities": 0, "areas_count": 0, "active_count": 0}
             }
 
-        # 1. Fetch all entity states
-        states_resp, code = self._make_request("/api/states")
-        if code != 200 or not isinstance(states_resp, list):
-            err_msg = states_resp.get("error", f"Fehler beim Abrufen der Zustände (Code {code})") if isinstance(states_resp, dict) else f"Fehler Code {code}"
+        # 1. Fetch all entity states (cached)
+        states_resp = self.get_all_states(max_age=3.0)
+        if not states_resp or not isinstance(states_resp, list):
             return {
                 "success": False,
                 "configured": True,
-                "error": err_msg,
+                "error": "Fehler beim Abrufen der Zustände von Home Assistant",
                 "areas": [],
                 "unassigned": [],
                 "stats": {"total_entities": 0, "areas_count": 0, "active_count": 0}
@@ -537,6 +544,272 @@ class HomeAssistantService:
             "controllable": controllable,
             "controls": ctrl_details,
             "last_changed": raw.get("last_changed", "")
+        }
+
+    def get_all_states(self, max_age=3.0):
+        """Holt alle Entity-Zustände mit kurzem Thread-safe Cache (z.B. 3 Sekunden)."""
+        now = time.time()
+        with self._states_cache_lock:
+            if self._states_cache is not None and (now - self._states_cache_time < max_age):
+                return self._states_cache
+
+        states_resp, code = self._make_request("/api/states")
+        if code == 200 and isinstance(states_resp, list):
+            with self._states_cache_lock:
+                self._states_cache = states_resp
+                self._states_cache_time = now
+            return states_resp
+        return self._states_cache or []
+
+    def get_solar_summary(self):
+        """Liefert schnelle Kennzahlen (Akkustand & Hausbedarf) für die Top-Vitals-Leiste oben rechts."""
+        cfg = self.get_config()
+        if not cfg.get("configured"):
+            return {
+                "battery_soc": None,
+                "battery_soc_str": "--%",
+                "house_power": None,
+                "house_power_str": "-- W",
+                "solar_power": None,
+                "solar_power_str": "-- W",
+                "available": False
+            }
+
+        states = self.get_all_states(max_age=3.0)
+        s_map = {s["entity_id"]: s for s in states if isinstance(s, dict) and "entity_id" in s}
+
+        def _num(val, default=None):
+            if val is None or str(val).lower() in ("unavailable", "unknown", "none", ""):
+                return default
+            try:
+                f = float(val)
+                return int(f) if f.is_integer() else round(f, 1)
+            except (ValueError, TypeError):
+                return default
+
+        def _val(eids):
+            for eid in eids:
+                s = s_map.get(eid)
+                if s and s.get("state") not in ("unavailable", "unknown", "none", None):
+                    n = _num(s.get("state"))
+                    if n is not None:
+                        return n
+            return None
+
+        bat = _val([
+            "sensor.christophs_energiespeicher_ladestand",
+            "sensor.system_casa_de_christoph_sb_ladestand",
+            "sensor.christophs_energiespeicher_hauptakku_ladestand"
+        ])
+        house = _val([
+            "sensor.christophs_energiespeicher_hausbedarf",
+            "sensor.system_casa_de_christoph_hausbedarf",
+            "sensor.christophs_energiespeicher_netznutzung",
+            "sensor.ecotracker_netznutzung"
+        ])
+        solar = _val([
+            "sensor.christophs_energiespeicher_solarleistung",
+            "sensor.system_casa_de_christoph_sb_solarleistung"
+        ])
+
+        lk = self._last_known_solar
+        if bat is not None:
+            lk["battery_soc"] = bat
+            lk["battery_soc_str"] = f"{bat}%"
+        elif "battery_soc" not in lk:
+            lk["battery_soc_str"] = "--%"
+
+        if house is not None:
+            lk["house_power"] = house
+            lk["house_power_str"] = f"{house} W"
+        elif "house_power" not in lk:
+            lk["house_power_str"] = "-- W"
+
+        if solar is not None:
+            lk["solar_power"] = solar
+            lk["solar_power_str"] = f"{solar} W"
+        elif "solar_power" not in lk:
+            lk["solar_power_str"] = "-- W"
+
+        return {
+            "battery_soc": lk.get("battery_soc"),
+            "battery_soc_str": lk.get("battery_soc_str", "--%"),
+            "house_power": lk.get("house_power"),
+            "house_power_str": lk.get("house_power_str", "-- W"),
+            "solar_power": lk.get("solar_power"),
+            "solar_power_str": lk.get("solar_power_str", "-- W"),
+            "available": bool(states)
+        }
+
+    def get_solar_data(self):
+        """Detaillierte Auswertung aller Balkonsolar- und Dachterassen-Metriken für das LCARS Solar Panel."""
+        cfg = self.get_config()
+        if not cfg.get("configured"):
+            return {
+                "success": False,
+                "configured": False,
+                "error": "Home Assistant ist noch nicht konfiguriert."
+            }
+
+        states = self.get_all_states(max_age=3.0)
+        s_map = {s["entity_id"]: s for s in states if isinstance(s, dict) and "entity_id" in s}
+
+        def _num(val, default=0.0):
+            if val is None or str(val).lower() in ("unavailable", "unknown", "none", ""):
+                return default
+            try:
+                f = float(val)
+                return int(f) if f.is_integer() else round(f, 1)
+            except (ValueError, TypeError):
+                return default
+
+        def _str(val, default="--"):
+            if val is None or str(val).lower() in ("unavailable", "unknown", "none", ""):
+                return default
+            return str(val)
+
+        def _get_val(eid, attr=None, default=None):
+            raw = s_map.get(eid)
+            if not raw:
+                return default
+            if attr:
+                return raw.get("attributes", {}).get(attr, default)
+            return raw.get("state", default)
+
+        # Solar PV
+        solar_power = _num(_get_val("sensor.christophs_energiespeicher_solarleistung") or _get_val("sensor.system_casa_de_christoph_sb_solarleistung"))
+        pv1 = _num(_get_val("sensor.christophs_energiespeicher_solar_pv1"))
+        pv2 = _num(_get_val("sensor.christophs_energiespeicher_solar_pv2"))
+        pv3 = _num(_get_val("sensor.christophs_energiespeicher_solar_pv3"))
+        pv4 = _num(_get_val("sensor.christophs_energiespeicher_solar_pv4"))
+
+        # Akku
+        bat_soc = _num(_get_val("sensor.christophs_energiespeicher_ladestand") or _get_val("sensor.system_casa_de_christoph_sb_ladestand"), default=None)
+        if bat_soc is None:
+            bat_soc = self._last_known_solar.get("battery_soc", 0.0)
+        else:
+            self._last_known_solar["battery_soc"] = bat_soc
+
+        bat_power = _num(_get_val("sensor.christophs_energiespeicher_akkuleistung") or _get_val("sensor.system_casa_de_christoph_sb_akkuleistung"))
+        bat_charge = _num(_get_val("sensor.christophs_energiespeicher_aufladeleistung"))
+        bat_discharge = _num(_get_val("sensor.christophs_energiespeicher_entladeleistung"))
+        bat_energy_wh = _num(_get_val("sensor.christophs_energiespeicher_akkuenergie"))
+        bat_cap_wh = _num(_get_val("number.christophs_energiespeicher_akku_kapazitat"), default=1600.0)
+        bat_temp = _num(_get_val("sensor.christophs_energiespeicher_temperatur"), default=None)
+        bat_soc_min = _num(_get_val("number.christophs_energiespeicher_soc_minimum"), default=5.0)
+        bat_soc_max = _num(_get_val("number.christophs_energiespeicher_soc_maximum"), default=100.0)
+        bat_heating = _get_val("binary_sensor.system_casa_de_christoph_akkuheizung") == "on"
+        bat_heat_power = _num(_get_val("sensor.christophs_energiespeicher_heizleistung"))
+
+        # Akku Statusermittlung
+        if bat_charge > 5:
+            bat_status = "LADEN"
+            bat_status_color = "var(--c-primary)"
+        elif bat_discharge > 5:
+            bat_status = "ENTLADEN"
+            bat_status_color = "var(--c-secondary)"
+        elif bat_soc is not None and bat_soc <= bat_soc_min:
+            bat_status = "STANDBY (MIN-SOC)"
+            bat_status_color = "var(--c-gold)"
+        elif bat_soc is not None and bat_soc >= bat_soc_max:
+            bat_status = "VOLL"
+            bat_status_color = "#44dd88"
+        else:
+            bat_status = "STANDBY"
+            bat_status_color = "var(--c-almond)"
+
+        # Hausbedarf & Netz
+        house_power = _num(_get_val("sensor.christophs_energiespeicher_hausbedarf") or _get_val("sensor.system_casa_de_christoph_hausbedarf") or _get_val("sensor.christophs_energiespeicher_netznutzung"))
+        grid_power = _num(_get_val("sensor.christophs_energiespeicher_netznutzung") or _get_val("sensor.ecotracker_netznutzung"))
+        grid_feed_in = _num(_get_val("sensor.christophs_energiespeicher_netzeinspeisung") or _get_val("sensor.ecotracker_netzeinspeisung"))
+        grid_status = _str(_get_val("sensor.ecotracker_netz_status"), "ok")
+
+        # Inverter & AC
+        ac_output = _num(_get_val("sensor.christophs_energiespeicher_ac_hausabgabe") or _get_val("sensor.system_casa_de_christoph_sb_einspeiseleistung"))
+        dc_output = _num(_get_val("sensor.christophs_energiespeicher_dc_ausgangsleistung"))
+        ac_socket = _num(_get_val("sensor.christophs_energiespeicher_ac_steckdose"))
+        feed_target = _num(_get_val("sensor.christophs_energiespeicher_einspeisevorgabe"))
+        feed_limit = _num(_get_val("select.christophs_energiespeicher_abgabelimit"), default=800.0)
+
+        # Erträge
+        yield_total = _num(_get_val("sensor.system_casa_de_christoph_ertrag_gesamt"))
+        co2_saved = _num(_get_val("sensor.system_casa_de_christoph_co2_einsparung"))
+        cost_saved = _num(_get_val("sensor.system_casa_de_christoph_kostenersparnis"))
+
+        # System & Connectivity
+        operating_state = _str(_get_val("sensor.christophs_energiespeicher_betriebszustand"), "Normal")
+        mode = _str(_get_val("select.christophs_energiespeicher_benutzermodus"), "smartmeter")
+        cloud_state = _str(_get_val("sensor.christophs_energiespeicher_cloud_zustand"), "online")
+        ecotracker_cloud = _str(_get_val("sensor.ecotracker_cloud_zustand"), "online")
+        wifi_storage = _get_val("binary_sensor.christophs_energiespeicher_wifi_verbindung") == "on"
+        wifi_tracker = _get_val("binary_sensor.ecotracker_wifi_verbindung") == "on"
+        mqtt_time = _str(_get_val("sensor.christophs_energiespeicher_mqtt_zeit"), "--")
+        error_code = _str(_get_val("sensor.christophs_energiespeicher_fehlercode"), "0")
+        grid_feed_allowed = _get_val("switch.christophs_energiespeicher_erlaube_netzeinspeisung") == "on"
+        led_light = _get_val("switch.christophs_energiespeicher_led_licht") == "on"
+
+        # Formatted entities for Dachterasse interactive controls
+        dach_entities = []
+        for eid, st in s_map.items():
+            if any(k in eid.lower() for k in ["christophs_energiespeicher", "ecotracker", "system_casa_de_christoph"]):
+                dach_entities.append(self._format_entity(st))
+
+        dach_entities.sort(key=lambda x: (0 if x["controllable"] else 1, x["domain"], x["friendly_name"].lower()))
+
+        return {
+            "success": True,
+            "configured": True,
+            "timestamp": time.strftime("%H:%M:%S"),
+            "summary": {
+                "solar_power": solar_power,
+                "solar_power_str": f"{solar_power} W",
+                "pv1": pv1,
+                "pv2": pv2,
+                "pv3": pv3,
+                "pv4": pv4,
+                "battery_soc": bat_soc,
+                "battery_soc_str": f"{bat_soc}%" if bat_soc is not None else "--%",
+                "battery_power": bat_power,
+                "battery_power_str": f"{bat_power} W",
+                "battery_charge_power": bat_charge,
+                "battery_discharge_power": bat_discharge,
+                "battery_energy_wh": bat_energy_wh,
+                "battery_capacity_wh": bat_cap_wh,
+                "battery_temp": bat_temp,
+                "battery_temp_str": f"{bat_temp} °C" if bat_temp is not None else "--",
+                "battery_soc_min": bat_soc_min,
+                "battery_soc_max": bat_soc_max,
+                "battery_status": bat_status,
+                "battery_status_color": bat_status_color,
+                "battery_heating": bat_heating,
+                "battery_heat_power": bat_heat_power,
+                "house_power": house_power,
+                "house_power_str": f"{house_power} W",
+                "grid_power": grid_power,
+                "grid_power_str": f"{grid_power} W",
+                "grid_feed_in": grid_feed_in,
+                "grid_feed_in_str": f"{grid_feed_in} W",
+                "grid_status": grid_status,
+                "inverter_ac_output": ac_output,
+                "inverter_dc_output": dc_output,
+                "inverter_socket": ac_socket,
+                "feed_target": feed_target,
+                "feed_limit": feed_limit,
+                "yield_total": yield_total,
+                "co2_saved": co2_saved,
+                "cost_saved": cost_saved,
+                "operating_state": operating_state,
+                "mode": mode,
+                "cloud_state": cloud_state,
+                "ecotracker_cloud": ecotracker_cloud,
+                "wifi_storage": wifi_storage,
+                "wifi_tracker": wifi_tracker,
+                "mqtt_time": mqtt_time,
+                "error_code": error_code,
+                "grid_feed_allowed": grid_feed_allowed,
+                "led_light": led_light
+            },
+            "entities": dach_entities
         }
 
     def call_service(self, domain, service, service_data):

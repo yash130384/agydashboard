@@ -1724,6 +1724,12 @@ def get_system_stats():
     stats["stardate"] = calculate_stardate()
     stats["alerts"] = alert_monitor.get_status() if "alert_monitor" in globals() else {"active": False, "reasons": []}
 
+    # Solar Balkonsolar Vitals (Akkustand & Hausbedarf für Top-Right Badges)
+    if ha_service:
+        stats["solar"] = ha_service.get_solar_summary()
+    else:
+        stats["solar"] = {"battery_soc_str": "--%", "house_power_str": "-- W", "available": False}
+
     return stats
 
 
@@ -2850,6 +2856,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .dc-pulse-2 { animation: vital-dc-blink 3.1s infinite 0.5s; }
     .dc-pulse-3 { animation: vital-dc-blink 2.6s infinite 1.0s; }
     .dc-pulse-4 { animation: vital-dc-blink 2.0s infinite 1.5s; }
+    .dc-pulse-5 { animation: vital-dc-blink 2.8s infinite 0.7s; }
+    .dc-pulse-6 { animation: vital-dc-blink 2.4s infinite 1.2s; }
 
     @keyframes vital-dc-blink {
       0%, 100% {
@@ -2977,7 +2985,84 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .pill-info  { background-color: var(--c-butterscotch); }
     .pill-cfg   { background-color: var(--c-gold); }
     .pill-fantasy { background-color: var(--c-almond); }
+    .pill-solar { background-color: var(--c-gold); color: #000; }
     .pill-ha { background-color: var(--c-secondary); }
+
+    /* Solar LCARS UI */
+    .solar-flow-card {
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid var(--c-card-border);
+      border-left: 6px solid var(--c-gold);
+      border-radius: 8px;
+      padding: 1.1rem;
+      margin-bottom: 1.25rem;
+    }
+    .solar-flow-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.9rem;
+      align-items: stretch;
+      margin-top: 0.8rem;
+    }
+    .flow-node {
+      background: rgba(15, 15, 20, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      padding: 0.9rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+      transition: all 0.2s ease;
+    }
+    .flow-node:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+    .flow-node.node-solar { border-top: 3px solid var(--c-gold); }
+    .flow-node.node-bat { border-top: 3px solid var(--c-secondary); }
+    .flow-node.node-house { border-top: 3px solid var(--c-primary); }
+    .flow-node.node-grid { border-top: 3px solid var(--c-blue); }
+    .flow-node-title {
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.5rem;
+    }
+    .flow-node-val {
+      font-family: var(--mono-family);
+      font-size: 1.6rem;
+      font-weight: 800;
+      margin-bottom: 0.25rem;
+    }
+    .flow-node-sub {
+      font-size: 0.76rem;
+      color: #aaa;
+      font-family: var(--mono-family);
+    }
+    .solar-detail-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.38rem 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      font-size: 0.82rem;
+    }
+    .solar-detail-label {
+      color: #999;
+      text-transform: uppercase;
+      font-size: 0.76rem;
+      letter-spacing: 0.04em;
+    }
+    .solar-detail-val {
+      font-family: var(--mono-family);
+      font-weight: 700;
+      color: #eee;
+    }
 
     /* Home Assistant LCARS UI */
     .ha-room-card {
@@ -4216,6 +4301,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="vital-badge-label">TMP</span>
             <span class="vital-badge-num" id="topTempVal">{{ (stats.temperature.value|round|int) if stats.temperature.value else '--' }}°</span>
           </div>
+          <div class="top-vital-badge dc-pulse-5" id="topVitalBat" onclick="playLcarsBeep(880, 1760); switchCategory('solar')" title="Balkonsolar Akku // Klicken für Solar-Details">
+            <span class="vital-badge-icon">🔋</span>
+            <span class="vital-badge-label">AKKU</span>
+            <span class="vital-badge-num" id="topBatVal">{{ stats.solar.battery_soc_str if stats.solar and stats.solar.battery_soc_str else '--%' }}</span>
+          </div>
+          <div class="top-vital-badge dc-pulse-6" id="topVitalHouse" onclick="playLcarsBeep(880, 1760); switchCategory('solar')" title="Aktueller Stromverbrauch Haus // Klicken für Solar-Details">
+            <span class="vital-badge-icon">⚡</span>
+            <span class="vital-badge-label">HAUS</span>
+            <span class="vital-badge-num" id="topHouseVal">{{ stats.solar.house_power_str if stats.solar and stats.solar.house_power_str else '-- W' }}</span>
+          </div>
         </div>
       </div>
       <div class="bar-panel">
@@ -4250,6 +4345,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </button>
         <button class="lcars-pill-btn pill-fantasy" onclick="switchCategory('fantasy')" id="btn-cat-fantasy">
           FANTASY
+        </button>
+        <button class="lcars-pill-btn pill-solar" onclick="switchCategory('solar')" id="btn-cat-solar">
+          SOLAR
         </button>
         <button class="lcars-pill-btn pill-ha" onclick="switchCategory('homeassistant')" id="btn-cat-homeassistant" style="display: none;">
           ASSISTANT
@@ -5655,6 +5753,312 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
+        <!-- KATEGORIE 8: BALKONSOLAR & ENERGIE (DACHTERRASSE) -->
+        <section class="lcars-section" id="section-solar">
+          <div class="lcars-header-bar">
+            <h2>LCARS ENERGIE-MANAGEMENT // BALKONSOLAR DACHTERRASSE</h2>
+            <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
+              <span id="solarLiveBadge" class="badge-status badge-online">ONLINE</span>
+              <span id="solarCloudBadge" style="font-size:0.82rem; color:var(--c-gold); font-family:var(--mono-family); font-weight:700;">
+                ANKER CLOUD: ONLINE // ECOTRACKER: ONLINE
+              </span>
+              <span id="solarCountdownBadge" style="font-size:0.75rem; color:#888; font-family:var(--mono-family);">
+                AUTO-REFRESH: 15s
+              </span>
+              <button class="left-action-btn" onclick="loadSolarData(true)" style="padding:0.25rem 0.65rem; font-size:0.8rem;">
+                <span>⟳</span> <span>REFRESH</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- LCARS EPS ENERGIEFLUSS POWER-FLOW DIAGRAMM -->
+          <div class="solar-flow-card">
+            <div class="card-head">
+              <span class="card-head-title" style="color:var(--c-gold); font-size:1.05rem;">
+                ⚡ EPS POWER-GRID // AKTUELLER ENERGIEFLUSS DACHTERRASSE
+              </span>
+              <span class="lcars-pill-tag" id="solarFlowSummaryTag" style="background-color:var(--c-gold); color:#000;">
+                LIVE NETZBEZUG
+              </span>
+            </div>
+            <div class="solar-flow-grid">
+              <!-- Node 1: Solar Erzeugung -->
+              <div class="flow-node node-solar">
+                <div class="flow-node-title">
+                  <span style="color:var(--c-gold);">☀️ PHOTOVOLTAIK</span>
+                  <span id="nodeSolarStatus" style="font-size:0.7rem; color:#888;">4 STRINGS</span>
+                </div>
+                <div class="flow-node-val" id="nodeSolarVal" style="color:var(--c-gold);">0 W</div>
+                <div class="flow-node-sub" id="nodeSolarSub">PV Erzeugung Live</div>
+              </div>
+
+              <!-- Node 2: Speicher / Akku -->
+              <div class="flow-node node-bat">
+                <div class="flow-node-title">
+                  <span style="color:var(--c-secondary);">🔋 SOLARBANK SPEICHER</span>
+                  <span id="nodeBatStatus" style="font-size:0.7rem; color:var(--c-gold);">STANDBY</span>
+                </div>
+                <div class="flow-node-val" id="nodeBatVal" style="color:var(--c-secondary);">5%</div>
+                <div class="flow-node-sub" id="nodeBatSub">80 Wh / 1600 Wh (14 °C)</div>
+              </div>
+
+              <!-- Node 3: Hausbedarf -->
+              <div class="flow-node node-house">
+                <div class="flow-node-title">
+                  <span style="color:var(--c-primary);">🏠 HAUSNETZ BEDARF</span>
+                  <span id="nodeHouseStatus" style="font-size:0.7rem; color:var(--c-primary);">AKTUELL</span>
+                </div>
+                <div class="flow-node-val" id="nodeHouseVal" style="color:var(--c-primary);">272 W</div>
+                <div class="flow-node-sub" id="nodeHouseSub">Aktueller Gesamtverbrauch</div>
+              </div>
+
+              <!-- Node 4: Öffentliches Netz -->
+              <div class="flow-node node-grid">
+                <div class="flow-node-title">
+                  <span style="color:var(--c-blue);">🌐 STROMNETZ (ECOTRACKER)</span>
+                  <span id="nodeGridStatus" style="font-size:0.7rem; color:#44dd88;">STATUS OK</span>
+                </div>
+                <div class="flow-node-val" id="nodeGridVal" style="color:var(--c-blue);">272 W</div>
+                <div class="flow-node-sub" id="nodeGridSub">Netzbezug // 0 W Einspeisung</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- LCARS READOUT GRID (4 DETAILLIERTE TELEMETRIE-KARTEN) -->
+          <div class="readout-grid" style="margin-bottom:1.25rem;">
+            <!-- KARTE 1: PHOTOVOLTAIK (PV STRINGS & ERTRAG) -->
+            <div class="lcars-card card-gold">
+              <div class="card-head">
+                <span class="card-head-title" style="color:var(--c-gold);">☀️ PHOTOVOLTAIK ERZEUGUNG</span>
+                <span class="card-head-icon">☀️</span>
+              </div>
+              <div class="card-metric" id="cardSolarVal" style="color:var(--c-gold);">0 W</div>
+              <div class="card-metric-sub" id="cardSolarSub">Gesamt-Solarleistung</div>
+              
+              <!-- 4 PV Strings Bar Readout -->
+              <div style="margin-top:0.8rem; display:flex; flex-direction:column; gap:0.4rem;">
+                <div>
+                  <div style="display:flex; justify-content:space-between; font-size:0.75rem; font-family:var(--mono-family); margin-bottom:2px;">
+                    <span>PV STRING 1</span>
+                    <span id="pv1Val">0 W</span>
+                  </div>
+                  <div class="lcars-bar-track"><div class="lcars-bar-fill" id="pv1Bar" style="width:0%; background-color:var(--c-gold);"></div></div>
+                </div>
+                <div>
+                  <div style="display:flex; justify-content:space-between; font-size:0.75rem; font-family:var(--mono-family); margin-bottom:2px;">
+                    <span>PV STRING 2</span>
+                    <span id="pv2Val">0 W</span>
+                  </div>
+                  <div class="lcars-bar-track"><div class="lcars-bar-fill" id="pv2Bar" style="width:0%; background-color:var(--c-gold);"></div></div>
+                </div>
+                <div>
+                  <div style="display:flex; justify-content:space-between; font-size:0.75rem; font-family:var(--mono-family); margin-bottom:2px;">
+                    <span>PV STRING 3</span>
+                    <span id="pv3Val">0 W</span>
+                  </div>
+                  <div class="lcars-bar-track"><div class="lcars-bar-fill" id="pv3Bar" style="width:0%; background-color:var(--c-gold);"></div></div>
+                </div>
+                <div>
+                  <div style="display:flex; justify-content:space-between; font-size:0.75rem; font-family:var(--mono-family); margin-bottom:2px;">
+                    <span>PV STRING 4</span>
+                    <span id="pv4Val">0 W</span>
+                  </div>
+                  <div class="lcars-bar-track"><div class="lcars-bar-fill" id="pv4Bar" style="width:0%; background-color:var(--c-gold);"></div></div>
+                </div>
+              </div>
+
+              <!-- Ertrag & Umwelt Stats -->
+              <div style="margin-top:0.9rem; padding-top:0.6rem; border-top:1px solid rgba(255,255,255,0.08);">
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Ertrag Gesamt:</span>
+                  <span class="solar-detail-val" id="solYieldTotal">-- kWh</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">CO₂ Einsparung:</span>
+                  <span class="solar-detail-val" id="solCo2Saved">-- kg</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Kostenersparnis:</span>
+                  <span class="solar-detail-val" id="solCostSaved">-- €</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- KARTE 2: ENERGIESPEICHER / AKKU -->
+            <div class="lcars-card card-violet">
+              <div class="card-head">
+                <span class="card-head-title" style="color:var(--c-secondary);">🔋 SOLARBANK SPEICHER</span>
+                <span class="card-head-icon">🔋</span>
+              </div>
+              <div class="card-metric" id="cardBatVal" style="color:var(--c-secondary);">5%</div>
+              <div class="card-metric-sub" id="cardBatSub">Akkustand (SoC)</div>
+              
+              <!-- Akku Gauge Bar -->
+              <div class="lcars-bar-track" style="margin-top:0.4rem; height:12px;">
+                <div class="lcars-bar-fill" id="cardBatBar" style="width:5%; background-color:var(--c-secondary);"></div>
+              </div>
+
+              <!-- Akku Details -->
+              <div style="margin-top:0.8rem; display:flex; flex-direction:column;">
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Gespeicherte Energie:</span>
+                  <span class="solar-detail-val" id="solEnergyWh">-- Wh / 1600 Wh</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Ladeleistung:</span>
+                  <span class="solar-detail-val" id="solBatCharge">0 W</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Entladeleistung:</span>
+                  <span class="solar-detail-val" id="solBatDischarge">0 W</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Zelltemperatur:</span>
+                  <span class="solar-detail-val" id="solBatTemp">-- °C</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">SoC Grenzen (Min/Max):</span>
+                  <span class="solar-detail-val" id="solSocLimits">5% / 100%</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Akkuheizung:</span>
+                  <span class="solar-detail-val" id="solBatHeating">Inaktiv (0 W)</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Betriebszustand:</span>
+                  <span class="solar-detail-val" id="solOpState">--</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- KARTE 3: HAUSNETZ & ECOTRACKER ZÄHLER -->
+            <div class="lcars-card card-blue">
+              <div class="card-head">
+                <span class="card-head-title" style="color:var(--c-blue);">🏠 HAUSNETZ &amp; ZÄHLER</span>
+                <span class="card-head-icon">⚡</span>
+              </div>
+              <div class="card-metric" id="cardHouseVal" style="color:var(--c-blue);">-- W</div>
+              <div class="card-metric-sub">Aktueller Stromverbrauch Haus</div>
+              
+              <div style="margin-top:0.8rem; display:flex; flex-direction:column;">
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">AC Hausabgabe (Inverter):</span>
+                  <span class="solar-detail-val" id="solAcOutput">0 W</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">DC Ausgangsleistung:</span>
+                  <span class="solar-detail-val" id="solDcOutput">0 W</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">EcoTracker Netzbezug:</span>
+                  <span class="solar-detail-val" id="solGridUsage">-- W</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Netzeinspeisung:</span>
+                  <span class="solar-detail-val" id="solGridFeedIn">0 W</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">AC Steckdose:</span>
+                  <span class="solar-detail-val" id="solAcSocket">0 W</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Einspeisevorgabe:</span>
+                  <span class="solar-detail-val" id="solFeedTarget">-- W</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Abgabelimit:</span>
+                  <span class="solar-detail-val" id="solFeedLimit">800 W</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- KARTE 4: SYSTEM-TELEMETRIE & DIREKTSTEUERUNG -->
+            <div class="lcars-card card-almond">
+              <div class="card-head">
+                <span class="card-head-title" style="color:var(--c-almond);">⚙️ TELEMETRIE &amp; STEUERUNG</span>
+                <span class="card-head-icon">📡</span>
+              </div>
+              
+              <!-- Quick Info List -->
+              <div style="margin-top:0.4rem; display:flex; flex-direction:column;">
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Benutzermodus:</span>
+                  <span class="solar-detail-val" id="solMode">--</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Anker Cloud Status:</span>
+                  <span class="solar-detail-val" id="solCloudState">Online</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">EcoTracker Cloud:</span>
+                  <span class="solar-detail-val" id="solEcoCloudState">Online</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">WiFi Speicher / Tracker:</span>
+                  <span class="solar-detail-val" id="solWifiState">Verbunden / Verbunden</span>
+                </div>
+                <div class="solar-detail-row">
+                  <span class="solar-detail-label">Letzter MQTT Sync:</span>
+                  <span class="solar-detail-val" id="solMqttTime" style="font-size:0.75rem;">--</span>
+                </div>
+              </div>
+
+              <!-- Quick Toggles & Triggers -->
+              <div style="margin-top:0.9rem; padding-top:0.6rem; border-top:1px solid rgba(255,255,255,0.08); display:flex; flex-direction:column; gap:0.5rem;">
+                <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+                  <button id="btnToggleFeed" class="left-action-btn" onclick="toggleSolarFeedSwitch()" style="flex:1; min-width:130px; padding:0.35rem 0.6rem; font-size:0.78rem;">
+                    NETZEINSPEISUNG: AN
+                  </button>
+                  <button id="btnToggleLed" class="left-action-btn" onclick="toggleSolarLedSwitch()" style="flex:1; min-width:130px; padding:0.35rem 0.6rem; font-size:0.78rem;">
+                    LED LICHT: AUS
+                  </button>
+                </div>
+                <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+                  <button class="left-action-btn" onclick="triggerSolarAction('button.christophs_energiespeicher_mqtt_echtzeitdaten', 'MQTT Echtzeit')" style="flex:1; min-width:110px; padding:0.35rem 0.6rem; font-size:0.78rem;">
+                    ⚡ MQTT ECHTZEIT
+                  </button>
+                  <button class="left-action-btn" onclick="triggerSolarAction('button.christophs_energiespeicher_details_aktualisieren', 'Details Sync')" style="flex:1; min-width:110px; padding:0.35rem 0.6rem; font-size:0.78rem;">
+                    🔄 DETAILS SYNC
+                  </button>
+                  <button class="left-action-btn" onclick="triggerSolarAction('button.ecotracker_mqtt_echtzeitdaten', 'EcoTracker')" style="flex:1; min-width:110px; padding:0.35rem 0.6rem; font-size:0.78rem;">
+                    📡 ECOTRACKER
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- DACHTERRASSE ENTITIES BROWSER (INTERAKTIVE LISTE ALLER OBJEKTE) -->
+          <div class="ha-room-card" style="border-left-color:var(--c-gold); margin-top:1rem;">
+            <div class="ha-room-header">
+              <div class="ha-room-title" style="color:var(--c-gold);">
+                <span>☀️</span>
+                <span>DACHTERRASSE // ALLE HOME ASSISTANT OBJEKTE</span>
+              </div>
+              <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                <select id="solarDomainFilter" onchange="filterSolarEntities()" class="lcars-input" style="padding:0.35rem 0.65rem; font-size:0.82rem; width:auto;">
+                  <option value="all">ALLE OBJEKTE</option>
+                  <option value="sensor">📊 SENSOREN</option>
+                  <option value="switch">🔌 SCHALTER</option>
+                  <option value="button">🔘 TASTER</option>
+                  <option value="number">🔢 ZAHLEN / LIMITS</option>
+                  <option value="select">📋 AUSWAHL / MODI</option>
+                  <option value="binary_sensor">👁️ STATUS-SENSOREN</option>
+                  <option value="controllable">⚙️ NUR STEUERBARE</option>
+                </select>
+                <input type="text" id="solarSearchInput" oninput="filterSolarEntities()" placeholder="Objekt suchen..." class="lcars-input" style="padding:0.35rem 0.65rem; font-size:0.82rem; width:150px;">
+              </div>
+            </div>
+
+            <!-- Entities Grid -->
+            <div id="solarEntitiesGrid" class="ha-entities-grid">
+              <div style="padding:2rem; text-align:center; color:#888; font-family:var(--mono-family); grid-column:1/-1;">
+                Lade Dachterassen-Objekte...
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- LCARS ENTITY CONTROL MODAL -->
         <div id="haControlModal" class="ha-modal-overlay" style="display:none;" onclick="handleModalBackdropClick(event)">
           <div class="ha-modal-content" onclick="event.stopPropagation()">
@@ -5827,7 +6231,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   });
 
-  // 7 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
+  // 8 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
   const CATEGORY_NAMES = {
     'system': 'SYSTEM & SENSOR VERLAUF',
     'services': 'SERVICES & PROZESS-SCANNER',
@@ -5835,6 +6239,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     'ai-info': 'KI-INFO // 9ROUTER & NEURAL TELEMETRIE',
     'config': 'SYSTEM CONFIG & FARBMODI',
     'fantasy': 'ESPN FANTASY FOOTBALL // INCOMPLETE PASS',
+    'solar': 'LCARS ENERGIE-MANAGEMENT // BALKONSOLAR',
     'homeassistant': 'LCARS HAUSSTEUERUNG // HOME ASSISTANT'
   };
 
@@ -5891,6 +6296,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         fantasyCountdownSeconds = 30;
         updateFantasyCountdownUI();
         loadFantasyData(false);
+      }, 60);
+    }
+    if (catId === 'solar') {
+      setTimeout(() => {
+        solarCountdownSeconds = 15;
+        updateSolarCountdownUI();
+        loadSolarData(false);
       }, 60);
     }
     if (catId === 'homeassistant') {
@@ -6999,6 +7411,396 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }, 1000);
   }
 
+  // BALKONSOLAR & DACHTERRASSE CONTROLLER
+  let isSolarLoading = false;
+  let solarCountdownSeconds = 15;
+  let solarAutoRefreshTimer = null;
+  let solarCurrentData = null;
+
+  function updateSolarCountdownUI() {
+    const badge = document.getElementById('solarCountdownBadge');
+    if (!badge) return;
+    if (isSolarLoading) {
+      badge.textContent = '● SYNC...';
+      badge.style.color = 'var(--c-gold)';
+      badge.style.borderColor = 'var(--c-gold)';
+      badge.style.background = 'rgba(237, 179, 120, 0.15)';
+    } else {
+      badge.textContent = `● REFRESH IN ${solarCountdownSeconds}S`;
+      badge.style.color = 'var(--c-gold)';
+      badge.style.borderColor = 'rgba(237, 179, 120, 0.4)';
+      badge.style.background = 'rgba(237, 179, 120, 0.15)';
+    }
+  }
+
+  async function loadSolarData(force = false) {
+    if (isSolarLoading) return;
+    isSolarLoading = true;
+    updateSolarCountdownUI();
+
+    try {
+      const resp = await fetch('/api/solar/data');
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      solarCurrentData = data;
+      renderSolarUI(data);
+    } catch(err) {
+      console.warn('loadSolarData error:', err);
+      const liveBadge = document.getElementById('solarLiveBadge');
+      if (liveBadge) {
+        liveBadge.textContent = 'OFFLINE';
+        liveBadge.className = 'badge-status badge-offline';
+      }
+    } finally {
+      isSolarLoading = false;
+      solarCountdownSeconds = 15;
+      updateSolarCountdownUI();
+    }
+  }
+
+  function renderSolarUI(data) {
+    if (!data || !data.success || !data.summary) return;
+    const s = data.summary;
+
+    // Badges oben
+    const liveBadge = document.getElementById('solarLiveBadge');
+    if (liveBadge) {
+      liveBadge.textContent = 'ONLINE';
+      liveBadge.className = 'badge-status badge-online';
+    }
+
+    const cloudBadge = document.getElementById('solarCloudBadge');
+    if (cloudBadge) {
+      const c1 = (s.cloud_state || 'online').toUpperCase();
+      const c2 = (s.ecotracker_cloud || 'online').toUpperCase();
+      cloudBadge.textContent = `ANKER CLOUD: ${c1} // ECOTRACKER: ${c2}`;
+      cloudBadge.style.color = (c1 === 'ONLINE' && c2 === 'ONLINE') ? 'var(--c-gold)' : 'var(--c-red)';
+    }
+
+    // Top Right Badges (Header)
+    const topBat = document.getElementById('topBatVal');
+    if (topBat && s.battery_soc_str) topBat.textContent = s.battery_soc_str;
+    const itemBat = document.getElementById('topVitalBat');
+    if (itemBat && s.battery_soc !== null && s.battery_soc !== undefined) {
+      itemBat.classList.toggle('vital-alert', s.battery_soc < 10);
+    }
+
+    const topHouse = document.getElementById('topHouseVal');
+    if (topHouse && s.house_power_str) topHouse.textContent = s.house_power_str;
+
+    // Power Flow Nodes
+    const nSolarVal = document.getElementById('nodeSolarVal');
+    if (nSolarVal) nSolarVal.textContent = s.solar_power_str || '0 W';
+
+    const nBatVal = document.getElementById('nodeBatVal');
+    if (nBatVal) nBatVal.textContent = s.battery_soc_str || '--%';
+
+    const nBatStatus = document.getElementById('nodeBatStatus');
+    if (nBatStatus) {
+      nBatStatus.textContent = s.battery_status || 'STANDBY';
+      nBatStatus.style.color = s.battery_status_color || 'var(--c-secondary)';
+    }
+
+    const nBatSub = document.getElementById('nodeBatSub');
+    if (nBatSub) {
+      nBatSub.textContent = `${s.battery_energy_wh || 0} Wh / ${s.battery_capacity_wh || 1600} Wh (${s.battery_temp_str || '--'})`;
+    }
+
+    const nHouseVal = document.getElementById('nodeHouseVal');
+    if (nHouseVal) nHouseVal.textContent = s.house_power_str || '-- W';
+
+    const nGridVal = document.getElementById('nodeGridVal');
+    if (nGridVal) nGridVal.textContent = s.grid_power_str || '-- W';
+
+    const nGridSub = document.getElementById('nodeGridSub');
+    if (nGridSub) {
+      if (s.grid_feed_in > 0) {
+        nGridSub.textContent = `Einspeisung: ${s.grid_feed_in_str} // Bezug: 0 W`;
+      } else {
+        nGridSub.textContent = `Netzbezug // ${s.grid_feed_in_str || '0 W'} Einspeisung`;
+      }
+    }
+
+    // Summary Tag
+    const flowTag = document.getElementById('solarFlowSummaryTag');
+    if (flowTag) {
+      if (s.solar_power > (s.house_power || 0) && s.solar_power > 0) {
+        flowTag.textContent = '⚡ SOLAR-ÜBERSCHUSS';
+        flowTag.style.backgroundColor = '#44dd88';
+      } else if (s.battery_discharge_power > 20) {
+        flowTag.textContent = '🔋 AKKU-VERSORGUNG';
+        flowTag.style.backgroundColor = 'var(--c-secondary)';
+      } else if (s.grid_power > 0) {
+        flowTag.textContent = '🌐 LIVE NETZBEZUG';
+        flowTag.style.backgroundColor = 'var(--c-gold)';
+      } else {
+        flowTag.textContent = 'AUTARK';
+        flowTag.style.backgroundColor = '#44dd88';
+      }
+    }
+
+    // Card 1: Photovoltaik
+    const cSolVal = document.getElementById('cardSolarVal');
+    if (cSolVal) cSolVal.textContent = s.solar_power_str || '0 W';
+
+    const setPvBar = (valId, barId, val) => {
+      const elVal = document.getElementById(valId);
+      const elBar = document.getElementById(barId);
+      if (elVal) elVal.textContent = `${val} W`;
+      if (elBar) elBar.style.width = Math.min(100, Math.round((val / 500) * 100)) + '%';
+    };
+    setPvBar('pv1Val', 'pv1Bar', s.pv1 || 0);
+    setPvBar('pv2Val', 'pv2Bar', s.pv2 || 0);
+    setPvBar('pv3Val', 'pv3Bar', s.pv3 || 0);
+    setPvBar('pv4Val', 'pv4Bar', s.pv4 || 0);
+
+    const elYield = document.getElementById('solYieldTotal');
+    if (elYield) elYield.textContent = (s.yield_total !== null && s.yield_total !== undefined) ? `${s.yield_total} kWh` : '-- kWh';
+    const elCo2 = document.getElementById('solCo2Saved');
+    if (elCo2) elCo2.textContent = (s.co2_saved !== null && s.co2_saved !== undefined) ? `${s.co2_saved} kg` : '-- kg';
+    const elCost = document.getElementById('solCostSaved');
+    if (elCost) elCost.textContent = (s.cost_saved !== null && s.cost_saved !== undefined) ? `${Number(s.cost_saved).toFixed(2)} €` : '-- €';
+
+    // Card 2: Akku
+    const cBatVal = document.getElementById('cardBatVal');
+    if (cBatVal) cBatVal.textContent = s.battery_soc_str || '--%';
+    const cBatSub = document.getElementById('cardBatSub');
+    if (cBatSub) {
+      cBatSub.textContent = `Akkustand (${s.battery_status || 'STANDBY'})`;
+      cBatSub.style.color = s.battery_status_color || 'var(--c-secondary)';
+    }
+    const cBatBar = document.getElementById('cardBatBar');
+    if (cBatBar) {
+      const pct = Math.min(100, Math.max(0, s.battery_soc || 0));
+      cBatBar.style.width = pct + '%';
+      if (pct < 10) cBatBar.style.backgroundColor = 'var(--c-red)';
+      else if (pct < 30) cBatBar.style.backgroundColor = 'var(--c-gold)';
+      else cBatBar.style.backgroundColor = 'var(--c-secondary)';
+    }
+
+    const elEnergyWh = document.getElementById('solEnergyWh');
+    if (elEnergyWh) elEnergyWh.textContent = `${s.battery_energy_wh || 0} Wh / ${s.battery_capacity_wh || 1600} Wh`;
+    const elBatCharge = document.getElementById('solBatCharge');
+    if (elBatCharge) elBatCharge.textContent = `${s.battery_charge_power || 0} W`;
+    const elBatDischarge = document.getElementById('solBatDischarge');
+    if (elBatDischarge) elBatDischarge.textContent = `${s.battery_discharge_power || 0} W`;
+    const elBatTemp = document.getElementById('solBatTemp');
+    if (elBatTemp) elBatTemp.textContent = s.battery_temp_str || '--';
+    const elSocLimits = document.getElementById('solSocLimits');
+    if (elSocLimits) elSocLimits.textContent = `Min ${s.battery_soc_min || 5}% / Max ${s.battery_soc_max || 100}%`;
+    const elBatHeating = document.getElementById('solBatHeating');
+    if (elBatHeating) elBatHeating.textContent = s.battery_heating ? `Aktiv (${s.battery_heat_power || 0} W)` : 'Inaktiv (0 W)';
+    const elOpState = document.getElementById('solOpState');
+    if (elOpState) elOpState.textContent = s.operating_state || '--';
+
+    // Card 3: Hausnetz & Zähler
+    const cHouseVal = document.getElementById('cardHouseVal');
+    if (cHouseVal) cHouseVal.textContent = s.house_power_str || '-- W';
+    const elAcOut = document.getElementById('solAcOutput');
+    if (elAcOut) elAcOut.textContent = `${s.inverter_ac_output || 0} W`;
+    const elDcOut = document.getElementById('solDcOutput');
+    if (elDcOut) elDcOut.textContent = `${s.inverter_dc_output || 0} W`;
+    const elGridUsage = document.getElementById('solGridUsage');
+    if (elGridUsage) elGridUsage.textContent = s.grid_power_str || '-- W';
+    const elGridFeed = document.getElementById('solGridFeedIn');
+    if (elGridFeed) elGridFeed.textContent = s.grid_feed_in_str || '0 W';
+    const elAcSocket = document.getElementById('solAcSocket');
+    if (elAcSocket) elAcSocket.textContent = `${s.inverter_socket || 0} W`;
+    const elFeedTarget = document.getElementById('solFeedTarget');
+    if (elFeedTarget) elFeedTarget.textContent = `${s.feed_target || 0} W`;
+    const elFeedLimit = document.getElementById('solFeedLimit');
+    if (elFeedLimit) elFeedLimit.textContent = `${s.feed_limit || 800} W`;
+
+    // Card 4: Telemetrie & Schnellsteuerung
+    const elMode = document.getElementById('solMode');
+    if (elMode) elMode.textContent = s.mode || 'smartmeter';
+    const elCloudState = document.getElementById('solCloudState');
+    if (elCloudState) {
+      elCloudState.textContent = (s.cloud_state || 'online').toUpperCase();
+      elCloudState.style.color = (s.cloud_state === 'online') ? '#44dd88' : 'var(--c-red)';
+    }
+    const elEcoCloud = document.getElementById('solEcoCloudState');
+    if (elEcoCloud) {
+      elEcoCloud.textContent = (s.ecotracker_cloud || 'online').toUpperCase();
+      elEcoCloud.style.color = (s.ecotracker_cloud === 'online') ? '#44dd88' : 'var(--c-red)';
+    }
+    const elWifiState = document.getElementById('solWifiState');
+    if (elWifiState) {
+      const w1 = s.wifi_storage ? 'Verbunden' : 'Getrennt';
+      const w2 = s.wifi_tracker ? 'Verbunden' : 'Getrennt';
+      elWifiState.textContent = `${w1} / ${w2}`;
+    }
+    const elMqttTime = document.getElementById('solMqttTime');
+    if (elMqttTime) elMqttTime.textContent = s.mqtt_time || '--';
+
+    // Buttons / Switch State
+    const btnFeed = document.getElementById('btnToggleFeed');
+    if (btnFeed) {
+      btnFeed.textContent = s.grid_feed_allowed ? 'NETZEINSPEISUNG: AN' : 'NETZEINSPEISUNG: AUS';
+      btnFeed.style.borderColor = s.grid_feed_allowed ? '#44dd88' : '#888';
+      btnFeed.style.color = s.grid_feed_allowed ? '#44dd88' : '#888';
+    }
+    const btnLed = document.getElementById('btnToggleLed');
+    if (btnLed) {
+      btnLed.textContent = s.led_light ? 'LED LICHT: AN' : 'LED LICHT: AUS';
+      btnLed.style.borderColor = s.led_light ? 'var(--c-gold)' : '#888';
+      btnLed.style.color = s.led_light ? 'var(--c-gold)' : '#888';
+    }
+
+    // Entities Grid
+    renderSolarEntitiesGrid(data.entities || []);
+  }
+
+  function renderSolarEntitiesGrid(entities) {
+    const container = document.getElementById('solarEntitiesGrid');
+    if (!container) return;
+
+    if (!entities || entities.length === 0) {
+      container.innerHTML = '<div style="padding:2rem; text-align:center; color:#888; font-family:var(--mono-family); grid-column:1/-1;">Keine Dachterassen-Objekte gefunden.</div>';
+      return;
+    }
+
+    const domainFilter = document.getElementById('solarDomainFilter')?.value || 'all';
+    const searchVal = (document.getElementById('solarSearchInput')?.value || '').toLowerCase().trim();
+
+    const filtered = entities.filter(e => {
+      if (domainFilter === 'controllable' && !e.controllable) return false;
+      if (domainFilter !== 'all' && domainFilter !== 'controllable' && e.domain !== domainFilter) return false;
+      if (searchVal) {
+        const matchName = (e.friendly_name || '').toLowerCase().includes(searchVal);
+        const matchId = (e.entity_id || '').toLowerCase().includes(searchVal);
+        const matchState = (e.state || '').toLowerCase().includes(searchVal);
+        if (!matchName && !matchId && !matchState) return false;
+      }
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      container.innerHTML = '<div style="padding:2rem; text-align:center; color:#888; font-family:var(--mono-family); grid-column:1/-1;">Keine Objekte entsprechen dem aktuellen Filter.</div>';
+      return;
+    }
+
+    let html = '';
+    filtered.forEach(e => {
+      const isActive = ['on', 'open', 'playing', 'cleaning'].includes(e.state);
+      const activeClass = isActive ? 'entity-active' : '';
+      const unit = e.controls?.unit ? ` ${e.controls.unit}` : '';
+      const stateDisplay = (e.state || 'unknown') + unit;
+
+      html += `
+        <div class="ha-entity-tile ${activeClass}" onclick="openHaControlModal('${e.entity_id}')" title="${e.entity_id}">
+          <div class="ha-tile-top">
+            <span class="ha-tile-icon">${e.icon || '⚙️'}</span>
+            <span class="ha-tile-state" style="font-family:var(--mono-family); font-weight:700; font-size:0.85rem; color:${isActive ? 'var(--c-primary)' : '#ccc'};">${stateDisplay}</span>
+          </div>
+          <div class="ha-tile-name" style="margin-top:0.4rem; font-weight:600; font-size:0.82rem; color:#fff; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">${e.friendly_name}</div>
+          <div class="ha-tile-id" style="font-size:0.68rem; color:#777; font-family:var(--mono-family); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">${e.entity_id}</div>
+        </div>
+      `;
+    });
+
+    container.innerHTML = html;
+  }
+
+  function filterSolarEntities() {
+    if (solarCurrentData && solarCurrentData.entities) {
+      renderSolarEntitiesGrid(solarCurrentData.entities);
+    }
+  }
+
+  async function triggerSolarAction(entityId, label) {
+    playLcarsBeep(980, 1400);
+    try {
+      const resp = await fetch('/api/homeassistant/service', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domain: 'button',
+          service: 'press',
+          service_data: { entity_id: entityId }
+        })
+      });
+      const res = await resp.json();
+      if (res.success) {
+        playLcarsBeep(1200, 1600);
+        setTimeout(() => { loadSolarData(true); }, 400);
+      } else {
+        console.warn('triggerSolarAction error:', res.error);
+        playLcarsBeep(440, 220);
+      }
+    } catch(e) {
+      console.warn('triggerSolarAction exception:', e);
+      playLcarsBeep(440, 220);
+    }
+  }
+
+  async function toggleSolarFeedSwitch() {
+    if (!solarCurrentData || !solarCurrentData.summary) return;
+    const current = solarCurrentData.summary.grid_feed_allowed;
+    const service = current ? 'turn_off' : 'turn_on';
+    playLcarsBeep(880, 1760);
+    try {
+      await fetch('/api/homeassistant/service', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domain: 'switch',
+          service: service,
+          service_data: { entity_id: 'switch.christophs_energiespeicher_erlaube_netzeinspeisung' }
+        })
+      });
+      setTimeout(() => { loadSolarData(true); }, 400);
+    } catch(e) {
+      console.warn('toggleSolarFeedSwitch error:', e);
+    }
+  }
+
+  async function toggleSolarLedSwitch() {
+    if (!solarCurrentData || !solarCurrentData.summary) return;
+    const current = solarCurrentData.summary.led_light;
+    const service = current ? 'turn_off' : 'turn_on';
+    playLcarsBeep(880, 1760);
+    try {
+      await fetch('/api/homeassistant/service', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domain: 'switch',
+          service: service,
+          service_data: { entity_id: 'switch.christophs_energiespeicher_led_licht' }
+        })
+      });
+      setTimeout(() => { loadSolarData(true); }, 400);
+    } catch(e) {
+      console.warn('toggleSolarLedSwitch error:', e);
+    }
+  }
+
+  function startSolarAutoRefresh() {
+    if (solarAutoRefreshTimer) clearInterval(solarAutoRefreshTimer);
+    solarCountdownSeconds = 15;
+    updateSolarCountdownUI();
+
+    solarAutoRefreshTimer = setInterval(() => {
+      const sec = document.getElementById('section-solar');
+      const isVisible = sec && sec.classList.contains('active-section') && !document.hidden;
+
+      if (!isVisible) {
+        solarCountdownSeconds = 15;
+        return;
+      }
+
+      solarCountdownSeconds--;
+      if (solarCountdownSeconds <= 0) {
+        solarCountdownSeconds = 15;
+        updateSolarCountdownUI();
+        loadSolarData(false);
+      } else {
+        updateSolarCountdownUI();
+      }
+    }, 1000);
+  }
+
   function playRedAlertKlaxon() {
     if (!soundEnabled) return;
     try {
@@ -7340,6 +8142,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('sysUptimeVal').textContent = data.uptime.display || '--';
       if (data.uptime.boot_time) {
         document.getElementById('sysBootTimeSub').textContent = `Boot: ${data.uptime.boot_time}`;
+      }
+    }
+
+    // Solar Balkonsolar (Akkustand & Hausverbrauch oben rechts)
+    if (data.solar) {
+      const topBat = document.getElementById('topBatVal');
+      if (topBat && data.solar.battery_soc_str) {
+        topBat.textContent = data.solar.battery_soc_str;
+      }
+      const itemBat = document.getElementById('topVitalBat');
+      if (itemBat && data.solar.battery_soc !== null && data.solar.battery_soc !== undefined) {
+        itemBat.classList.toggle('vital-alert', data.solar.battery_soc < 10);
+      }
+
+      const topHouse = document.getElementById('topHouseVal');
+      if (topHouse && data.solar.house_power_str) {
+        topHouse.textContent = data.solar.house_power_str;
       }
     }
 
@@ -9082,6 +9901,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     startFantasyAutoRefresh();
     checkHomeAssistantConfig();
     startHaAutoRefresh();
+    loadSolarData(false);
+    startSolarAutoRefresh();
   }
 
   if (document.readyState === 'loading') {
@@ -9333,6 +10154,12 @@ if USE_FLASK:
         res = ha_service.call_service(domain, service, service_data)
         return jsonify(res)
 
+    @app.route("/api/solar/data", methods=["GET"])
+    def api_solar_data():
+        if not ha_service:
+            return jsonify({"success": False, "error": "ha_service nicht verfügbar"}), 503
+        return jsonify(ha_service.get_solar_data())
+
 
     def run_server():
         print("[START] Starte System Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
@@ -9436,6 +10263,14 @@ else:
             elif parsed.path == "/api/homeassistant/data":
                 ha_data = ha_service.get_rooms_and_entities() if ha_service else {"success": False, "error": "ha_service nicht verfügbar"}
                 data = json.dumps(ha_data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/solar/data":
+                solar_data = ha_service.get_solar_data() if ha_service else {"success": False, "error": "ha_service nicht verfügbar"}
+                data = json.dumps(solar_data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
