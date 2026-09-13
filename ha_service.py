@@ -20,7 +20,7 @@ DEFAULT_HA_CONFIG = {
     "password": "",
     "refresh_token": "",
     "token_expires_at": 0,
-    "name": "Home Assistant"
+    "name": "Assistant"
 }
 
 # Raum-Icons Zuordnung
@@ -446,7 +446,7 @@ class HomeAssistantService:
         return {
             "success": True,
             "configured": True,
-            "name": cfg.get("name", "Home Assistant"),
+            "name": cfg.get("name", "Assistant"),
             "url": cfg.get("url", ""),
             "areas": areas_list,
             "unassigned": unassigned_entities,

@@ -2948,6 +2948,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       letter-spacing: 0.06em;
       text-transform: uppercase;
       text-align: right;
+      white-space: nowrap;
       cursor: pointer;
       position: relative;
       transition: filter 0.15s ease, background-color 0.15s ease, color 0.15s ease;
@@ -4251,7 +4252,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           FANTASY
         </button>
         <button class="lcars-pill-btn pill-ha" onclick="switchCategory('homeassistant')" id="btn-cat-homeassistant" style="display: none;">
-          HOME ASSISTANT
+          ASSISTANT
         </button>
       </nav>
 
@@ -5219,8 +5220,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                   <label for="cfgHaName" style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem; color:var(--c-gold);">
                     <span>🏷️ BUTTON-NAME (LINKE LEISTE)</span>
                   </label>
-                  <input type="text" id="cfgHaName" value="Home Assistant" class="lcars-input" placeholder="Home Assistant" required>
-                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">z.B. Home Assistant, Smart Home, Quartier</div>
+                  <input type="text" id="cfgHaName" value="Assistant" class="lcars-input" placeholder="Assistant" required>
+                  <div style="font-size:0.75rem; color:#888; margin-top:0.25rem;">z.B. Assistant, Smart Home, Quartier</div>
                 </div>
 
                 <!-- Username -->
@@ -6154,7 +6155,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const data = await resp.json();
 
       const btn = document.getElementById('btn-cat-homeassistant');
-      const cfgName = (data.name || 'HOME ASSISTANT').toUpperCase();
+      const cfgName = (data.name || 'ASSISTANT').toUpperCase();
 
       if (data.configured && data.enabled) {
         if (btn) {
@@ -6220,7 +6221,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     playLcarsBeep(980, 1400);
 
     const url = document.getElementById('cfgHaUrl')?.value?.trim();
-    const name = document.getElementById('cfgHaName')?.value?.trim() || 'Home Assistant';
+    const name = document.getElementById('cfgHaName')?.value?.trim() || 'Assistant';
     const username = document.getElementById('cfgHaUser')?.value?.trim() || '';
     const password = document.getElementById('cfgHaPass')?.value?.trim() || '';
     const token = document.getElementById('cfgHaToken')?.value?.trim() || '';
