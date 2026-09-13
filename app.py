@@ -5105,14 +5105,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="lcars-header-bar">
             <span class="lcars-pill-tag">ESPN // LIVE METRIKEN</span>
             <h2 id="fantasySectionTitle">LCARS SUBRAUM RELAY // INCOMPLETE PASS LIGA</h2>
-            <div style="margin-left:auto; display:flex; gap:0.6rem; align-items:center;">
-              <span style="font-size:0.75rem; color:#44dd88; background:rgba(68,221,136,0.15); border:1px solid rgba(68,221,136,0.4); padding:0.2rem 0.5rem; border-radius:10px; font-family:var(--mono-family);">
-                ● AUTO 30S
+            <div style="margin-left:auto; display:flex; align-items:center;">
+              <span id="fantasyCountdownBadge" style="font-size:0.8rem; color:#44dd88; background:rgba(68,221,136,0.15); border:1px solid rgba(68,221,136,0.4); padding:0.25rem 0.75rem; border-radius:12px; font-family:var(--mono-family); letter-spacing:0.04em;">
+                ● REFRESH IN 30S
               </span>
-              <span id="fantasyLastUpdate" style="font-size:0.8rem; color:var(--c-gold); font-family:var(--mono-family);">LÄDT...</span>
-              <button class="left-action-btn" style="border-radius:14px; min-height:32px; padding:0.3rem 0.8rem;" onclick="loadFantasyData(true)">
-                <span>⟳</span> <span>AKTUALISIEREN</span>
-              </button>
             </div>
           </div>
 
@@ -5473,6 +5469,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     if (catId === 'fantasy') {
       setTimeout(() => {
+        fantasyCountdownSeconds = 30;
+        updateFantasyCountdownUI();
         loadFantasyData(false);
       }, 60);
     }
@@ -5480,11 +5478,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   // ESPN FANTASY CONTROLLER
   let isFantasyLoading = false;
+  let fantasyCountdownSeconds = 30;
+
+  function updateFantasyCountdownUI() {
+    const badge = document.getElementById('fantasyCountdownBadge');
+    if (!badge) return;
+    if (isFantasyLoading) {
+      badge.textContent = '● SYNC...';
+      badge.style.color = 'var(--c-gold)';
+      badge.style.borderColor = 'var(--c-gold)';
+      badge.style.background = 'rgba(237, 179, 120, 0.15)';
+    } else {
+      badge.textContent = `● REFRESH IN ${fantasyCountdownSeconds}S`;
+      badge.style.color = '#44dd88';
+      badge.style.borderColor = 'rgba(68, 221, 136, 0.4)';
+      badge.style.background = 'rgba(68, 221, 136, 0.15)';
+    }
+  }
+
   async function loadFantasyData(force = false) {
     if (isFantasyLoading) return;
     isFantasyLoading = true;
-    const lastUpdateEl = document.getElementById('fantasyLastUpdate');
-    if (lastUpdateEl) lastUpdateEl.textContent = force ? 'AKTUALISIERE...' : 'LÄDT...';
+    updateFantasyCountdownUI();
 
     try {
       const url = force ? '/api/fantasy/refresh' : '/api/fantasy';
@@ -5492,7 +5507,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const data = await resp.json();
 
       if (data.status === 'error') {
-        if (lastUpdateEl) lastUpdateEl.textContent = 'FEHLER: ' + (data.message || 'ESPN API');
+        const badge = document.getElementById('fantasyCountdownBadge');
+        if (badge) {
+          badge.textContent = '● FEHLER BEIM ABRUF';
+          badge.style.color = 'var(--c-red)';
+          badge.style.borderColor = 'var(--c-red)';
+        }
         isFantasyLoading = false;
         return;
       }
@@ -5640,28 +5660,46 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         standingsBody.innerHTML = html;
       }
 
-      if (lastUpdateEl && data.updated_at) {
-        lastUpdateEl.textContent = 'STAND: ' + data.updated_at;
-      }
-
     } catch (e) {
       console.error('ESPN Fantasy Ladefehler:', e);
-      if (lastUpdateEl) lastUpdateEl.textContent = 'FEHLER BEIM LADEN';
+      const badge = document.getElementById('fantasyCountdownBadge');
+      if (badge) {
+        badge.textContent = '● FEHLER BEIM ABRUF';
+        badge.style.color = 'var(--c-red)';
+        badge.style.borderColor = 'var(--c-red)';
+      }
     } finally {
       isFantasyLoading = false;
+      fantasyCountdownSeconds = 30;
+      updateFantasyCountdownUI();
     }
   }
 
-  // Auto-Refresh für Fantasy (alle 30 Sekunden wenn Tab geöffnet ist)
+  // Auto-Refresh für Fantasy (sekündlicher Countdown, alle 30s Refresh)
   let fantasyAutoRefreshTimer = null;
   function startFantasyAutoRefresh() {
     if (fantasyAutoRefreshTimer) clearInterval(fantasyAutoRefreshTimer);
+    fantasyCountdownSeconds = 30;
+    updateFantasyCountdownUI();
+
     fantasyAutoRefreshTimer = setInterval(() => {
       const sec = document.getElementById('section-fantasy');
-      if (sec && sec.classList.contains('active-section') && !document.hidden) {
-        loadFantasyData(false);
+      const isVisible = sec && sec.classList.contains('active-section') && !document.hidden;
+
+      if (!isVisible) {
+        fantasyCountdownSeconds = 30;
+        return;
       }
-    }, 30000);
+
+      fantasyCountdownSeconds--;
+      if (fantasyCountdownSeconds <= 0) {
+        fantasyCountdownSeconds = 30;
+        updateFantasyCountdownUI();
+        loadFantasyData(false);
+      } else {
+        updateFantasyCountdownUI();
+      }
+    }, 1000);
   }
 
   // Red Alert Klaxon Alarm Sound (Authentischer Star Trek Doppel-Sirenen-Warble)
