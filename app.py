@@ -414,7 +414,10 @@ _service_status_cache = {}
 _service_status_lock = threading.Lock()
 
 
-def check_service_status(port=8000, host="127.0.0.1", timeout=0.25, max_age=4.0):
+def check_service_status(port=8000, host="127.0.0.1", timeout=0.2, max_age=4.0):
+    # Das Dashboard selbst läuft immer, wenn dieser Code ausgeführt wird
+    if port == 5000:
+        return True
     now = time.time()
     cache_key = (host, port)
     with _service_status_lock:
@@ -424,17 +427,10 @@ def check_service_status(port=8000, host="127.0.0.1", timeout=0.25, max_age=4.0)
 
     online = False
     try:
-        req = urllib.request.Request(f"http://{host}:{port}/", method="HEAD")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            online = resp.status < 500
-    except urllib.error.HTTPError:
-        online = True
+        with socket.create_connection((host, port), timeout=timeout):
+            online = True
     except Exception:
-        try:
-            with socket.create_connection((host, port), timeout=timeout):
-                online = True
-        except Exception:
-            online = False
+        online = False
 
     with _service_status_lock:
         _service_status_cache[cache_key] = {"online": online, "timestamp": now}
@@ -979,7 +975,7 @@ class WebserverDiscoveryScanner:
 
     def get_results(self):
         with self._lock:
-            cf_map = self.get_cloudflared_map()
+            cf_map = cf_tunnel_manager.get_all_urls()
             discovered = []
             for srv in self.discovered_servers:
                 srv_copy = dict(srv)
@@ -1347,8 +1343,19 @@ def get_antigravity_status():
 # ---------------------------------------------------------------------------
 # 9Router SQLite Telemetrie & Verbrauchs-Statistiken
 # ---------------------------------------------------------------------------
-def get_9router_stats():
-    """Liest Nutzungs-, Telemetrie- und Verbindungsdaten aus ~/.9router/db/data.sqlite."""
+_9router_stats_cache = None
+_9router_stats_cache_ts = 0
+_9router_stats_lock = threading.Lock()
+
+
+def get_9router_stats(cache_ttl=10.0):
+    """Liest Nutzungs-, Telemetrie- und Verbindungsdaten aus ~/.9router/db/data.sqlite mit 10s Cache."""
+    global _9router_stats_cache, _9router_stats_cache_ts
+    now = time.time()
+    with _9router_stats_lock:
+        if _9router_stats_cache is not None and (now - _9router_stats_cache_ts < cache_ttl):
+            return _9router_stats_cache
+
     db_path = os.path.expanduser("~/.9router/db/data.sqlite")
     default_res = {
         "status": "offline",
@@ -1539,21 +1546,19 @@ def get_9router_stats():
 
             total_tokens = total_prompt_tokens + total_completion_tokens
 
-            # Ersparnis durch Context/Prompt Caching ermitteln
+            # Ersparnis durch Context/Prompt Caching ermitteln mit direkter SQL-Aggregation
             uncached_cost = 0.0
             try:
-                c.execute("SELECT model, promptTokens, completionTokens, cost, tokens FROM usageHistory;")
-                history_all = c.fetchall()
-                for u_model, u_pt, u_ct, u_c, u_tok in history_all:
-                    u_pt = u_pt or 0
-                    u_ct = u_ct or 0
-                    rate = 0.0000005
-                    if "high" in (u_model or "").lower():
-                        rate = 0.0000025
-                    comp_rate = 0.000003
-                    if "high" in (u_model or "").lower():
-                        comp_rate = 0.000010
-                    uncached_cost += (u_pt * rate + u_ct * comp_rate)
+                c.execute("""
+                    SELECT 
+                        SUM(CASE WHEN LOWER(COALESCE(model, '')) LIKE '%high%' 
+                                 THEN (COALESCE(promptTokens, 0) * 0.0000025 + COALESCE(completionTokens, 0) * 0.000010)
+                                 ELSE (COALESCE(promptTokens, 0) * 0.0000005 + COALESCE(completionTokens, 0) * 0.000003) END)
+                    FROM usageHistory;
+                """)
+                row = c.fetchone()
+                if row and row[0] is not None:
+                    uncached_cost = float(row[0])
             except Exception:
                 pass
 
@@ -1571,7 +1576,7 @@ def get_9router_stats():
                     return f"{n/1_000:.1f}k"
                 return str(n)
 
-            return {
+            res = {
                 "status": "online",
                 "totals": {
                     "requests": total_requests,
@@ -1602,6 +1607,11 @@ def get_9router_stats():
                 "recent_history": recent_requests,
                 "connections": connections
             }
+
+            with _9router_stats_lock:
+                _9router_stats_cache = res
+                _9router_stats_cache_ts = time.time()
+            return res
         finally:
             conn.close()
 
@@ -3935,6 +3945,165 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       transform: none;
       filter: none;
     }
+
+    /* LCARS Voice Comm-Link & Microphone Button */
+    .lcars-chat-btn-mic {
+      background-color: var(--c-blue);
+      color: #000;
+      font-family: var(--font-family);
+      font-size: 1.05rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 0.65rem 1.1rem;
+      border-radius: 100vmax;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: all 0.15s ease;
+    }
+    .lcars-chat-btn-mic:hover {
+      filter: brightness(1.25);
+      transform: scale(1.02);
+    }
+    .lcars-chat-btn-mic:active {
+      transform: scale(0.98);
+    }
+    .lcars-chat-btn-mic.listening {
+      background-color: #ff3355 !important;
+      color: #fff !important;
+      animation: pulse-mic 0.7s infinite alternate ease-in-out;
+    }
+    .lcars-chat-btn-mic.speaking {
+      background-color: #33dd88 !important;
+      color: #000 !important;
+      animation: pulse-mic 0.9s infinite alternate ease-in-out;
+    }
+    .lcars-chat-btn-mic.computing {
+      background-color: var(--c-gold) !important;
+      color: #000 !important;
+      animation: pulse-mic 0.8s infinite alternate ease-in-out;
+    }
+
+    @keyframes pulse-mic {
+      0% { box-shadow: 0 0 5px rgba(255, 51, 85, 0.4); }
+      100% { box-shadow: 0 0 20px rgba(255, 51, 85, 0.9); transform: scale(1.04); }
+    }
+
+    /* Banner Comm-Link Badge */
+    .banner-comm-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      background: rgba(136, 153, 255, 0.12);
+      border: 1.5px solid var(--c-blue);
+      border-radius: 100vmax;
+      padding: 0.25rem 0.85rem;
+      cursor: pointer;
+      user-select: none;
+      font-family: var(--mono-family);
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--c-blue);
+      transition: all 0.18s ease;
+      white-space: nowrap;
+    }
+    .banner-comm-link:hover {
+      background: var(--c-blue);
+      color: #000;
+      box-shadow: 0 0 14px rgba(136, 153, 255, 0.5);
+    }
+    .banner-comm-link.listening {
+      border-color: #ff3355;
+      background: rgba(255, 51, 85, 0.22);
+      color: #ff5577;
+      animation: pulse-comm 0.7s infinite alternate ease-in-out;
+    }
+    .banner-comm-link.speaking {
+      border-color: #33dd88;
+      background: rgba(51, 221, 136, 0.22);
+      color: #33dd88;
+      animation: pulse-comm 0.9s infinite alternate ease-in-out;
+    }
+    .banner-comm-link.computing {
+      border-color: var(--c-gold);
+      background: rgba(235, 148, 58, 0.22);
+      color: var(--c-gold);
+      animation: pulse-comm 0.8s infinite alternate ease-in-out;
+    }
+    .banner-comm-link.passive-listen {
+      border-color: var(--c-gold);
+      color: var(--c-gold);
+    }
+
+    @keyframes pulse-comm {
+      0% { box-shadow: 0 0 4px rgba(255, 51, 85, 0.3); }
+      100% { box-shadow: 0 0 14px rgba(255, 51, 85, 0.8); }
+    }
+
+    .comm-wave-bars {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      height: 14px;
+    }
+    .comm-wave-bars span {
+      display: block;
+      width: 3px;
+      height: 4px;
+      background: currentColor;
+      border-radius: 1px;
+      transition: height 0.1s ease;
+    }
+    .banner-comm-link.listening .comm-wave-bars span:nth-child(1),
+    .banner-comm-link.speaking .comm-wave-bars span:nth-child(1) {
+      animation: wave-bar 0.6s infinite ease-in-out alternate;
+    }
+    .banner-comm-link.listening .comm-wave-bars span:nth-child(2),
+    .banner-comm-link.speaking .comm-wave-bars span:nth-child(2) {
+      animation: wave-bar 0.4s infinite ease-in-out alternate 0.15s;
+    }
+    .banner-comm-link.listening .comm-wave-bars span:nth-child(3),
+    .banner-comm-link.speaking .comm-wave-bars span:nth-child(3) {
+      animation: wave-bar 0.5s infinite ease-in-out alternate 0.3s;
+    }
+
+    @keyframes wave-bar {
+      0% { height: 3px; }
+      100% { height: 14px; }
+    }
+
+    /* LCARS Voice Visualizer HUD */
+    .lcars-voice-hud {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.5rem 0.85rem;
+      background: rgba(0, 0, 0, 0.75);
+      border: 1.5px solid var(--c-blue);
+      border-radius: 8px;
+      margin-top: 0.6rem;
+      font-family: var(--mono-family);
+      font-size: 0.82rem;
+      box-shadow: 0 0 12px rgba(136, 153, 255, 0.2);
+    }
+    .lcars-voice-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 3px;
+      height: 20px;
+    }
+    .lcars-voice-bar-col {
+      width: 4px;
+      height: 4px;
+      background-color: var(--c-gold);
+      border-radius: 1px;
+      transition: height 0.08s ease, background-color 0.15s ease;
+    }
     .lcars-chat-quick-actions {
       display: flex;
       gap: 0.4rem;
@@ -4273,9 +4442,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="right-frame-top">
       <div class="banner-container">
         <div class="banner-title" id="bannerSectionTitle">SYSTEM & SENSOR VERLAUF</div>
-        <div class="banner-stardate">
-          <span>STARDATE:</span>
-          <span id="stardateValue" style="font-weight:700;">{{ stats.stardate or '--------.-' }}</span>
+        <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+          <div class="banner-comm-link" id="topCommBadge" onclick="toggleVoiceListening()" title="LCARS Voice Comm-Link // Klicken zum Sprechen oder 'Computer' rufen">
+            <span class="comm-mic-icon" id="topCommIcon">🎙️</span>
+            <span class="comm-text" id="topCommText">COMM: BEREIT</span>
+            <span class="comm-wave-bars"><span></span><span></span><span></span></span>
+          </div>
+          <div class="banner-stardate">
+            <span>STARDATE:</span>
+            <span id="stardateValue" style="font-weight:700;">{{ stats.stardate or '--------.-' }}</span>
+          </div>
         </div>
       </div>
       <div class="data-cascade-bar">
@@ -4657,17 +4833,43 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <span id="lcarsChatLoadingText">KOGNITIVER PROZESSOR AKTIV // VERARBEITE SUBRAUM-TRANSMISSION...</span>
               </div>
 
-              <!-- Eingabebereich mit LCARS Send-Button -->
+              <!-- LCARS Voice Visualizer & Transkription HUD -->
+              <div id="lcarsVoiceHud" class="lcars-voice-hud" style="display: none;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                  <span id="lcarsVoiceHudStatus" style="color: var(--c-blue); font-weight: 700; font-family: var(--font-family); font-size: 0.9rem; letter-spacing: 0.05em;">● ODN AUDIO-LINK</span>
+                  <span id="lcarsVoiceHudTranscript" style="color: var(--c-gold); font-style: italic;"></span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0;">
+                  <div class="lcars-voice-bars" id="lcarsVoiceBars">
+                    <div class="lcars-voice-bar-col"></div>
+                    <div class="lcars-voice-bar-col"></div>
+                    <div class="lcars-voice-bar-col"></div>
+                    <div class="lcars-voice-bar-col"></div>
+                    <div class="lcars-voice-bar-col"></div>
+                    <div class="lcars-voice-bar-col"></div>
+                    <div class="lcars-voice-bar-col"></div>
+                    <div class="lcars-voice-bar-col"></div>
+                    <div class="lcars-voice-bar-col"></div>
+                    <div class="lcars-voice-bar-col"></div>
+                  </div>
+                  <button type="button" class="lcars-quick-btn" onclick="stopVoiceComm(true)" style="padding: 0.2rem 0.6rem; font-size: 0.72rem; border-color: #ff3355; color: #ff5577;">ABBRUCH [ESC]</button>
+                </div>
+              </div>
+
+              <!-- Eingabebereich mit LCARS Send-Button & Comm-Link Mic -->
               <form id="lcarsChatForm" onsubmit="handleChatSubmit(event)" style="margin-top: 0.75rem; width: 100%; min-width: 0;">
                 <div class="lcars-chat-input-row">
                   <input
                     type="text"
                     id="lcarsChatInput"
                     class="lcars-chat-input"
-                    placeholder="BEFEHL AN 9ROUTER AGENTEN EINGEBEN..."
+                    placeholder="BEFEHL AN 9ROUTER AGENTEN EINGEBEN ODER SPRECHEN..."
                     autocomplete="off"
                     required
                   />
+                  <button type="button" id="lcarsChatMicBtn" class="lcars-chat-btn-mic" onclick="toggleVoiceListening('9router')" title="LCARS Spracheingabe (Mikrofon)">
+                    <span id="lcarsChatMicIcon">🎙️</span> <span id="lcarsChatMicLabel">COMM</span>
+                  </button>
                   <button type="submit" id="lcarsChatSendBtn" class="lcars-chat-btn-send">
                     <span id="lcarsChatSendLabel">TRANSMIT</span> <span>↵</span>
                   </button>
@@ -4828,6 +5030,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     required
                     style="border-color: var(--c-secondary);"
                   />
+                  <button type="button" id="hermesChatMicBtn" class="lcars-chat-btn-mic" onclick="toggleVoiceListening('hermes')" title="Hermes Spracheingabe (Mikrofon)" style="background: var(--c-secondary);">
+                    <span>🎙️</span> <span>COMM</span>
+                  </button>
                   <button type="submit" id="hermesChatSendBtn" class="lcars-chat-btn-send" style="background: var(--c-secondary); border-color: var(--c-secondary); color: #000;">
                     <span id="hermesChatSendLabel">SENDEN</span> <span>↵</span>
                   </button>
@@ -5509,6 +5714,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
           <!-- Weitere Optionen -->
           <div class="readout-grid">
+            <div class="lcars-card" style="grid-column: 1 / -1;">
+              <div class="card-head-title">LCARS SPRACH-KOMMUNIKATION & SUBRAUM COMM-LINK</div>
+              <p style="font-size:0.88rem; color:var(--c-gold); margin:0.6rem 0;">
+                BIDIREKTIONALE SPRACHSTEUERUNG IM STAR TREK LCARS STIL. STEUERE DAS DASHBOARD ODER SPRECHE DIREKT MIT 9ROUTER / HERMES AGENTEN.
+              </p>
+              <div style="display:flex; flex-wrap:wrap; gap:0.75rem; align-items:center; margin-top:0.75rem;">
+                <button class="left-action-btn" id="btnToggleVoiceIn" onclick="toggleVoiceInputSetting()">
+                  <span>🎙️</span> <span id="cfgVoiceInLabel">SPRACHEINGABE: AKTIV</span>
+                </button>
+                <button class="left-action-btn" id="btnToggleVoiceOut" onclick="toggleVoiceOutputSetting()">
+                  <span>🔊</span> <span id="cfgVoiceOutLabel">SPRACHAUSGABE: AKTIV</span>
+                </button>
+                <button class="left-action-btn" id="btnToggleWakeWord" onclick="toggleWakeWordSetting()">
+                  <span>👂</span> <span id="cfgWakeWordLabel">WAKE-WORD 'COMPUTER': AUS</span>
+                </button>
+                <button class="left-action-btn" onclick="testLcarsVoice()">
+                  <span>▶</span> <span>COMPUTER-STIMME TESTEN</span>
+                </button>
+                <button class="left-action-btn" onclick="playLcarsChirp()">
+                  <span>🔔</span> <span>COMM-CHIRP TESTEN</span>
+                </button>
+              </div>
+              <div style="margin-top:0.85rem; display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                <label style="font-family:var(--mono-family); font-size:0.82rem; color:var(--c-secondary);">BEVORZUGTE STIMME:</label>
+                <select id="cfgVoiceSelect" class="lcars-select" onchange="onVoiceSelectChange(this.value)" style="max-width:340px; font-size:0.82rem; padding: 0.35rem 0.6rem;"></select>
+              </div>
+            </div>
+
             <div class="lcars-card">
               <div class="card-head-title">AUDIO & SOUND-EFFEKTE</div>
               <p style="font-size:0.88rem; color:var(--c-gold); margin:0.6rem 0;">
@@ -6151,6 +6384,85 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     } catch (e) {
       // Audio optional
     }
+  }
+
+  function playLcarsChirp() {
+    if (!soundEnabled) return;
+    try {
+      const ctx = getAudioCtx();
+      if (!ctx) return;
+      if (ctx.state === 'suspended') ctx.resume();
+      const now = ctx.currentTime;
+      // Tone 1: E5 (659Hz) -> A5 (880Hz)
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(659, now);
+      osc1.frequency.exponentialRampToValueAtTime(880, now + 0.07);
+      gain1.gain.setValueAtTime(0.06, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.075);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.08);
+
+      // Tone 2: E6 (1318Hz) -> A6 (1760Hz)
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(1318, now + 0.075);
+      osc2.frequency.exponentialRampToValueAtTime(1760, now + 0.16);
+      gain2.gain.setValueAtTime(0.07, now + 0.075);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.165);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(now + 0.075);
+      osc2.stop(now + 0.17);
+    } catch(e) {}
+  }
+
+  function playLcarsAcknowledge() {
+    if (!soundEnabled) return;
+    try {
+      const ctx = getAudioCtx();
+      if (!ctx) return;
+      if (ctx.state === 'suspended') ctx.resume();
+      const now = ctx.currentTime;
+      // Star Trek affirmative chime: Dual-tone B5 (988Hz) + E6 (1318Hz)
+      [988, 1318].forEach(freq => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now);
+        gain.gain.setValueAtTime(0.05, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.23);
+      });
+    } catch(e) {}
+  }
+
+  function playLcarsError() {
+    if (!soundEnabled) return;
+    try {
+      const ctx = getAudioCtx();
+      if (!ctx) return;
+      if (ctx.state === 'suspended') ctx.resume();
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(240, now);
+      osc.frequency.setValueAtTime(180, now + 0.12);
+      gain.gain.setValueAtTime(0.06, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.27);
+    } catch(e) {}
   }
 
   function toggleAudio() {
@@ -9331,7 +9643,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  async function handleChatSubmit(event) {
+  async function handleChatSubmit(event, fromVoice = false) {
     if (event) event.preventDefault();
     if (isChatGenerating) return;
 
@@ -9357,6 +9669,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (sendLabel) sendLabel.textContent = 'TRANSMITTING...';
     if (loading) loading.style.display = 'flex';
     if (meta) meta.textContent = `TRANSMISSION IN BEARBEITUNG (${currentChatModel})...`;
+    if (fromVoice) setCommBadgeState('computing');
+
+    let messagesToSend = [...chatHistory];
+    if (fromVoice || isVoiceLastInput) {
+      messagesToSend = [
+        {
+          role: 'system',
+          content: 'Du bist der LCARS Hauptcomputer eines Sternenflotten-Raumschiffs. Antworte auf Deutsch, präzise, sachlich und ruhig im Star Trek Computer-Stil. Halte deine Antwort auf maximal 2 bis 3 Sätze beschränkt, ohne Markdown-Formatierungen, da deine Antwort direkt über die Sprachausgabe vorgelesen wird.'
+        },
+        ...chatHistory
+      ];
+    }
 
     try {
       const resp = await fetch('/api/chat', {
@@ -9364,7 +9688,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: currentChatModel,
-          messages: chatHistory
+          messages: messagesToSend
         })
       });
 
@@ -9378,22 +9702,32 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
         chatHistory.push({ role: 'assistant', content: assistantText });
         appendChatMessage('assistant', assistantText, data.model || currentChatModel);
-        playLcarsBeep(980, 1400);
+        playLcarsAcknowledge();
 
         if (meta) {
           const toks = data.usage ? ` [Tokens: ${data.usage.total_tokens || 0}]` : '';
           meta.textContent = `TRANSMISSION EMPFANGEN // MODELL: ${data.model || currentChatModel}${toks}`;
         }
+
+        if (fromVoice || (voiceOutputEnabled && isVoiceLastInput)) {
+          speakLcarsText(assistantText);
+        } else {
+          setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
+        }
       } else {
         const errorMsg = data.error || (data.message && data.message.content) || 'Unbekannter Fehler bei Kommunikation mit KI-Proxy.';
         appendChatMessage('assistant', errorMsg, currentChatModel, true);
-        playLcarsBeep(440, 220);
+        playLcarsError();
         if (meta) meta.textContent = `TRANSMISSIONSFEHLER (${resp.status})`;
+        if (fromVoice) speakLcarsText('Fehler bei Übertragung an Subraum-Relay.');
+        setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
       }
     } catch (e) {
       appendChatMessage('assistant', `Netzwerkfehler: Verbindung zum Backend fehlgeschlagen (${e.message})`, currentChatModel, true);
-      playLcarsBeep(440, 220);
+      playLcarsError();
       if (meta) meta.textContent = 'NETZWERKFEHLER BEI TRANSMISSION';
+      if (fromVoice) speakLcarsText('Netzwerkfehler bei Subraum-Transceiver.');
+      setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
     } finally {
       isChatGenerating = false;
       input.disabled = false;
@@ -9403,6 +9737,563 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       input.focus();
     }
   }
+
+  // ==========================================================================
+  // LCARS STAR TREK VOICE COMM-LINK ENGINE (STT, TTS, COMMANDS & VISUALIZER)
+  // ==========================================================================
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let voiceRecognition = null;
+  let isListening = false;
+  let isVoiceLastInput = false;
+  let voiceVizInterval = null;
+
+  let voiceInputEnabled = (localStorage.getItem('lcars-voice-in') !== 'false');
+  let voiceOutputEnabled = (localStorage.getItem('lcars-voice-out') !== 'false');
+  let wakeWordActive = (localStorage.getItem('lcars-wakeword') === 'true');
+
+  function initLcarsVoiceComm() {
+    updateVoiceUI();
+    populateVoices();
+    if (wakeWordActive && voiceInputEnabled && SpeechRecognition) {
+      setTimeout(() => {
+        startContinuousWakeWord();
+      }, 1200);
+    }
+  }
+
+  function setCommBadgeState(state) {
+    // state: 'idle' | 'listening' | 'speaking' | 'computing' | 'passive-listen'
+    const topBadge = document.getElementById('topCommBadge');
+    const topText = document.getElementById('topCommText');
+    const topIcon = document.getElementById('topCommIcon');
+    const chatBtn = document.getElementById('lcarsChatMicBtn');
+    const chatLabel = document.getElementById('lcarsChatMicLabel');
+    const hermesBtn = document.getElementById('hermesChatMicBtn');
+
+    [topBadge, chatBtn, hermesBtn].forEach(el => {
+      if (el) {
+        el.classList.remove('listening', 'speaking', 'computing', 'passive-listen');
+        if (state !== 'idle') el.classList.add(state);
+      }
+    });
+
+    if (topText && topIcon) {
+      if (state === 'listening') {
+        topIcon.textContent = '🔴';
+        topText.textContent = 'HÖRE ZU...';
+      } else if (state === 'speaking') {
+        topIcon.textContent = '🔊';
+        topText.textContent = 'TRANSMITTING';
+      } else if (state === 'computing') {
+        topIcon.textContent = '⚙️';
+        topText.textContent = 'COMPUTING...';
+      } else if (state === 'passive-listen') {
+        topIcon.textContent = '👂';
+        topText.textContent = "WAKE: 'COMPUTER'";
+      } else {
+        topIcon.textContent = '🎙️';
+        topText.textContent = 'COMM: BEREIT';
+      }
+    }
+
+    if (chatLabel) {
+      if (state === 'listening') chatLabel.textContent = 'HÖRE...';
+      else if (state === 'speaking') chatLabel.textContent = 'AUDIO';
+      else if (state === 'computing') chatLabel.textContent = 'WAIT...';
+      else chatLabel.textContent = 'COMM';
+    }
+  }
+
+  function startVoiceVisualizer(mode = 'listening') {
+    stopVoiceVisualizer();
+    const hud = document.getElementById('lcarsVoiceHud');
+    if (hud) hud.style.display = 'flex';
+    const bars = document.querySelectorAll('.lcars-voice-bar-col');
+    if (!bars.length) return;
+
+    voiceVizInterval = setInterval(() => {
+      bars.forEach(bar => {
+        const factor = mode === 'listening' ? 0.75 : 0.9;
+        const randomH = Math.floor(Math.random() * 16 * factor) + 4;
+        bar.style.height = randomH + 'px';
+        if (mode === 'speaking') {
+          bar.style.backgroundColor = 'var(--c-blue)';
+        } else if (mode === 'listening') {
+          bar.style.backgroundColor = '#ff5577';
+        } else {
+          bar.style.backgroundColor = 'var(--c-gold)';
+        }
+      });
+    }, 85);
+  }
+
+  function stopVoiceVisualizer() {
+    if (voiceVizInterval) {
+      clearInterval(voiceVizInterval);
+      voiceVizInterval = null;
+    }
+    const hud = document.getElementById('lcarsVoiceHud');
+    if (hud && !isListening) hud.style.display = 'none';
+    const bars = document.querySelectorAll('.lcars-voice-bar-col');
+    bars.forEach(bar => {
+      bar.style.height = '4px';
+      bar.style.backgroundColor = 'var(--c-gold)';
+    });
+  }
+
+  function populateVoices() {
+    if (!('speechSynthesis' in window)) return;
+    const voices = window.speechSynthesis.getVoices();
+    const select = document.getElementById('cfgVoiceSelect');
+    if (!select || !voices.length) return;
+
+    select.innerHTML = '';
+    const saved = localStorage.getItem('lcars-voice-name') || '';
+
+    const sorted = [...voices].sort((a, b) => {
+      const aDe = a.lang.startsWith('de') ? 0 : 1;
+      const bDe = b.lang.startsWith('de') ? 0 : 1;
+      if (aDe !== bDe) return aDe - bDe;
+      return a.name.localeCompare(b.name);
+    });
+
+    sorted.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v.name;
+      opt.textContent = `${v.name} [${v.lang}]`;
+      if (v.name === saved) opt.selected = true;
+      select.appendChild(opt);
+    });
+  }
+
+  if ('speechSynthesis' in window) {
+    speechSynthesis.onvoiceschanged = populateVoices;
+  }
+
+  function getPreferredGermanVoice() {
+    if (!('speechSynthesis' in window)) return null;
+    const voices = window.speechSynthesis.getVoices();
+    const saved = localStorage.getItem('lcars-voice-name');
+    if (saved) {
+      const match = voices.find(v => v.name === saved);
+      if (match) return match;
+    }
+    const deVoices = voices.filter(v => v.lang.startsWith('de'));
+    return deVoices.find(v => v.name.includes('Google') || v.name.includes('Katja') || v.name.includes('Hedda') || v.name.includes('Natural') || v.name.includes('Neural') || v.name.includes('Amira') || v.name.includes('Marlena')) ||
+           deVoices.find(v => v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('weiblich')) ||
+           deVoices[0] ||
+           voices[0] || null;
+  }
+
+  function speakLcarsText(rawText, onComplete = null) {
+    if (!voiceOutputEnabled) {
+      if (onComplete) onComplete();
+      return;
+    }
+    if (!('speechSynthesis' in window)) {
+      if (onComplete) onComplete();
+      return;
+    }
+
+    try {
+      window.speechSynthesis.cancel();
+
+      let clean = rawText.replace(/```[\\s\\S]*?```/g, 'Codeblock im Hauptfenster.');
+      clean = clean.replace(/[*_`#]/g, '');
+      clean = clean.replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, '$1');
+      clean = clean.replace(/https?:\\/\\/\\S+/g, 'Link');
+      clean = clean.replace(/%/g, ' Prozent');
+      clean = clean.replace(/°C?/g, ' Grad');
+      clean = clean.replace(/\\b([0-9]+)\\s*W\\b/g, '$1 Watt');
+      clean = clean.replace(/\\b([0-9]+)\\s*kW\\b/g, '$1 Kilowatt');
+      clean = clean.replace(/\\b([0-9]+)\\s*Wh\\b/g, '$1 Wattstunden');
+      clean = clean.replace(/\\b([0-9]+)\\s*kWh\\b/g, '$1 Kilowattstunden');
+      clean = clean.replace(/\\s+/g, ' ').trim();
+
+      if (!clean) {
+        if (onComplete) onComplete();
+        return;
+      }
+
+      const sentences = clean.match(/[^.!?]+[.!?]+/g) || [clean];
+      let spokenText = clean;
+      if (sentences.length > 3) {
+        spokenText = sentences.slice(0, 3).join(' ') + ' Weitere Telemetrie auf dem Hauptschirm dargestellt.';
+      }
+
+      const utterance = new SpeechSynthesisUtterance(spokenText);
+      utterance.lang = 'de-DE';
+      utterance.rate = 0.98;
+      utterance.pitch = 1.05;
+
+      const voice = getPreferredGermanVoice();
+      if (voice) utterance.voice = voice;
+
+      utterance.onstart = () => {
+        setCommBadgeState('speaking');
+        startVoiceVisualizer('speaking');
+      };
+
+      utterance.onend = () => {
+        setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
+        stopVoiceVisualizer();
+        if (onComplete) onComplete();
+      };
+
+      utterance.onerror = () => {
+        setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
+        stopVoiceVisualizer();
+        if (onComplete) onComplete();
+      };
+
+      playLcarsAcknowledge();
+      setTimeout(() => {
+        window.speechSynthesis.speak(utterance);
+      }, 150);
+    } catch (e) {
+      console.warn("TTS Fehler:", e);
+      setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
+      stopVoiceVisualizer();
+      if (onComplete) onComplete();
+    }
+  }
+
+  function initSpeechRecognition() {
+    if (!SpeechRecognition) return null;
+    const rec = new SpeechRecognition();
+    rec.lang = 'de-DE';
+    rec.continuous = wakeWordActive;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+
+    rec.onstart = () => {
+      isListening = true;
+      setCommBadgeState(wakeWordActive ? 'passive-listen' : 'listening');
+    };
+
+    rec.onresult = (event) => {
+      let finalTranscript = '';
+      let interimTranscript = '';
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        } else {
+          interimTranscript += event.results[i][0].transcript;
+        }
+      }
+
+      const hudTranscript = document.getElementById('lcarsVoiceHudTranscript');
+      if (hudTranscript) {
+        hudTranscript.textContent = (finalTranscript || interimTranscript).trim();
+      }
+
+      if (wakeWordActive) {
+        const lower = (finalTranscript || interimTranscript).toLowerCase();
+        const match = lower.match(/\\b(computer|lcars)\\b(.*)/i);
+        if (match && finalTranscript) {
+          const command = match[2].trim();
+          playLcarsChirp();
+          if (command.length > 1) {
+            handleVoiceCommand(command);
+          } else {
+            speakLcarsText("Bereit für Befehle.");
+          }
+        }
+      } else {
+        if (finalTranscript && finalTranscript.trim().length > 0) {
+          handleVoiceCommand(finalTranscript.trim());
+        }
+      }
+    };
+
+    rec.onerror = (event) => {
+      if (event.error !== 'no-speech' && event.error !== 'aborted') {
+        console.warn("SpeechRecognition Fehler:", event.error);
+        playLcarsError();
+      }
+      if (!wakeWordActive) {
+        stopVoiceComm();
+      }
+    };
+
+    rec.onend = () => {
+      isListening = false;
+      if (wakeWordActive && voiceInputEnabled) {
+        try { rec.start(); } catch(e) {}
+      } else {
+        stopVoiceComm();
+      }
+    };
+
+    return rec;
+  }
+
+  function startContinuousWakeWord() {
+    if (!SpeechRecognition || !voiceInputEnabled || !wakeWordActive) return;
+    try {
+      if (voiceRecognition) {
+        try { voiceRecognition.stop(); } catch(e) {}
+      }
+      voiceRecognition = initSpeechRecognition();
+      if (voiceRecognition) {
+        voiceRecognition.start();
+        setCommBadgeState('passive-listen');
+      }
+    } catch(e) {
+      console.warn("Konnte kontinuierliches Wake-Word nicht starten:", e);
+    }
+  }
+
+  function toggleVoiceListening(targetSubgroup = null) {
+    if (!SpeechRecognition) {
+      alert("LCARS HINWEIS: Web Speech API wird in diesem Browser nicht unterstützt. Bitte Chrome, Chromium, Edge oder Safari verwenden.");
+      return;
+    }
+
+    // Barge-in: Falls Computer gerade spricht, sofort stummschalten
+    if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+      setCommBadgeState('idle');
+      stopVoiceVisualizer();
+      playLcarsBeep(440, 220);
+      return;
+    }
+
+    if (isListening && !wakeWordActive) {
+      stopVoiceComm();
+      playLcarsBeep(600, 300);
+      return;
+    }
+
+    playLcarsChirp();
+    if (targetSubgroup) {
+      activeAgentSubgroup = targetSubgroup;
+    }
+
+    if (wakeWordActive) {
+      try {
+        if (voiceRecognition) voiceRecognition.stop();
+      } catch(e) {}
+    }
+
+    voiceRecognition = initSpeechRecognition();
+
+    const hud = document.getElementById('lcarsVoiceHud');
+    const hudStatus = document.getElementById('lcarsVoiceHudStatus');
+    const hudTranscript = document.getElementById('lcarsVoiceHudTranscript');
+    if (hud) hud.style.display = 'flex';
+    if (hudStatus) hudStatus.textContent = '● ODN SUBRAUM-COMM // HÖRE ZU...';
+    if (hudTranscript) hudTranscript.textContent = 'Befehl sprechen...';
+
+    setCommBadgeState('listening');
+    startVoiceVisualizer('listening');
+
+    try {
+      voiceRecognition.start();
+    } catch (e) {
+      console.warn("Fehler beim Starten der Spracherkennung:", e);
+    }
+  }
+
+  function stopVoiceComm(userAborted = false) {
+    if (voiceRecognition && isListening) {
+      try { voiceRecognition.stop(); } catch(e) {}
+    }
+    isListening = false;
+    setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
+    stopVoiceVisualizer();
+    if (userAborted) {
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      playLcarsBeep(440, 220);
+    }
+  }
+
+  async function handleVoiceCommand(rawText) {
+    stopVoiceComm();
+    playLcarsAcknowledge();
+    setCommBadgeState('computing');
+    isVoiceLastInput = true;
+
+    const cleanText = rawText.trim();
+    const lower = cleanText.toLowerCase();
+
+    // 1. Stopp / Abbruch (Barge-In)
+    if (/^(stopp|halt|abbrechen|ruhe|computer ende|stille|stop|abbruch)$/i.test(lower)) {
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
+      playLcarsBeep(440, 220);
+      return;
+    }
+
+    // 2. Status / Systemstatus / Diagnose
+    if (/(status|statusbericht|systemstatus|diagnose|vitals|systemzustand)/i.test(lower)) {
+      switchCategory('system');
+      const cpu = document.getElementById('topCpuVal')?.textContent || 'nominal';
+      const ram = document.getElementById('topRamVal')?.textContent || 'nominal';
+      const temp = document.getElementById('topTempVal')?.textContent || 'optimal';
+      const disk = document.getElementById('topDiskVal')?.textContent || 'nominal';
+      const resp = `Statusbericht für Terminal 47: Prozessor bei ${cpu}, Arbeitsspeicher bei ${ram}, Festplatte ${disk}, Kerntemperatur ${temp}. Alle primären Systeme arbeiten nominal.`;
+      appendChatMessage('user', `🎙️ "${cleanText}"`);
+      appendChatMessage('assistant', resp, 'LCARS BORDCOMPUTER');
+      speakLcarsText(resp);
+      return;
+    }
+
+    // 3. Roter Alarm
+    if (/(roter? alarm|red alert|alarmstufe rot|gefechtsstationen|alarm auslösen)/i.test(lower)) {
+      isCurrentlyRedAlert = true;
+      document.documentElement.setAttribute('data-theme', 'redalert');
+      playRedAlertKlaxon();
+      const banner = document.getElementById('redAlertBanner');
+      if (banner) banner.style.display = 'block';
+      const reasonsEl = document.getElementById('redAlertReasons');
+      if (reasonsEl) reasonsEl.textContent = 'MANUELL AUTORISIERT VIA LCARS SPRACHSTEUERUNG';
+      const resp = "Roter Alarm autorisiert. Schutzschilde und Verteidigungsgitter aktiviert. Alle Stationen auf Gefechtsstationen.";
+      appendChatMessage('user', `🎙️ "${cleanText}"`);
+      appendChatMessage('assistant', resp, 'LCARS SICHERHEIT');
+      speakLcarsText(resp);
+      return;
+    }
+
+    // 4. Alarm aufheben
+    if (/(alarm aufheben|alarm beenden|entwarnung|normaler status|gelber alarm|alarm abbrechen)/i.test(lower)) {
+      isCurrentlyRedAlert = false;
+      document.documentElement.setAttribute('data-theme', lastUserTheme || 'classic');
+      const banner = document.getElementById('redAlertBanner');
+      if (banner) banner.style.display = 'none';
+      const resp = "Alarmstufe aufgehoben. Normalbetrieb wiederhergestellt.";
+      appendChatMessage('user', `🎙️ "${cleanText}"`);
+      appendChatMessage('assistant', resp, 'LCARS SICHERHEIT');
+      speakLcarsText(resp);
+      return;
+    }
+
+    // 5. Services / Webdienste
+    if (/(services|dienste|webdienste|server|laufende dienste)/i.test(lower)) {
+      switchCategory('services');
+      const count = document.getElementById('scanFoundCount')?.textContent || 'mehrere';
+      const resp = `Subraum-Verbindungen analysiert. Aktuell sind ${count} aktive Server auf den Frequenzen registriert.`;
+      appendChatMessage('user', `🎙️ "${cleanText}"`);
+      appendChatMessage('assistant', resp, 'LCARS SUBRAUM-COMM');
+      speakLcarsText(resp);
+      return;
+    }
+
+    // 6. Solar / Balkonkraftwerk / Energie
+    if (/(solar|akku|batterie|energie|strom|balkonkraftwerk|hausverbrauch)/i.test(lower)) {
+      switchCategory('solar');
+      const bat = document.getElementById('topBatVal')?.textContent || 'nicht erfasst';
+      const house = document.getElementById('topHouseVal')?.textContent || 'nicht erfasst';
+      const resp = `Energie-Status: Balkonkraftwerk-Speicher liegt bei ${bat}. Aktueller Hausverbrauch beträgt ${house}.`;
+      appendChatMessage('user', `🎙️ "${cleanText}"`);
+      appendChatMessage('assistant', resp, 'LCARS ENERGIE-MANAGEMENT');
+      speakLcarsText(resp);
+      return;
+    }
+
+    // 7. Netzwerk Scan
+    if (/(scan|scannen|suchlauf|netzwerk scannen|portscan)/i.test(lower)) {
+      switchCategory('services');
+      if (typeof triggerWebserverScan === 'function') {
+        triggerWebserverScan();
+      }
+      const resp = "ODN-Netzwerk-Scan nach aktiven Servern und Diensten initiiert.";
+      appendChatMessage('user', `🎙️ "${cleanText}"`);
+      appendChatMessage('assistant', resp, 'LCARS SCANNER');
+      speakLcarsText(resp);
+      return;
+    }
+
+    // 8. Farbschema Wechsel
+    const themeMatch = lower.match(/(farbschema|design|theme)\\s+(picard|nemesis|classic|lower decks|voyager)/i);
+    if (themeMatch) {
+      let th = themeMatch[2].toLowerCase().replace(/\\s+/g, '');
+      setLcarsTheme(th);
+      const resp = `LCARS Farbschema ${themeMatch[2].toUpperCase()} erfolgreich rekonfiguriert.`;
+      appendChatMessage('user', `🎙️ "${cleanText}"`);
+      appendChatMessage('assistant', resp, 'LCARS INTERFACE');
+      speakLcarsText(resp);
+      return;
+    }
+
+    // 9. Weiterleitung an KI-Agenten (Hermes oder 9Router)
+    if (activeAgentSubgroup === 'hermes') {
+      switchCategory('agents');
+      const inp = document.getElementById('hermesChatInput');
+      if (inp) {
+        inp.value = cleanText;
+        await handleHermesChatSubmit(null, true);
+      }
+    } else {
+      switchCategory('agents');
+      const inp = document.getElementById('lcarsChatInput');
+      if (inp) {
+        inp.value = cleanText;
+        await handleChatSubmit(null, true);
+      }
+    }
+  }
+
+  function toggleVoiceInputSetting() {
+    voiceInputEnabled = !voiceInputEnabled;
+    localStorage.setItem('lcars-voice-in', voiceInputEnabled);
+    if (!voiceInputEnabled) {
+      stopVoiceComm();
+    } else if (wakeWordActive) {
+      startContinuousWakeWord();
+    }
+    updateVoiceUI();
+    playLcarsBeep(880, 1760);
+  }
+
+  function toggleVoiceOutputSetting() {
+    voiceOutputEnabled = !voiceOutputEnabled;
+    localStorage.setItem('lcars-voice-out', voiceOutputEnabled);
+    if (!voiceOutputEnabled && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    updateVoiceUI();
+    playLcarsBeep(880, 1760);
+  }
+
+  function toggleWakeWordSetting() {
+    wakeWordActive = !wakeWordActive;
+    localStorage.setItem('lcars-wakeword', wakeWordActive);
+    if (wakeWordActive && voiceInputEnabled) {
+      startContinuousWakeWord();
+    } else {
+      stopVoiceComm();
+    }
+    updateVoiceUI();
+    playLcarsBeep(980, 1400);
+  }
+
+  function onVoiceSelectChange(val) {
+    localStorage.setItem('lcars-voice-name', val);
+    playLcarsBeep(1100, 1600);
+  }
+
+  function testLcarsVoice() {
+    speakLcarsText("LCARS Audio-Transceiver online. Subraum-Kommunikation und Sprachausgabe nominal.");
+  }
+
+  function updateVoiceUI() {
+    const inLabel = document.getElementById('cfgVoiceInLabel');
+    const outLabel = document.getElementById('cfgVoiceOutLabel');
+    const wakeLabel = document.getElementById('cfgWakeWordLabel');
+    if (inLabel) inLabel.textContent = voiceInputEnabled ? 'SPRACHEINGABE: AKTIV' : 'SPRACHEINGABE: AUS';
+    if (outLabel) outLabel.textContent = voiceOutputEnabled ? 'SPRACHAUSGABE: AKTIV' : 'SPRACHAUSGABE: AUS';
+    if (wakeLabel) wakeLabel.textContent = wakeWordActive ? "WAKE-WORD 'COMPUTER': AKTIV" : "WAKE-WORD 'COMPUTER': AUS";
+    setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (isListening || ('speechSynthesis' in window && window.speechSynthesis.speaking)) {
+        stopVoiceComm(true);
+      }
+    }
+  });
 
   // ==========================================================================
   // KI-AGENTEN SUBGRUPPEN & HERMES & ANTIGRAVITY IDE INTERFACE
@@ -9666,7 +10557,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     log.scrollTop = log.scrollHeight;
   }
 
-  async function handleHermesChatSubmit(e) {
+  async function handleHermesChatSubmit(e, fromVoice = false) {
     if (e) e.preventDefault();
     if (isHermesGenerating) return;
 
@@ -9690,6 +10581,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (sendLabel) sendLabel.textContent = 'WAIT...';
     if (loading) loading.style.display = 'flex';
     if (meta) meta.textContent = `HERMES VERARBEITET ANFRAGE AN '${currentHermesProfile.toUpperCase()}'...`;
+    if (fromVoice) setCommBadgeState('computing');
 
     try {
       const resp = await fetch('/api/hermes/chat', {
@@ -9705,18 +10597,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       if (resp.ok && data.success) {
         appendHermesMessage('assistant', data.reply || 'Keine Antwort erhalten.', currentHermesProfile);
-        playLcarsBeep(980, 1400);
+        playLcarsAcknowledge();
         if (meta) meta.textContent = `ANTWORT EMPFANGEN // AGENT: ${currentHermesProfile.toUpperCase()}`;
+        if (fromVoice || (voiceOutputEnabled && isVoiceLastInput)) {
+          speakLcarsText(data.reply || 'Keine Antwort erhalten.');
+        } else {
+          setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
+        }
       } else {
         const err = data.error || data.reply || 'Fehler bei Hermes Ausführung.';
         appendHermesMessage('assistant', err, currentHermesProfile, true);
-        playLcarsBeep(440, 220);
+        playLcarsError();
         if (meta) meta.textContent = 'HERMES AUSFÜHRUNGSFEHLER';
+        if (fromVoice) speakLcarsText('Fehler bei Ausführung des Hermes Agenten.');
+        setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
       }
     } catch (err) {
       appendHermesMessage('assistant', `Verbindungsfehler zu Hermes: ${err.message}`, currentHermesProfile, true);
-      playLcarsBeep(440, 220);
+      playLcarsError();
       if (meta) meta.textContent = 'NETZWERKFEHLER';
+      if (fromVoice) speakLcarsText('Netzwerkfehler bei Verbindung zu Hermes.');
+      setCommBadgeState(wakeWordActive ? 'passive-listen' : 'idle');
     } finally {
       isHermesGenerating = false;
       input.disabled = false;
@@ -9903,6 +10804,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     startHaAutoRefresh();
     loadSolarData(false);
     startSolarAutoRefresh();
+    initLcarsVoiceComm();
   }
 
   if (document.readyState === 'loading') {
