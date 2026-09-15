@@ -94,25 +94,40 @@ CONTROLLABLE_DOMAINS = {
 class HomeAssistantService:
     def __init__(self, config_path=None):
         self.config_path = config_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+        self._config_mtime = 0
+        self._config_lock = threading.Lock()
         self.config = self._load_config()
         self._states_cache = None
         self._states_cache_time = 0
         self._states_cache_lock = threading.Lock()
+        self._areas_template_cache = None
+        self._areas_template_time = 0
+        self._rooms_cache = None
+        self._rooms_cache_time = 0
+        self._rooms_cache_lock = threading.Lock()
+        self._solar_data_cache = None
+        self._solar_data_cache_time = 0
+        self._solar_data_lock = threading.Lock()
         self._last_known_solar = {}
 
     def _load_config(self):
-        cfg = dict(DEFAULT_HA_CONFIG)
-        if os.path.exists(self.config_path):
-            try:
-                with open(self.config_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, dict) and "home_assistant" in data:
-                        ha_data = data["home_assistant"]
-                        if isinstance(ha_data, dict):
-                            cfg.update(ha_data)
-            except Exception as e:
-                print(f"[WARN] HomeAssistantService: Fehler beim Laden von config.json: {e}", file=sys.stderr)
-        return cfg
+        with getattr(self, "_config_lock", threading.Lock()):
+            cfg = dict(DEFAULT_HA_CONFIG)
+            if os.path.exists(self.config_path):
+                try:
+                    mtime = os.path.getmtime(self.config_path)
+                    if hasattr(self, "config") and self.config and (mtime == getattr(self, "_config_mtime", 0)):
+                        return self.config
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        if isinstance(data, dict) and "home_assistant" in data:
+                            ha_data = data["home_assistant"]
+                            if isinstance(ha_data, dict):
+                                cfg.update(ha_data)
+                    self._config_mtime = mtime
+                except Exception as e:
+                    print(f"[WARN] HomeAssistantService: Fehler beim Laden von config.json: {e}", file=sys.stderr)
+            return cfg
 
     def _save_to_file(self, ha_cfg):
         current_data = {}
@@ -129,6 +144,7 @@ class HomeAssistantService:
         try:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(current_data, f, indent=2)
+            self._config_mtime = os.path.getmtime(self.config_path)
             self.config = ha_cfg
             return True
         except Exception as e:
@@ -321,7 +337,7 @@ class HomeAssistantService:
 
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 resp_data = resp.read().decode("utf-8")
                 try:
                     return json.loads(resp_data), resp.status
@@ -368,7 +384,12 @@ class HomeAssistantService:
         else:
             return {"success": False, "error": f"Unerwartete Antwort: Status {code}", "code": code}
 
-    def get_rooms_and_entities(self):
+    def get_rooms_and_entities(self, max_age=3.0):
+        now = time.time()
+        with self._rooms_cache_lock:
+            if self._rooms_cache is not None and (now - self._rooms_cache_time < max_age):
+                return self._rooms_cache
+
         cfg = self.get_config()
         if not cfg.get("configured"):
             return {
@@ -394,14 +415,24 @@ class HomeAssistantService:
 
         states_map = {s["entity_id"]: s for s in states_resp if isinstance(s, dict) and "entity_id" in s}
 
-        # 2. Fetch areas and their entity mappings via Jinja template
-        tmpl = "{% set ns = namespace(res=[]) %}{% for a in areas() %}{% set ns.res = ns.res + [dict(id=a, name=area_name(a), entities=area_entities(a))] %}{% endfor %}{{ ns.res | tojson }}"
-        areas_resp, tmpl_code = self._make_request("/api/template", method="POST", data={"template": tmpl})
+        # 2. Fetch areas and their entity mappings via Jinja template (mit 60s Cache)
+        areas_resp = None
+        if self._areas_template_cache is not None and (now - self._areas_template_time < 60.0):
+            areas_resp = self._areas_template_cache
+        else:
+            tmpl = "{% set ns = namespace(res=[]) %}{% for a in areas() %}{% set ns.res = ns.res + [dict(id=a, name=area_name(a), entities=area_entities(a))] %}{% endfor %}{{ ns.res | tojson }}"
+            tmpl_resp, tmpl_code = self._make_request("/api/template", method="POST", data={"template": tmpl})
+            if tmpl_code == 200 and isinstance(tmpl_resp, list):
+                self._areas_template_cache = tmpl_resp
+                self._areas_template_time = now
+                areas_resp = tmpl_resp
+            else:
+                areas_resp = self._areas_template_cache or []
 
         areas_list = []
         assigned_entity_ids = set()
 
-        if tmpl_code == 200 and isinstance(areas_resp, list):
+        if isinstance(areas_resp, list):
             for a in areas_resp:
                 if not isinstance(a, dict):
                     continue
@@ -471,7 +502,7 @@ class HomeAssistantService:
         total_active = sum(a["active_count"] for a in areas_list) + unassigned_active
         controllable_count = sum(1 for s in states_map.values() if s.get("entity_id", "").split(".")[0] in CONTROLLABLE_DOMAINS)
 
-        return {
+        res_data = {
             "success": True,
             "configured": True,
             "name": cfg.get("name", "Assistant"),
@@ -489,6 +520,10 @@ class HomeAssistantService:
             },
             "timestamp": time.strftime("%H:%M:%S")
         }
+        with self._rooms_cache_lock:
+            self._rooms_cache = res_data
+            self._rooms_cache_time = now
+        return res_data
 
     def _format_entity(self, raw):
         eid = raw.get("entity_id", "")
@@ -641,8 +676,13 @@ class HomeAssistantService:
             "available": bool(states)
         }
 
-    def get_solar_data(self):
+    def get_solar_data(self, max_age=3.0):
         """Detaillierte Auswertung aller Balkonsolar- und Dachterassen-Metriken für das LCARS Solar Panel."""
+        now = time.time()
+        with self._solar_data_lock:
+            if self._solar_data_cache is not None and (now - self._solar_data_cache_time < max_age):
+                return self._solar_data_cache
+
         cfg = self.get_config()
         if not cfg.get("configured"):
             return {
@@ -811,6 +851,10 @@ class HomeAssistantService:
             },
             "entities": dach_entities
         }
+        with self._solar_data_lock:
+            self._solar_data_cache = res_data
+            self._solar_data_cache_time = now
+        return res_data
 
     def call_service(self, domain, service, service_data):
         cfg = self.get_config()

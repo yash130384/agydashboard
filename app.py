@@ -17,6 +17,7 @@ Lauscht auf Port 5000 (bind 0.0.0.0) und bietet:
 import atexit
 import datetime
 import glob
+import gzip
 import json
 import os
 import platform
@@ -64,7 +65,7 @@ try:
 except ImportError:
     print("[INFO] Flask nicht installiert, verwende Python Standardbibliothek (http.server).")
     USE_FLASK = False
-    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 # ESPN Fantasy Service Import
 try:
@@ -271,7 +272,18 @@ def calculate_stardate(dt=None):
     return f"{first_number}{second_number}.{final_number}"
 
 
-def get_throttled_status():
+_throttled_cache = (False, "0x0")
+_throttled_cache_ts = 0
+_throttled_lock = threading.Lock()
+
+
+def get_throttled_status(cache_ttl=15.0):
+    global _throttled_cache, _throttled_cache_ts
+    now = time.time()
+    with _throttled_lock:
+        if now - _throttled_cache_ts < cache_ttl:
+            return _throttled_cache
+
     try:
         out = subprocess.check_output(["vcgencmd", "get_throttled"], stderr=subprocess.DEVNULL, timeout=1).decode("utf-8")
         m = re.search(r"throttled=(0x[0-9a-fA-F]+)", out)
@@ -279,7 +291,11 @@ def get_throttled_status():
             val_hex = m.group(1)
             val = int(val_hex, 16)
             is_active = bool(val & 0x1)
-            return is_active, val_hex
+            res = (is_active, val_hex)
+            with _throttled_lock:
+                _throttled_cache = res
+                _throttled_cache_ts = now
+            return res
     except Exception:
         pass
     return False, "0x0"
@@ -348,13 +364,28 @@ def get_disk_metrics():
         return {"percent": 0.0, "used_gb": 0.0, "total_gb": 0.0, "free_gb": 0.0}
 
 
-def get_lan_ip():
+_lan_ip_cache = None
+_lan_ip_cache_ts = 0
+_lan_ip_lock = threading.Lock()
+
+
+def get_lan_ip(cache_ttl=60.0):
+    global _lan_ip_cache, _lan_ip_cache_ts
+    now = time.time()
+    with _lan_ip_lock:
+        if _lan_ip_cache and (now - _lan_ip_cache_ts < cache_ttl):
+            return _lan_ip_cache
+
+    ip = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("1.1.1.1", 80))
         ip = s.getsockname()[0]
         s.close()
         if ip and not ip.startswith("127."):
+            with _lan_ip_lock:
+                _lan_ip_cache = ip
+                _lan_ip_cache_ts = now
             return ip
     except Exception:
         pass
@@ -362,10 +393,17 @@ def get_lan_ip():
         out = subprocess.check_output(["hostname", "-I"], text=True, timeout=1).strip()
         for ip_part in out.split():
             if ip_part.startswith("192.168.") or ip_part.startswith("10.") or ip_part.startswith("172."):
+                with _lan_ip_lock:
+                    _lan_ip_cache = ip_part
+                    _lan_ip_cache_ts = now
                 return ip_part
     except Exception:
         pass
-    return "192.168.31.210"
+    fallback_ip = "192.168.31.210"
+    with _lan_ip_lock:
+        _lan_ip_cache = fallback_ip
+        _lan_ip_cache_ts = now
+    return fallback_ip
 
 
 
@@ -387,7 +425,18 @@ def get_tailscale_info():
     return {"domain": "pimmel.tail3a782b.ts.net", "ip": "100.88.215.98", "active": True}
 
 
-def get_cloudflared_urls():
+_cloudflared_urls_cache = None
+_cloudflared_urls_cache_ts = 0
+_cloudflared_urls_lock = threading.Lock()
+
+
+def get_cloudflared_urls(cache_ttl=15.0):
+    global _cloudflared_urls_cache, _cloudflared_urls_cache_ts
+    now = time.time()
+    with _cloudflared_urls_lock:
+        if _cloudflared_urls_cache is not None and (now - _cloudflared_urls_cache_ts < cache_ttl):
+            return _cloudflared_urls_cache
+
     urls = {"dashboard": None, "xdcc": None}
     dash_file = "/home/yash/.cloudflared-urls/dash.url"
     xdcc_file = "/home/yash/.cloudflared-urls/xdcc.url"
@@ -407,6 +456,10 @@ def get_cloudflared_urls():
                     urls["xdcc"] = val
     except Exception:
         pass
+
+    with _cloudflared_urls_lock:
+        _cloudflared_urls_cache = urls
+        _cloudflared_urls_cache_ts = now
     return urls
 
 
@@ -1280,7 +1333,18 @@ openrouter_manager = OpenRouterManager(cache_ttl=60)
 # ---------------------------------------------------------------------------
 # Antigravity Status & Quota
 # ---------------------------------------------------------------------------
-def get_antigravity_status():
+_antigravity_cache = None
+_antigravity_cache_ts = 0
+_antigravity_lock = threading.Lock()
+
+
+def get_antigravity_status(cache_ttl=20.0):
+    global _antigravity_cache, _antigravity_cache_ts
+    now = time.time()
+    with _antigravity_lock:
+        if _antigravity_cache is not None and (now - _antigravity_cache_ts < cache_ttl):
+            return _antigravity_cache
+
     oauth_path = "/home/yash/.gemini/antigravity-cli/antigravity-oauth-token"
     token_present = False
     auth_method = "consumer"
@@ -1328,7 +1392,7 @@ def get_antigravity_status():
             latest_str = latest_dt.strftime("%d.%m.%Y %H:%M")
 
     badge = "Aktiv (Google Consumer / Free Quota)" if token_present else "Inaktiv / Nicht angemeldet"
-    return {
+    res = {
         "status": "active" if token_present else "inactive",
         "badge": badge,
         "auth_method": auth_method,
@@ -1338,6 +1402,10 @@ def get_antigravity_status():
         "quota": "Unbegrenzte Chat-/Agenten-Quota (Gemini Flash & Pro)",
         "token_valid": token_present,
     }
+    with _antigravity_lock:
+        _antigravity_cache = res
+        _antigravity_cache_ts = now
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -1626,7 +1694,7 @@ def get_9router_stats(cache_ttl=10.0):
 # ---------------------------------------------------------------------------
 # Gesamt-System-Stats Sammler
 # ---------------------------------------------------------------------------
-def get_system_stats():
+def get_system_stats(include_history=False):
     stats = {
         "hostname": socket.gethostname(),
         "platform": f"{platform.system()} {platform.release()} ({platform.machine()})",
@@ -1730,7 +1798,7 @@ def get_system_stats():
     }
 
     stats["lan_ip"] = get_lan_ip()
-    stats["history_samples"] = history_store.get_samples(range_seconds=3600) if "history_store" in globals() else []
+    stats["history_samples"] = history_store.get_samples(range_seconds=3600) if (include_history and "history_store" in globals()) else []
     stats["stardate"] = calculate_stardate()
     stats["alerts"] = alert_monitor.get_status() if "alert_monitor" in globals() else {"active": False, "reasons": []}
 
@@ -2132,7 +2200,7 @@ class AlertMonitor:
                 self.evaluate(cpu_val, ram_pct, disk_pct, temp_c)
             except Exception as e:
                 print(f"[WARN] AlertMonitor worker error: {e}", file=sys.stderr)
-            time.sleep(3)
+            time.sleep(10)
 
     def start(self):
         if not self._running:
@@ -6351,6 +6419,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   var activeRange = '1h';
   var currentHistorySamples = initialStats?.history_samples || [];
   var visibleDatasets = [true, true, true, false]; // 0: Temp, 1: CPU, 2: Throttle, 3: RAM
+  var currentCategory = 'system';
+  var lastServicesFingerprint = '';
+  var lastNrConnFingerprint = '';
+  var lastNrHistoryFingerprint = '';
+  var latestDiscoveredServers = initialStats?.discovered_servers || [];
 
   // Sound Engine (Web Audio API Synthesizer)
   let audioContext = null;
@@ -6560,6 +6633,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function switchCategory(catId) {
     playLcarsBeep(980, 1400);
+    currentCategory = catId;
 
     document.querySelectorAll('.lcars-pill-btn').forEach(btn => btn.classList.remove('active'));
     const activeBtn = document.getElementById('btn-cat-' + catId);
@@ -6584,6 +6658,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           initHistoryChart();
         }
       }, 60);
+    }
+    if (catId === 'services') {
+      if (latestDiscoveredServers && latestDiscoveredServers.length > 0) {
+        updateServicesCards(latestDiscoveredServers);
+      }
     }
     if (catId === 'agents') {
       setTimeout(() => {
@@ -8486,8 +8565,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('scanCountdown').textContent = `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
     }
     if (data.discovered_servers) {
-      document.getElementById('scanFoundCount').textContent = data.discovered_servers.length;
-      updateServicesCards(data.discovered_servers);
+      latestDiscoveredServers = data.discovered_servers;
+      const countEl = document.getElementById('scanFoundCount');
+      if (countEl) countEl.textContent = data.discovered_servers.length;
+      if (currentCategory === 'services' || !lastServicesFingerprint) {
+        updateServicesCards(data.discovered_servers);
+      }
     }
 
     // LAN IP
@@ -8514,8 +8597,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   // Responsive Diagnostic Cards für Services & Scanner rendern
   function updateServicesCards(servers) {
+    if (!servers) return;
+    const fp = servers.map(s => `${s.port}:${s.pid}:${s.cloudflared_url || ''}:${s.http_status || ''}`).join('|');
+    if (fp === lastServicesFingerprint) return;
+    lastServicesFingerprint = fp;
+
     const grid = document.getElementById('servicesGrid');
-    if (!grid || !servers) return;
+    if (!grid) return;
     const lanIp = initialStats?.lan_ip || '192.168.31.210';
     let html = '';
     servers.forEach(s => {
@@ -8616,8 +8704,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // Live Stats Polling
   let refreshIntervalMs = 3000;
   let refreshTimer = null;
+  let isFetchingStats = false;
 
   async function fetchLiveStats(playSound = false) {
+    if (document.hidden) return;
+    if (isFetchingStats) return;
+    isFetchingStats = true;
     if (playSound) playLcarsBeep(1400, 900);
     try {
       const resp = await fetch('/api/stats');
@@ -8627,16 +8719,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     } catch (e) {
       console.warn("Telemetrie Fetch Fehler:", e);
+    } finally {
+      isFetchingStats = false;
     }
   }
 
   function setRefreshInterval(ms) {
     refreshIntervalMs = ms;
-    document.getElementById('refreshRateDisplay').textContent = (ms / 1000) + ' SEKUNDEN';
+    const rateEl = document.getElementById('refreshRateDisplay');
+    if (rateEl) rateEl.textContent = (ms / 1000) + ' SEKUNDEN';
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(() => fetchLiveStats(false), refreshIntervalMs);
   }
   refreshTimer = setInterval(() => fetchLiveStats(false), refreshIntervalMs);
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      fetchLiveStats(false);
+      if (currentCategory === 'fantasy' && typeof loadFantasyData === 'function') loadFantasyData(false);
+      if (currentCategory === 'homeassistant' && typeof loadHomeAssistantData === 'function') loadHomeAssistantData(false);
+      if (currentCategory === 'solar' && typeof loadSolarData === 'function') loadSolarData(false);
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // CHART ENGINE: DUAL CHART.JS + NATIVES LCARS CANVAS (100% GARANTIE)
@@ -8659,11 +8763,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const canvas = document.getElementById('historyChart');
     if (!canvas) return;
 
-    if (historyChart) {
-      try { historyChart.destroy(); } catch (e) {}
-      historyChart = null;
-    }
-
     const samples = currentHistorySamples;
     const labels = samples.map(s => s.time || '');
     const temps = samples.map(s => s.temp);
@@ -8673,6 +8772,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     if (typeof Chart !== 'undefined') {
       try {
+        if (historyChart) {
+          historyChart.data.labels = labels;
+          historyChart.data.datasets[0].data = temps;
+          historyChart.data.datasets[1].data = cpus;
+          historyChart.data.datasets[2].data = throttles;
+          historyChart.data.datasets[3].data = rams;
+          historyChart.update('none');
+          return;
+        }
         const existingChart = Chart.getChart(canvas);
         if (existingChart) {
           try { existingChart.destroy(); } catch (e) {}
@@ -9039,66 +9147,79 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       provListEl.textContent = nrData.connections.map(c => (c.provider ? c.provider.toUpperCase() : '')).join(' • ');
     }
 
-    // Provider Connections List Rendering
+    // Only do heavy DOM table/list updates and chart updates if 'ai-info' or 'agents' is visible
+    if (currentCategory !== 'ai-info' && currentCategory !== 'agents') {
+      return;
+    }
+
+    // Provider Connections List Rendering with dirty-checking
     const connList = document.getElementById('nineRouterConnectionsList');
     if (connList && nrData.connections) {
-      if (nrData.connections.length === 0) {
-        connList.innerHTML = '<div style="color:#888; font-size:0.85rem; padding:0.5rem;">Keine Provider-Verbindungen konfiguriert.</div>';
-      } else {
-        let cHtml = '';
-        nrData.connections.forEach(conn => {
-          const badgeCls = conn.is_active ? 'badge-online' : 'badge-offline';
-          const badgeTxt = conn.is_active ? 'AKTIV // VERBUNDEN' : 'INAKTIV';
-          cHtml += `
-            <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.5); padding:0.6rem 0.8rem; border-left:4px solid var(--c-primary); border-radius:6px; flex-wrap:wrap; gap:0.5rem;">
-              <div>
-                <div style="font-weight:700; color:var(--c-primary); font-size:0.95rem;">${escapeHtml(conn.provider.toUpperCase())} // ${escapeHtml(conn.name || conn.provider)}</div>
-                <div style="font-family:var(--mono-family); font-size:0.78rem; color:#888;">Auth: ${escapeHtml((conn.auth_type || '').toUpperCase())} | Prio: ${conn.priority} ${conn.email ? '| ' + escapeHtml(conn.email) : ''}</div>
+      const connFp = nrData.connections.map(c => `${c.provider}:${c.is_active}:${c.priority}`).join('|');
+      if (connFp !== lastNrConnFingerprint) {
+        lastNrConnFingerprint = connFp;
+        if (nrData.connections.length === 0) {
+          connList.innerHTML = '<div style="color:#888; font-size:0.85rem; padding:0.5rem;">Keine Provider-Verbindungen konfiguriert.</div>';
+        } else {
+          let cHtml = '';
+          nrData.connections.forEach(conn => {
+            const badgeCls = conn.is_active ? 'badge-online' : 'badge-offline';
+            const badgeTxt = conn.is_active ? 'AKTIV // VERBUNDEN' : 'INAKTIV';
+            cHtml += `
+              <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.5); padding:0.6rem 0.8rem; border-left:4px solid var(--c-primary); border-radius:6px; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                  <div style="font-weight:700; color:var(--c-primary); font-size:0.95rem;">${escapeHtml(conn.provider.toUpperCase())} // ${escapeHtml(conn.name || conn.provider)}</div>
+                  <div style="font-family:var(--mono-family); font-size:0.78rem; color:#888;">Auth: ${escapeHtml((conn.auth_type || '').toUpperCase())} | Prio: ${conn.priority} ${conn.email ? '| ' + escapeHtml(conn.email) : ''}</div>
+                </div>
+                <div>
+                  <span class="badge-status ${badgeCls}">${badgeTxt}</span>
+                </div>
               </div>
-              <div>
-                <span class="badge-status ${badgeCls}">${badgeTxt}</span>
-              </div>
-            </div>
-          `;
-        });
-        connList.innerHTML = cHtml;
+            `;
+          });
+          connList.innerHTML = cHtml;
+        }
       }
     }
 
-    // Recent History Table Rendering
+    // Recent History Table Rendering with dirty-checking
     const tbody = document.getElementById('nineRouterHistoryTableBody');
     if (tbody && nrData.recent_history) {
-      if (nrData.recent_history.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" style="padding:0.8rem; text-align:center; color:#888;">Keine Transaktionen aufgezeichnet.</td></tr>';
-      } else {
-        let hHtml = '';
-        nrData.recent_history.forEach(r => {
-          const badgeClass = (r.status === 'ok') ? 'badge-online' : 'badge-offline';
-          hHtml += `
-            <tr style="border-bottom:1px solid rgba(255,255,255,0.08); font-family:var(--mono-family);">
-              <td style="padding:0.45rem 0.4rem; color:var(--c-gold);">#${r.id}</td>
-              <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:#ccc;">${escapeHtml(r.time_display)}</td>
-              <td style="padding:0.45rem 0.4rem;"><span style="color:var(--c-blue); font-weight:700;">${escapeHtml((r.provider || '').toUpperCase())}</span></td>
-              <td style="padding:0.45rem 0.4rem; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(r.model)}">${escapeHtml(r.model)}</td>
-              <td style="padding:0.45rem 0.4rem; white-space:nowrap;">${Number(r.prompt_tokens || 0).toLocaleString()}</td>
-              <td style="padding:0.45rem 0.4rem; white-space:nowrap;">${Number(r.completion_tokens || 0).toLocaleString()}</td>
-              <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:var(--c-blue);">${Number(r.cached_tokens || 0).toLocaleString()}</td>
-              <td style="padding:0.45rem 0.4rem; white-space:nowrap; font-weight:700; color:var(--c-primary);">${Number(r.total_tokens || 0).toLocaleString()}</td>
-              <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:var(--c-gold);">${escapeHtml(r.cost_formatted || ('$' + Number(r.cost || 0).toFixed(4)))}</td>
-              <td style="padding:0.45rem 0.4rem;">
-                <span class="badge-status ${badgeClass}" style="padding:0.15rem 0.4rem; font-size:0.75rem;">
-                  ${escapeHtml((r.status || 'OK').toUpperCase())}
-                </span>
-              </td>
-            </tr>
-          `;
-        });
-        tbody.innerHTML = hHtml;
+      const histFp = (nrData.recent_history || []).map(r => `${r.id}:${r.status}:${r.total_tokens}`).join('|');
+      if (histFp !== lastNrHistoryFingerprint) {
+        lastNrHistoryFingerprint = histFp;
+        if (nrData.recent_history.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="10" style="padding:0.8rem; text-align:center; color:#888;">Keine Transaktionen aufgezeichnet.</td></tr>';
+        } else {
+          let hHtml = '';
+          nrData.recent_history.forEach(r => {
+            const badgeClass = (r.status === 'ok') ? 'badge-online' : 'badge-offline';
+            hHtml += `
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.08); font-family:var(--mono-family);">
+                <td style="padding:0.45rem 0.4rem; color:var(--c-gold);">#${r.id}</td>
+                <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:#ccc;">${escapeHtml(r.time_display)}</td>
+                <td style="padding:0.45rem 0.4rem;"><span style="color:var(--c-blue); font-weight:700;">${escapeHtml((r.provider || '').toUpperCase())}</span></td>
+                <td style="padding:0.45rem 0.4rem; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(r.model)}">${escapeHtml(r.model)}</td>
+                <td style="padding:0.45rem 0.4rem; white-space:nowrap;">${Number(r.prompt_tokens || 0).toLocaleString()}</td>
+                <td style="padding:0.45rem 0.4rem; white-space:nowrap;">${Number(r.completion_tokens || 0).toLocaleString()}</td>
+                <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:var(--c-blue);">${Number(r.cached_tokens || 0).toLocaleString()}</td>
+                <td style="padding:0.45rem 0.4rem; white-space:nowrap; font-weight:700; color:var(--c-primary);">${Number(r.total_tokens || 0).toLocaleString()}</td>
+                <td style="padding:0.45rem 0.4rem; white-space:nowrap; color:var(--c-gold);">${escapeHtml(r.cost_formatted || ('$' + Number(r.cost || 0).toFixed(4)))}</td>
+                <td style="padding:0.45rem 0.4rem;">
+                  <span class="badge-status ${badgeClass}" style="padding:0.15rem 0.4rem; font-size:0.75rem;">
+                    ${escapeHtml((r.status || 'OK').toUpperCase())}
+                  </span>
+                </td>
+              </tr>
+            `;
+          });
+          tbody.innerHTML = hHtml;
+        }
       }
     }
 
-    // Charts aktualisieren falls bereits gezeichnet
-    if (nineRouterModelChart || nineRouterTimelineChart) {
+    // Charts nur im aktiven Tab 'ai-info' aktualisieren
+    if (currentCategory === 'ai-info' && (nineRouterModelChart || nineRouterTimelineChart)) {
       initNineRouterCharts(nrData);
     }
   }
@@ -9130,11 +9251,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const canvas = document.getElementById('nineRouterModelChart');
     if (!canvas) return;
 
-    if (nineRouterModelChart) {
-      try { nineRouterModelChart.destroy(); } catch (e) {}
-      nineRouterModelChart = null;
-    }
-
     const modelsObj = data?.by_model || {};
     let labels = Object.keys(modelsObj);
     let values = labels.map(k => (modelsObj[k].promptTokens || 0) + (modelsObj[k].completionTokens || 0));
@@ -9147,6 +9263,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     if (typeof Chart !== 'undefined') {
       try {
+        if (nineRouterModelChart) {
+          nineRouterModelChart.data.labels = labels;
+          nineRouterModelChart.data.datasets[0].data = values;
+          nineRouterModelChart.data.datasets[0].backgroundColor = palette.slice(0, labels.length);
+          nineRouterModelChart.update('none');
+          return;
+        }
         const existing = Chart.getChart(canvas);
         if (existing) {
           try { existing.destroy(); } catch (e) {}
@@ -9204,11 +9327,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const canvas = document.getElementById('nineRouterTimelineChart');
     if (!canvas) return;
 
-    if (nineRouterTimelineChart) {
-      try { nineRouterTimelineChart.destroy(); } catch (e) {}
-      nineRouterTimelineChart = null;
-    }
-
     const history = (data?.recent_history || []).slice().reverse();
     const labels = history.map(r => {
       if (r.time_display) {
@@ -9225,6 +9343,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     if (typeof Chart !== 'undefined') {
       try {
+        if (nineRouterTimelineChart) {
+          nineRouterTimelineChart.data.labels = labels.length ? labels : ['Keine Daten'];
+          nineRouterTimelineChart.data.datasets[0].data = promptToks.length ? promptToks : [0];
+          nineRouterTimelineChart.data.datasets[1].data = cachedToks.length ? cachedToks : [0];
+          nineRouterTimelineChart.data.datasets[2].data = complToks.length ? complToks : [0];
+          nineRouterTimelineChart.data.datasets[3].data = costs.length ? costs : [0];
+          nineRouterTimelineChart.update('none');
+          return;
+        }
         const existing = Chart.getChart(canvas);
         if (existing) {
           try { existing.destroy(); } catch (e) {}
@@ -9350,11 +9477,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const canvas = document.getElementById('hermesChart');
     if (!canvas) return;
 
-    if (hermesChart) {
-      try { hermesChart.destroy(); } catch (e) {}
-      hermesChart = null;
-    }
-
     const models = initialStats?.hermes?.models || [];
     let labels = models.map(m => m.model);
     let data = models.map(m => m.total_tokens);
@@ -9367,6 +9489,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     if (typeof Chart !== 'undefined') {
       try {
+        if (hermesChart) {
+          hermesChart.data.labels = labels;
+          hermesChart.data.datasets[0].data = data;
+          hermesChart.data.datasets[0].backgroundColor = palette.slice(0, labels.length);
+          hermesChart.update('none');
+          return;
+        }
         const existingChart = Chart.getChart(canvas);
         if (existingChart) {
           try { existingChart.destroy(); } catch (e) {}
@@ -10871,23 +11000,49 @@ def render_html_fallback(stats):
 if USE_FLASK:
     app = Flask(__name__, static_folder="static", static_url_path="/static")
 
+    @app.after_request
+    def compress_response(response):
+        accept_encoding = request.headers.get("Accept-Encoding", "")
+        if "gzip" not in accept_encoding.lower():
+            return response
+        if response.status_code < 200 or response.status_code >= 300:
+            return response
+        content_type = response.headers.get("Content-Type", "")
+        if not any(t in content_type for t in ("text/", "application/json", "application/javascript")):
+            return response
+        if response.direct_passthrough:
+            return response
+        data = response.get_data()
+        if len(data) < 256:
+            return response
+        compressed = gzip.compress(data, compresslevel=5)
+        if len(compressed) < len(data):
+            response.set_data(compressed)
+            response.headers["Content-Encoding"] = "gzip"
+            response.headers["Content-Length"] = len(compressed)
+        return response
+
     @app.route("/static/<path:filename>")
     def serve_static(filename):
-        return send_from_directory("static", filename)
+        resp = send_from_directory("static", filename)
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        return resp
 
     @app.route("/chart.umd.min.js")
     def serve_chart_root():
-        return send_from_directory("static", "chart.umd.min.js")
+        resp = send_from_directory("static", "chart.umd.min.js")
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        return resp
 
     @app.route("/")
     def index():
-        stats = get_system_stats()
+        stats = get_system_stats(include_history=True)
         stats_json = json.dumps(stats)
         return render_template_string(DASHBOARD_HTML, stats=stats, stats_json=stats_json)
 
     @app.route("/api/stats")
     def api_stats():
-        return jsonify(get_system_stats())
+        return jsonify(get_system_stats(include_history=False))
 
     @app.route("/api/alerts")
     def api_alerts():
@@ -11404,7 +11559,7 @@ else:
 
     def run_server():
         server_address = ("0.0.0.0", 5000)
-        httpd = HTTPServer(server_address, DashboardHTTPHandler)
+        httpd = ThreadingHTTPServer(server_address, DashboardHTTPHandler)
         print("[START] Starte Standard-HTTP System Server auf http://0.0.0.0:5000 ...", flush=True)
         httpd.serve_forever()
 
