@@ -5735,6 +5735,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <button class="left-action-btn" onclick="playLcarsChirp()">
                   <span>🔔</span> <span>COMM-CHIRP TESTEN</span>
                 </button>
+                <button class="left-action-btn" onclick="requestMicPermission()">
+                  <span>🔐</span> <span>MIKROFON-FREIGABE ANFORDERN</span>
+                </button>
               </div>
               <div style="margin-top:0.85rem; display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
                 <label style="font-family:var(--mono-family); font-size:0.82rem; color:var(--c-secondary);">BEVORZUGTE STIMME:</label>
@@ -10044,9 +10047,41 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
+  async function requestMicPermission() {
+    playLcarsBeep(980, 1400);
+    if (!window.isSecureContext) {
+      playLcarsError();
+      const origin = window.location.origin;
+      alert("LCARS SICHERHEITSHINWEIS // KEIN HTTPS / UNSICHERER URSPRUNG:\\n\\nDer Browser sperrt das Mikrofon auf unverschlüsselten IP-Adressen (" + origin + ").\\n\\nSO GIBST DU ES FREI:\\n1) In Chrome/Edge eine neue Registerkarte öffnen:\\n   chrome://flags/#unsafely-treat-insecure-origin-as-secure\\n2) Dort genau diese Adresse eintragen:\\n   " + origin + "\\n3) Auf 'Enabled' stellen und Browser neu starten (Relaunch).\\n\\nAlternativ: Rufe das Dashboard über 'http://localhost:5000' (am Host) oder über HTTPS auf.");
+      return false;
+    }
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(t => t.stop());
+        playLcarsAcknowledge();
+        alert("LCARS COMM-LINK // MIKROFON FREIGEGEBEN!\\n\\nDas Mikrofon ist jetzt autorisiert und betriebsbereit.");
+        updateVoiceUI();
+        return true;
+      }
+    } catch (e) {
+      playLcarsError();
+      alert("LCARS BERECHTIGUNG GEBLOCKT:\\n\\n" + e.message + "\\n\\nKlicke links neben der Webadresse auf das Schloss- oder Schieberegler-Icon und aktiviere 'Mikrofon: Zulassen'.");
+      return false;
+    }
+  }
+
   function toggleVoiceListening(targetSubgroup = null) {
+    if (!window.isSecureContext) {
+      playLcarsError();
+      const origin = window.location.origin;
+      alert("LCARS SICHERHEITSHINWEIS // KEIN HTTPS / UNSICHERER URSPRUNG:\\n\\nDer Browser sperrt das Mikrofon auf unverschlüsselten IP-Adressen (" + origin + ").\\n\\nSO GIBST DU ES FREI:\\n1) In Chrome/Edge eine neue Registerkarte öffnen:\\n   chrome://flags/#unsafely-treat-insecure-origin-as-secure\\n2) Dort genau diese Adresse eintragen:\\n   " + origin + "\\n3) Auf 'Enabled' stellen und Browser neu starten (Relaunch).\\n\\nAlternativ: Rufe das Dashboard über 'http://localhost:5000' (am Host) oder über HTTPS auf.");
+      return;
+    }
+
     if (!SpeechRecognition) {
-      alert("LCARS HINWEIS: Web Speech API wird in diesem Browser nicht unterstützt. Bitte Chrome, Chromium, Edge oder Safari verwenden.");
+      playLcarsError();
+      alert("LCARS HINWEIS: Die Web Speech API ist in diesem Browser oder unter dieser URL nicht aktiv.\\nBitte verwende Google Chrome, Edge oder Safari und stelle sicher, dass die Seite über localhost, HTTPS oder mit der Chrome-Flag aufgerufen wird.");
       return;
     }
 
