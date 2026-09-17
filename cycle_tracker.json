@@ -1,0 +1,22 @@
+{
+  "partners": [
+    {
+      "id": "p_1789506692_ebfac5",
+      "name": "Jennifer",
+      "cycle_duration": 26,
+      "period_duration": 5,
+      "start_date": "2026-09-14",
+      "notes": "Regulärer 28-Tage Zyklus",
+      "created_at": "2026-09-15T23:11:32.995818"
+    },
+    {
+      "id": "p_1789507105_ff925c",
+      "name": "Five",
+      "cycle_duration": 30,
+      "period_duration": 5,
+      "start_date": "2026-09-01",
+      "notes": "",
+      "created_at": "2026-09-15T23:18:25.007177"
+    }
+  ]
+}

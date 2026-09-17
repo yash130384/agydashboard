@@ -81,6 +81,20 @@ except Exception as _ha_err:
     ha_service = None
     print(f"[WARN] ha_service konnte nicht importiert werden: {_ha_err}", file=sys.stderr)
 
+# Permissions Service Import
+try:
+    from permissions_service import permissions_service
+except Exception as _perm_err:
+    permissions_service = None
+    print(f"[WARN] permissions_service konnte nicht importiert werden: {_perm_err}", file=sys.stderr)
+
+# Cycle Tracking Service Import
+try:
+    from cycle_service import cycle_service
+except Exception as _cycle_err:
+    cycle_service = None
+    print(f"[WARN] cycle_service konnte nicht importiert werden: {_cycle_err}", file=sys.stderr)
+
 
 # ---------------------------------------------------------------------------
 # Basis Service-Registry für Web-Services
@@ -94,6 +108,7 @@ SERVICE_REGISTRY = {
         "description": "Flask System Dashboard (Eigenes)",
         "allow_external": True,
         "cf_key": "dashboard",
+        "cf_url": "https://dash.pimmel.site",
         "tailscale_url": "http://pimmel.tail3a782b.ts.net:5000",
         "lan_url": "http://192.168.31.210:5000",
     },
@@ -105,6 +120,7 @@ SERVICE_REGISTRY = {
         "description": "ACC Telemetry (uvicorn)",
         "allow_external": True,
         "cf_key": None,
+        "cf_url": "https://tele.pimmel.site",
         "tailscale_url": "http://pimmel.tail3a782b.ts.net:8000",
         "lan_url": "http://192.168.31.210:8000",
     },
@@ -116,6 +132,7 @@ SERVICE_REGISTRY = {
         "description": "node server.js",
         "allow_external": True,
         "cf_key": "xdcc",
+        "cf_url": "https://cast.pimmel.site",
         "tailscale_url": "http://pimmel.tail3a782b.ts.net:3000",
         "lan_url": "http://192.168.31.210:3000",
     },
@@ -127,6 +144,7 @@ SERVICE_REGISTRY = {
         "description": "FREE AI Router & Token Saver",
         "allow_external": True,
         "cf_key": None,
+        "cf_url": "https://ai.pimmel.site",
         "tailscale_url": "http://pimmel.tail3a782b.ts.net:20128",
         "lan_url": "http://192.168.31.210:20128",
     },
@@ -138,6 +156,7 @@ SERVICE_REGISTRY = {
         "description": "Context Compression for AI Agents",
         "allow_external": True,
         "cf_key": None,
+        "cf_url": "https://head.pimmel.site",
         "tailscale_url": "http://pimmel.tail3a782b.ts.net:8787",
         "lan_url": "http://192.168.31.210:8787",
     },
@@ -149,8 +168,21 @@ SERVICE_REGISTRY = {
         "description": "Open Source Home Automation",
         "allow_external": True,
         "cf_key": None,
+        "cf_url": "https://ha.pimmel.site",
         "tailscale_url": "http://pimmel.tail3a782b.ts.net:8123",
         "lan_url": "http://192.168.31.210:8123",
+    },
+    "matter": {
+        "name": "Python Matter Server",
+        "title": "Matter Server",
+        "icon": "🔌",
+        "port": 5580,
+        "description": "Python Matter Server (WebSockets)",
+        "allow_external": True,
+        "cf_key": None,
+        "cf_url": "https://mat.pimmel.site",
+        "tailscale_url": "http://pimmel.tail3a782b.ts.net:5580",
+        "lan_url": "http://192.168.31.210:5580",
     },
     "postgres": {
         "name": "PostgreSQL 17",
@@ -160,6 +192,7 @@ SERVICE_REGISTRY = {
         "description": "PostgreSQL Datenbank (nur localhost)",
         "allow_external": False,
         "cf_key": None,
+        "cf_url": None,
         "tailscale_url": None,
         "lan_url": None,
     },
@@ -430,32 +463,26 @@ _cloudflared_urls_cache_ts = 0
 _cloudflared_urls_lock = threading.Lock()
 
 
-def get_cloudflared_urls(cache_ttl=15.0):
+def get_cloudflared_urls(cache_ttl=5.0):
     global _cloudflared_urls_cache, _cloudflared_urls_cache_ts
     now = time.time()
     with _cloudflared_urls_lock:
         if _cloudflared_urls_cache is not None and (now - _cloudflared_urls_cache_ts < cache_ttl):
             return _cloudflared_urls_cache
 
-    urls = {"dashboard": None, "xdcc": None}
-    dash_file = "/home/yash/.cloudflared-urls/dash.url"
-    xdcc_file = "/home/yash/.cloudflared-urls/xdcc.url"
-    try:
-        if os.path.exists(dash_file):
-            with open(dash_file, "r") as f:
-                val = f.read().strip()
-                if val.startswith("https://"):
-                    urls["dashboard"] = val
-    except Exception:
-        pass
-    try:
-        if os.path.exists(xdcc_file):
-            with open(xdcc_file, "r") as f:
-                val = f.read().strip()
-                if val.startswith("https://"):
-                    urls["xdcc"] = val
-    except Exception:
-        pass
+    urls = {
+        "dashboard": "https://dash.pimmel.site",
+        "xdcc": "https://cast.pimmel.site",
+        "telemetry": "https://tele.pimmel.site",
+        "9router": "https://ai.pimmel.site",
+        "headroom": "https://head.pimmel.site",
+        "homeassistant": "https://ha.pimmel.site",
+        "matter": "https://mat.pimmel.site",
+    }
+    if "cf_tunnel_manager" in globals() and cf_tunnel_manager:
+        all_cf = cf_tunnel_manager.get_all_urls()
+        for p, u in all_cf.items():
+            urls[str(p)] = u
 
     with _cloudflared_urls_lock:
         _cloudflared_urls_cache = urls
@@ -491,245 +518,316 @@ def check_service_status(port=8000, host="127.0.0.1", timeout=0.2, max_age=4.0):
 
 
 # ---------------------------------------------------------------------------
-# Automatischer Cloudflared-Quick-Tunnel-Manager
+# Cloudflare Named-Tunnel-Manager (pimmel.site)
 # ---------------------------------------------------------------------------
-class CloudflaredTunnelManager:
-    """Verwaltet Cloudflared-Quick-Tunnels für entdeckte Webdienste.
-    Legt automatisch einen trycloudflare.com Tunnel an, falls ein Dienst noch keinen hat.
-    """
-    def __init__(self, binary_path="/home/yash/bin/cloudflared", url_dir="/home/yash/.cloudflared-urls"):
-        self.binary_path = binary_path if (os.path.isfile(binary_path) and os.access(binary_path, os.X_OK)) else (shutil.which("cloudflared") or "cloudflared")
-        self.url_dir = url_dir
-        os.makedirs(self.url_dir, exist_ok=True)
-        self._tunnels = {}  # port -> {"proc": Popen, "log": str, "url": str, "created_at": float}
-        self._lock = threading.Lock()
-        self._running = True
-        self._watcher_thread = threading.Thread(target=self._watcher_loop, daemon=True)
-        self._watcher_thread.start()
+STATIC_PORT_SUBDOMAINS = {
+    5000: "dash",
+    8123: "ha",
+    20128: "ai",
+    3000: "cast",
+    8000: "tele",
+    5580: "mat",
+    8787: "head",
+}
 
-    def is_external_process_running(self, port: int) -> bool:
+
+class CloudflaredNamedTunnelManager:
+    """Verwaltet Cloudflare Named Tunnel (pimmel-tunnel) für entdeckte Webdienste.
+    Konfiguriert Ingress-Regeln in /home/yash/.cloudflared/config.yml und registriert
+    2-4 Buchstaben DNS-Subdomains auf *.pimmel.site.
+    """
+
+    def __init__(
+        self,
+        config_path="/home/yash/.cloudflared/config.yml",
+        binary_path="/home/yash/bin/cloudflared",
+        tunnel_name="pimmel-tunnel",
+        base_domain="pimmel.site",
+    ):
+        self.config_path = config_path
+        self.binary_path = (
+            binary_path
+            if (os.path.isfile(binary_path) and os.access(binary_path, os.X_OK))
+            else (shutil.which("cloudflared") or "cloudflared")
+        )
+        self.tunnel_name = tunnel_name
+        self.base_domain = base_domain
+        self._lock = threading.RLock()
+        self._restart_lock = threading.RLock()
+        self._last_restart_ts = 0.0
+        self._url_cache = {}  # port -> "https://<subdomain>.pimmel.site"
+        self._load_config_cache()
+        self.kill_legacy_quick_tunnels()
+
+    def kill_legacy_quick_tunnels(self):
+        """Beendet alte trycloudflare Quick-Tunnel-Prozesse."""
         if not psutil:
-            return False
+            return
         try:
             for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-                cmd = proc.info.get("cmdline") or []
-                cmd_str = " ".join(cmd)
-                if "cloudflared" in cmd_str and "--url" in cmd_str:
-                    m_port = re.search(r"--url\s+https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)", cmd_str)
-                    if m_port and int(m_port.group(1)) == port:
-                        return True
+                try:
+                    cmd = proc.info.get("cmdline") or []
+                    cmd_str = " ".join(cmd)
+                    if "cloudflared" in cmd_str and ("--url" in cmd_str or "trycloudflare.com" in cmd_str):
+                        print(f"[CLOUDFLARED] Beende alten Quick-Tunnel PID {proc.pid}: {cmd_str[:60]}...", flush=True)
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=1.0)
+                        except Exception:
+                            proc.kill()
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[WARN] Fehler beim Beenden alter Quick-Tunnel: {e}", file=sys.stderr)
+
+    def _load_config_cache(self):
+        """Liest bestehende Mappings aus config.yml in den internen Cache."""
+        for p, sub in STATIC_PORT_SUBDOMAINS.items():
+            self._url_cache[p] = f"https://{sub}.{self.base_domain}"
+
+        if not os.path.exists(self.config_path) or not yaml:
+            return
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            ingress = data.get("ingress", [])
+            for rule in ingress:
+                hostname = rule.get("hostname", "")
+                service = rule.get("service", "")
+                if hostname and service:
+                    m = re.search(r":(\d+)$", service)
+                    if m:
+                        port = int(m.group(1))
+                        if port not in self._url_cache or hostname.startswith("dash."):
+                            self._url_cache[port] = f"https://{hostname}"
+        except Exception as e:
+            print(f"[WARN] Fehler beim Laden von {self.config_path}: {e}", file=sys.stderr)
+
+    def get_existing_hostnames(self) -> set:
+        """Gibt alle in config.yml konfigurierten Hostnames zurück."""
+        hostnames = set()
+        if not os.path.exists(self.config_path) or not yaml:
+            return hostnames
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            for rule in data.get("ingress", []):
+                h = rule.get("hostname")
+                if h:
+                    hostnames.add(h.lower().strip())
         except Exception:
             pass
-        return False
+        return hostnames
 
-    def is_tunnel_alive(self, port: int) -> bool:
-        with self._lock:
-            t = self._tunnels.get(port)
-            if t and t.get("proc") and t["proc"].poll() is None:
+    def generate_subdomain(self, port: int, process_name: str = "", title: str = "") -> str:
+        """Erzeugt ein eindeutiges 2-4 Zeichen Kürzel (^[a-z0-9]{2,4}$)."""
+        if port in STATIC_PORT_SUBDOMAINS:
+            return STATIC_PORT_SUBDOMAINS[port]
+
+        existing_hosts = self.get_existing_hostnames()
+        existing_subdomains = {h.split(".")[0] for h in existing_hosts if h.endswith(f".{self.base_domain}")}
+
+        generic_words = {
+            "python", "python3", "node", "nodejs", "docker", "system", "server",
+            "uvicorn", "gunicorn", "app", "flask", "vite", "unknown", "unbekannt",
+            "process", "service", "daemon", "client", "worker", "web", "http",
+            "simplehttp", "simple"
+        }
+        raw_text = f"{process_name} {title}".lower()
+        tokens = re.findall(r"[a-z0-9]+", raw_text)
+
+        candidates = []
+        for token in tokens:
+            if token in generic_words or token.isdigit():
+                continue
+            if 2 <= len(token) <= 4:
+                candidates.append(token)
+            elif len(token) > 4:
+                candidates.append(token[:4])
+                candidates.append(token[:3])
+
+        for cand in candidates:
+            if re.match(r"^[a-z0-9]{2,4}$", cand) and cand not in existing_subdomains:
+                return cand
+
+        port_str = str(port)
+        fallback_candidates = []
+        if len(port_str) >= 3:
+            fallback_candidates.append(f"s{port_str[-3:]}")
+        if len(port_str) >= 2:
+            fallback_candidates.append(f"s{port_str[-2:]}")
+        fallback_candidates.append(f"p{port_str[-3:]}" if len(port_str) >= 3 else f"p{port_str}")
+
+        for fc in fallback_candidates:
+            if re.match(r"^[a-z0-9]{2,4}$", fc) and fc not in existing_subdomains:
+                return fc
+
+        for i in range(1, 100):
+            fc = f"s{i:02d}"
+            if fc not in existing_subdomains:
+                return fc
+
+        return f"s{port % 1000:03d}"[:4]
+
+    def _route_dns(self, subdomain: str) -> bool:
+        """Führt cloudflared tunnel route dns -f pimmel-tunnel <subdomain>.pimmel.site aus."""
+        hostname = f"{subdomain}.{self.base_domain}"
+        cmd = [self.binary_path, "tunnel", "route", "dns", "-f", self.tunnel_name, hostname]
+        try:
+            print(f"[CLOUDFLARED] Registriere DNS CNAME: {hostname}...", flush=True)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if res.returncode == 0:
+                print(f"[CLOUDFLARED] DNS CNAME erfolgreich registriert: {hostname}", flush=True)
                 return True
-        return self.is_external_process_running(port)
+            else:
+                print(f"[CLOUDFLARED] DNS Route Fehler ({res.returncode}): {res.stderr.strip()}", file=sys.stderr)
+                return False
+        except Exception as e:
+            print(f"[CLOUDFLARED] DNS Route Ausnahme für {hostname}: {e}", file=sys.stderr)
+            return False
 
-    def get_url(self, port: int) -> str | None:
-        with self._lock:
-            t = self._tunnels.get(port)
-            if t and t.get("url"):
-                return t["url"]
+    def _restart_service_debounced(self):
+        """Startet cloudflared.service mit Cooldown-Debounce (3s) neu."""
+        with self._restart_lock:
+            now = time.time()
+            elapsed = now - self._last_restart_ts
+            if elapsed < 3.0:
+                time.sleep(3.0 - elapsed)
+            try:
+                print("[CLOUDFLARED] Starte systemctl --user restart cloudflared...", flush=True)
+                subprocess.run(["systemctl", "--user", "restart", "cloudflared"], check=True, timeout=10)
+                self._last_restart_ts = time.time()
+                print("[CLOUDFLARED] cloudflared.service erfolgreich neugestartet.", flush=True)
+            except Exception as e:
+                print(f"[WARN] Fehler beim Neustarten von cloudflared.service: {e}", file=sys.stderr)
 
-        # Nur wenn nachweislich ein Prozess läuft, URL-Dateien oder Logs auswerten
-        if self.is_tunnel_alive(port):
-            patterns = [f"port_{port}.url", f"{port}.url"]
-            if port == 5000:
-                patterns.extend(["dash.url", "dashboard.url"])
-            elif port == 3000:
-                patterns.append("xdcc.url")
-            elif port == 8000:
-                patterns.append("telemetry.url")
-
-            for pattern in patterns:
-                p_file = os.path.join(self.url_dir, pattern)
-                if os.path.isfile(p_file):
-                    try:
-                        with open(p_file, "r", encoding="utf-8") as f:
-                            u = f.read().strip()
-                            if u.startswith("https://"):
-                                with self._lock:
-                                    if port not in self._tunnels:
-                                        self._tunnels[port] = {"proc": None, "log": f"/tmp/cloudflared_{port}.log", "url": u, "created_at": time.time()}
-                                return u
-                    except Exception:
-                        pass
-
-            log_candidates = [f"/tmp/cloudflared_{port}.log"]
-            if port == 5000:
-                log_candidates.append("/tmp/cloudflared_dash.log")
-            elif port == 3000:
-                log_candidates.append("/tmp/cloudflared_xdcc.log")
-
-            for log_file in log_candidates:
-                if os.path.isfile(log_file):
-                    try:
-                        with open(log_file, "r", errors="ignore") as f:
-                            urls = re.findall(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com", f.read())
-                            if urls:
-                                u = urls[-1]
-                                with self._lock:
-                                    if port in self._tunnels:
-                                        self._tunnels[port]["url"] = u
-                                    else:
-                                        self._tunnels[port] = {"proc": None, "log": log_file, "url": u, "created_at": time.time()}
-                                return u
-                    except Exception:
-                        pass
-        return None
-
-    def get_all_urls(self) -> dict:
-        result = {}
-        with self._lock:
-            for p, t in self._tunnels.items():
-                if t.get("url"):
-                    result[p] = t["url"]
-        return result
-
-    def ensure_tunnel(self, port: int):
+    def ensure_tunnel(self, port: int, process_name: str = "", title: str = "") -> str | None:
+        """Prüft config.yml, generiert Subdomain falls unbekannt, erstellt DNS-Eintrag,
+        fügt Ingress-Regel ein, validiert & startet cloudflared.service neu.
+        """
         if port in (22, 111, 5432) or port >= 32768:
             return None
 
-        # 1. Haben wir einen eigenen aktiven Prozess?
         with self._lock:
-            if port in self._tunnels:
-                t = self._tunnels[port]
-                proc = t.get("proc")
-                if proc and proc.poll() is None:
-                    return t.get("url")
-                else:
-                    # Prozess gestorben, verwerfen
-                    del self._tunnels[port]
+            existing_url = self.get_url(port)
+            if existing_url:
+                return existing_url
 
-        # 2. Läuft ein externer Prozess (z.B. port 5000, 3000)?
-        if self.is_external_process_running(port):
-            return self.get_url(port)
+            subdomain = self.generate_subdomain(port, process_name=process_name, title=title)
+            hostname = f"{subdomain}.{self.base_domain}"
+            target_service = f"http://localhost:{port}"
 
-        # 3. Keine laufenden Prozesse: Stale URL-Dateien aufräumen
-        for pattern in [f"port_{port}.url", f"{port}.url"]:
-            p_file = os.path.join(self.url_dir, pattern)
-            if os.path.isfile(p_file):
+            dns_ok = self._route_dns(subdomain)
+            if not dns_ok:
+                print(f"[WARN] DNS-Provisionierung für {hostname} fehlgeschlagen, fahre fort.", file=sys.stderr)
+
+            bak_path = f"{self.config_path}.bak"
+            try:
+                if os.path.exists(self.config_path):
+                    shutil.copyfile(self.config_path, bak_path)
+
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+
+                ingress = data.get("ingress", [])
+
+                updated = False
+                for r in ingress:
+                    if r.get("hostname") == hostname:
+                        r["service"] = target_service
+                        updated = True
+                        break
+
+                if not updated:
+                    new_rule = {"hostname": hostname, "service": target_service}
+                    catch_all_idx = -1
+                    for idx, r in enumerate(ingress):
+                        if r.get("service") == "http_status:404" or "hostname" not in r:
+                            catch_all_idx = idx
+                            break
+                    if catch_all_idx >= 0:
+                        ingress.insert(catch_all_idx, new_rule)
+                    else:
+                        ingress.append(new_rule)
+
+                data["ingress"] = ingress
+
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(data, f, sort_keys=False)
+
+                val_res = subprocess.run(
+                    [self.binary_path, "tunnel", "--config", self.config_path, "ingress", "validate"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if val_res.returncode != 0:
+                    print(f"[CLOUDFLARED] Validierungsfehler! Rollback auf {bak_path}: {val_res.stderr}", file=sys.stderr)
+                    if os.path.exists(bak_path):
+                        shutil.copyfile(bak_path, self.config_path)
+                    return None
+
+                print(f"[CLOUDFLARED] Ingress-Regel validiert für {hostname} -> {target_service}", flush=True)
+
+            except Exception as e:
+                print(f"[CLOUDFLARED] Fehler beim Aktualisieren von {self.config_path}: {e}", file=sys.stderr)
+                if os.path.exists(bak_path):
+                    shutil.copyfile(bak_path, self.config_path)
+                return None
+
+            self._restart_service_debounced()
+            full_url = f"https://{hostname}"
+            self._url_cache[port] = full_url
+            return full_url
+
+    def get_url(self, port: int) -> str | None:
+        """Gibt die Cloudflare URL für einen Port zurück."""
+        with self._lock:
+            if port in self._url_cache:
+                return self._url_cache[port]
+
+            if port in STATIC_PORT_SUBDOMAINS:
+                u = f"https://{STATIC_PORT_SUBDOMAINS[port]}.{self.base_domain}"
+                self._url_cache[port] = u
+                return u
+
+            if os.path.exists(self.config_path) and yaml:
                 try:
-                    os.remove(p_file)
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        data = yaml.safe_load(f) or {}
+                    for r in data.get("ingress", []):
+                        h = r.get("hostname", "")
+                        s = r.get("service", "")
+                        if h and s:
+                            m = re.search(r":(\d+)$", s)
+                            if m and int(m.group(1)) == port:
+                                u = f"https://{h}"
+                                self._url_cache[port] = u
+                                return u
                 except Exception:
                     pass
+            return None
 
-        log_file = f"/tmp/cloudflared_{port}.log"
-        if os.path.isfile(log_file):
-            try:
-                os.remove(log_file)
-            except Exception:
-                pass
-
-        # 4. Neuen Quick-Tunnel starten
-        try:
-            cmd = [
-                self.binary_path,
-                "tunnel",
-                "--url", f"http://127.0.0.1:{port}",
-                "--logfile", log_file,
-                "--no-autoupdate",
-            ]
-            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            with self._lock:
-                self._tunnels[port] = {
-                    "proc": proc,
-                    "log": log_file,
-                    "url": None,
-                    "created_at": time.time(),
-                }
-            print(f"[CLOUDFLARED AUTO] Neuer Quick-Tunnel für Port {port} gestartet (PID {proc.pid}).", flush=True)
-        except Exception as e:
-            print(f"[CLOUDFLARED AUTO] Fehler beim Starten für Port {port}: {e}", file=sys.stderr)
-
-        return None
+    def get_all_urls(self) -> dict:
+        """Gibt {port: url} aller konfigurierten Services zurück."""
+        with self._lock:
+            self._load_config_cache()
+            return dict(self._url_cache)
 
     def stop_tunnel(self, port: int):
+        """Optional: Bereinigung bei Dienstbeendigung."""
         with self._lock:
-            t = self._tunnels.pop(port, None)
-        if t:
-            proc = t.get("proc")
-            if proc and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=1)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-        for pattern in [f"port_{port}.url", f"{port}.url"]:
-            p_file = os.path.join(self.url_dir, pattern)
-            if os.path.isfile(p_file):
-                try:
-                    os.remove(p_file)
-                except Exception:
-                    pass
-        log_file = f"/tmp/cloudflared_{port}.log"
-        if os.path.isfile(log_file):
-            try:
-                os.remove(log_file)
-            except Exception:
-                pass
-
-    def _watcher_loop(self):
-        while self._running:
-            try:
-                with self._lock:
-                    items = list(self._tunnels.items())
-
-                for p, t in items:
-                    proc = t.get("proc")
-                    if proc and proc.poll() is not None:
-                        # Prozess unerwartet beendet
-                        print(f"[CLOUDFLARED AUTO] Tunnel für Port {p} beendet (Exit-Code: {proc.returncode}).", file=sys.stderr)
-                        with self._lock:
-                            if p in self._tunnels and self._tunnels[p] is t:
-                                del self._tunnels[p]
-                        continue
-
-                    if not t.get("url"):
-                        log_file = t.get("log", f"/tmp/cloudflared_{p}.log")
-                        if os.path.exists(log_file):
-                            try:
-                                with open(log_file, "r", errors="ignore") as f:
-                                    matches = re.findall(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com", f.read())
-                                    if matches:
-                                        found_url = matches[-1]
-                                        t["url"] = found_url
-                                        print(f"[CLOUDFLARED AUTO] Port {p} Tunnel aktiv: {found_url}", flush=True)
-                                        try:
-                                            with open(os.path.join(self.url_dir, f"port_{p}.url"), "w", encoding="utf-8") as uf:
-                                                uf.write(found_url + "\n")
-                                        except Exception:
-                                            pass
-                            except Exception:
-                                pass
-            except Exception:
-                pass
-            time.sleep(1.0)
+            if port in STATIC_PORT_SUBDOMAINS:
+                return
+            self._url_cache.pop(port, None)
 
     def stop_all(self):
-        self._running = False
-        with self._lock:
-            for p, t in self._tunnels.items():
-                proc = t.get("proc")
-                if proc and proc.poll() is None:
-                    try:
-                        proc.terminate()
-                        proc.wait(timeout=1)
-                    except Exception:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
+        """Wird bei Exit aufgerufen."""
+        pass
 
 
-cf_tunnel_manager = CloudflaredTunnelManager()
+CloudflaredTunnelManager = CloudflaredNamedTunnelManager
+cf_tunnel_manager = CloudflaredNamedTunnelManager()
 atexit.register(cf_tunnel_manager.stop_all)
 
 
@@ -759,66 +857,9 @@ class WebserverDiscoveryScanner:
         self.discovered_servers = []
 
     def get_cloudflared_map(self):
-        cf_map = {}
-        url_dir = "/home/yash/.cloudflared-urls"
-        port_file_map = {
-            "dash.url": 5000,
-            "dashboard.url": 5000,
-            "xdcc.url": 3000,
-            "telemetry.url": 8000,
-        }
-        if os.path.exists(url_dir):
-            try:
-                for fname in os.listdir(url_dir):
-                    fpath = os.path.join(url_dir, fname)
-                    if os.path.isfile(fpath):
-                        with open(fpath, "r", encoding="utf-8") as f:
-                            u = f.read().strip()
-                            if u.startswith("https://"):
-                                p = port_file_map.get(fname.lower())
-                                if not p:
-                                    m_p = re.search(r"(\d+)", fname)
-                                    if m_p:
-                                        p = int(m_p.group(1))
-                                if p:
-                                    cf_map[p] = u
-            except Exception:
-                pass
-
-        # URLs aus dem TunnelManager
-        for p, u in cf_tunnel_manager.get_all_urls().items():
-            if u:
-                cf_map[p] = u
-
-        for log_path, p in [("/tmp/cloudflared_dash.log", 5000), ("/tmp/cloudflared_xdcc.log", 3000)]:
-            if p not in cf_map and os.path.exists(log_path):
-                try:
-                    with open(log_path, "r", errors="ignore") as f:
-                        urls = re.findall(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com", f.read())
-                        if urls:
-                            cf_map[p] = urls[-1]
-                except Exception:
-                    pass
-
-        if psutil:
-            try:
-                for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-                    cmd = proc.info.get("cmdline") or []
-                    cmd_str = " ".join(cmd)
-                    if "cloudflared" in cmd_str and "--url" in cmd_str:
-                        m_port = re.search(r"--url\s+https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)", cmd_str)
-                        if m_port:
-                            port = int(m_port.group(1))
-                            m_log = re.search(r"--logfile\s+(\S+)", cmd_str)
-                            if m_log and os.path.exists(m_log.group(1)) and port not in cf_map:
-                                with open(m_log.group(1), "r", errors="ignore") as f:
-                                    urls = re.findall(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com", f.read())
-                                    if urls:
-                                        cf_map[port] = urls[-1]
-            except Exception:
-                pass
-
-        return cf_map
+        if "cf_tunnel_manager" in globals() and cf_tunnel_manager:
+            return cf_tunnel_manager.get_all_urls()
+        return {}
 
     def scan(self):
         with self._lock:
@@ -897,16 +938,6 @@ class WebserverDiscoveryScanner:
             if not is_http:
                 continue
 
-            # GRUNDSATZ: NIEMALS 127.0.0.1 anzeigen - immer netzwerkfähige Adressen
-            lan_url = f"http://{lan_ip}:{port}"
-            ts_url = f"http://{ts_host}:{port}"
-            cf_url = cf_map.get(port)
-
-            # Automatisch Cloudflared Tunnel anlegen, falls noch keiner existiert
-            if not cf_url and port < 32768:
-                cf_tunnel_manager.ensure_tunnel(port)
-                cf_url = cf_tunnel_manager.get_url(port)
-
             title = f"{pname.capitalize()} (Port {port})"
             icon = "🌐"
             for reg_key, reg_val in SERVICE_REGISTRY.items():
@@ -928,6 +959,9 @@ class WebserverDiscoveryScanner:
                 elif "homeassistant" in cmd.lower() or port == 8123:
                     title = "Home Assistant"
                     icon = "🏠"
+                elif "matter" in cmd.lower() or port == 5580:
+                    title = "Matter Server"
+                    icon = "🔌"
                 elif "headroom" in cmd.lower() or port == 8787:
                     title = "Headroom AI Compression"
                     icon = "🧠"
@@ -940,6 +974,17 @@ class WebserverDiscoveryScanner:
                 elif port == 3001:
                     title = "Node Server (3001)"
                     icon = "🟢"
+
+            # GRUNDSATZ: NIEMALS 127.0.0.1 anzeigen - immer netzwerkfähige Adressen
+            lan_url = f"http://{lan_ip}:{port}"
+            ts_url = f"http://{ts_host}:{port}"
+            cf_url = cf_map.get(port)
+
+            # Automatisch Cloudflared Named Tunnel anlegen, falls noch keiner existiert
+            if not cf_url and port < 32768:
+                cf_url = cf_tunnel_manager.ensure_tunnel(port, process_name=pname, title=title)
+                if not cf_url:
+                    cf_url = cf_tunnel_manager.get_url(port)
 
             for reg_key, reg_val in SERVICE_REGISTRY.items():
                 if reg_val["port"] == port:
@@ -971,22 +1016,13 @@ class WebserverDiscoveryScanner:
         # Kurz abwarten falls neue Tunnel gerade gestartet wurden, um URLs direkt zu erfassen
         pending = [d for d in discovered if not d.get("cloudflared_url") and d.get("port", 99999) < 32768]
         if pending:
-            t_end = time.time() + 6.0
-            while time.time() < t_end:
-                time.sleep(0.5)
-                resolved = True
-                for d in pending:
-                    if not d.get("cloudflared_url"):
-                        u = cf_tunnel_manager.get_url(d["port"])
-                        if u:
-                            d["cloudflared_url"] = u
-                            for reg_key, reg_val in SERVICE_REGISTRY.items():
-                                if reg_val["port"] == d["port"]:
-                                    reg_val["cf_url"] = u
-                        else:
-                            resolved = False
-                if resolved:
-                    break
+            for d in pending:
+                u = cf_tunnel_manager.get_url(d["port"])
+                if u:
+                    d["cloudflared_url"] = u
+                    for reg_key, reg_val in SERVICE_REGISTRY.items():
+                        if reg_val["port"] == d["port"]:
+                            reg_val["cf_url"] = u
 
         now_ts = time.time()
         with self._lock:
@@ -3065,6 +3101,115 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .pill-fantasy { background-color: var(--c-almond); }
     .pill-solar { background-color: var(--c-gold); color: #000; }
     .pill-ha { background-color: var(--c-secondary); }
+    .pill-cycle { background-color: var(--c-secondary); color: #000; }
+    .pill-auth  { background-color: var(--c-almond); color: #000; }
+
+    /* Command Code Keypad & Rights Management */
+    .keypad-btn {
+      background: rgba(235, 148, 58, 0.15);
+      border: 1px solid var(--c-primary);
+      border-radius: 4px;
+      color: #ffffff;
+      font-family: var(--mono-family);
+      font-size: 1.25rem;
+      font-weight: 700;
+      padding: 0.6rem 0.4rem;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      text-align: center;
+      user-select: none;
+    }
+    .keypad-btn:hover {
+      background: var(--c-primary);
+      color: #000000;
+    }
+    .keypad-btn:active {
+      transform: scale(0.95);
+    }
+    .keypad-btn.keypad-special {
+      font-size: 0.85rem;
+      background: rgba(255, 255, 255, 0.1);
+      border-color: #888888;
+    }
+    .keypad-btn.keypad-special:hover {
+      background: #ffffff;
+      color: #000000;
+    }
+    .perm-checkbox-card {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 6px;
+      padding: 0.75rem;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .perm-checkbox-card:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--c-primary);
+    }
+    .perm-checkbox-card input[type="checkbox"] {
+      width: 1.3rem;
+      height: 1.3rem;
+      accent-color: var(--c-primary);
+      cursor: pointer;
+    }
+    .perm-card-info {
+      display: flex;
+      flex-direction: column;
+    }
+    .perm-name {
+      font-family: var(--font-family);
+      font-weight: 700;
+      font-size: 1.05rem;
+      letter-spacing: 0.05em;
+      color: var(--c-text);
+    }
+    .perm-desc {
+      font-size: 0.75rem;
+      color: #888888;
+    }
+
+    /* Cycle Tracker UI */
+    .cycle-tape-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(28px, 1fr));
+      gap: 4px;
+      margin-bottom: 0.5rem;
+    }
+    .cycle-tape-cell {
+      height: 38px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      font-family: var(--mono-family);
+      font-size: 0.75rem;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.15s ease;
+      color: #000;
+      font-weight: 700;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .cycle-tape-cell:hover {
+      filter: brightness(1.3);
+      transform: translateY(-2px);
+    }
+    .cycle-tape-cell.current-day {
+      border: 2px solid #ffffff !important;
+      box-shadow: 0 0 12px rgba(255, 255, 255, 0.8), inset 0 0 6px rgba(255, 255, 255, 0.5);
+      animation: pulseHighlight 1.5s infinite alternate;
+      color: #000000 !important;
+      font-size: 0.85rem !important;
+    }
+    @keyframes pulseHighlight {
+      0% { box-shadow: 0 0 8px rgba(255, 255, 255, 0.7); filter: brightness(1.1); }
+      100% { box-shadow: 0 0 18px rgba(255, 255, 255, 1.0); filter: brightness(1.4); }
+    }
 
     /* Solar LCARS UI */
     .solar-flow-card {
@@ -4596,6 +4741,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="lcars-pill-btn pill-ha" onclick="switchCategory('homeassistant')" id="btn-cat-homeassistant" style="display: none;">
           ASSISTANT
         </button>
+        <button class="lcars-pill-btn pill-cycle" onclick="switchCategory('cycle')" id="btn-cat-cycle" style="display: none;">
+          ZYKLUS
+        </button>
+        <button class="lcars-pill-btn pill-auth" onclick="toggleAuthModal()" id="btn-auth-toggle">
+          <span id="authBtnIcon">🔒</span> <span id="authBtnLabel">CODE</span>
+        </button>
       </nav>
 
       <div class="left-frame-lower">
@@ -5564,6 +5715,196 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </button>
           </div>
 
+          <!-- LCARS RECHTEVERWALTUNG // COMMAND CODE ZUGRIFFSKONTROLLE -->
+          <div class="lcars-card" id="configPermissionsCard" style="margin-top: 1.25rem; margin-bottom: 1.25rem; width: 100%; border-left: 6px solid var(--c-primary);">
+            <div class="card-head" style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <span class="card-head-icon" id="permHeadIcon">🔒</span>
+                <span class="card-head-title" style="color:var(--c-primary); font-size:1.15rem;">LCARS SICHERHEITSPROTOKOLL // RECHTEVERWALTUNG</span>
+              </div>
+              <span id="permStatusBadge" class="badge-status" style="background-color: var(--c-red); color: #fff;">GESPERRT // STUFE 1</span>
+            </div>
+
+            <p style="color:var(--c-gold); font-size:0.9rem; margin-bottom:1rem;">
+              ZUGANGSKONTROLLE FÜR SENSIBLE BEREICHE. GESPERRTE BEREICHE WERDEN ERST NACH EINGABE DES COMMAND CODES IN DER NAVIGATION ANGEZEIGT (INITIAL-CODE: 0901).
+            </p>
+
+            <!-- Locked State View (Command Code Input & Keypad) -->
+            <div id="permLockedView" style="display:block; background:rgba(0,0,0,0.5); border:1px solid rgba(235,148,58,0.3); border-radius:8px; padding:1.25rem;">
+              <div style="max-width: 420px; margin: 0 auto; text-align: center;">
+                <div style="font-family:var(--font-family); font-size:1.25rem; color:var(--c-primary); letter-spacing:0.08em; margin-bottom:0.5rem; text-transform:uppercase;">
+                  AUTHORISIERUNG ERFORDERLICH
+                </div>
+                <div style="font-family:var(--mono-family); font-size:0.85rem; color:#aaa; margin-bottom:1.2rem;">
+                  COMMAND CODE EINGEBEN UM DIE RECHTEVERWALTUNG ZU ENTSPERREN
+                </div>
+
+                <div style="display:flex; gap:0.5rem; justify-content:center; align-items:center; margin-bottom:1rem;">
+                  <input type="password" id="configPinInput" maxlength="10" placeholder="••••" class="lcars-input" style="width:180px; font-size:1.6rem; text-align:center; letter-spacing:0.3em; font-family:var(--mono-family);" onkeydown="if(event.key==='Enter') verifyConfigPin();">
+                  <button type="button" class="left-action-btn" onclick="verifyConfigPin()" style="padding:0.6rem 1.2rem; font-size:0.95rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+                    <span>🔓</span> <span>LOGIN</span>
+                  </button>
+                </div>
+
+                <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:0.4rem; max-width:210px; margin:0 auto 1rem auto;">
+                  <button type="button" class="keypad-btn" onclick="appendConfigPin('1')">1</button>
+                  <button type="button" class="keypad-btn" onclick="appendConfigPin('2')">2</button>
+                  <button type="button" class="keypad-btn" onclick="appendConfigPin('3')">3</button>
+                  <button type="button" class="keypad-btn" onclick="appendConfigPin('4')">4</button>
+                  <button type="button" class="keypad-btn" onclick="appendConfigPin('5')">5</button>
+                  <button type="button" class="keypad-btn" onclick="appendConfigPin('6')">6</button>
+                  <button type="button" class="keypad-btn" onclick="appendConfigPin('7')">7</button>
+                  <button type="button" class="keypad-btn" onclick="appendConfigPin('8')">8</button>
+                  <button type="button" class="keypad-btn" onclick="appendConfigPin('9')">9</button>
+                  <button type="button" class="keypad-btn keypad-special" onclick="clearConfigPin()">CLR</button>
+                  <button type="button" class="keypad-btn" onclick="appendConfigPin('0')">0</button>
+                  <button type="button" class="keypad-btn keypad-special" onclick="verifyConfigPin()">ENTER</button>
+                </div>
+
+                <div id="configPinError" style="display:none; color:var(--c-red); font-family:var(--mono-family); font-size:0.85rem; margin-top:0.5rem;">
+                  ZUGRIFF VERWEIGERT // UNGÜLTIGER COMMAND CODE
+                </div>
+              </div>
+            </div>
+
+            <!-- Unlocked Management View -->
+            <div id="permUnlockedView" style="display:none;">
+              <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:0.75rem 1rem; margin-bottom:1.25rem;">
+                <div style="display:flex; align-items:center; gap:0.6rem;">
+                  <span style="color:#44dd88; font-size:1.2rem;">●</span>
+                  <span style="font-family:var(--mono-family); font-size:0.9rem; color:#44dd88; font-weight:700;">COMMAND TERMINAL ENTSPERRT // SICHERHEITSSTUFE ALPHA</span>
+                </div>
+                <button type="button" class="left-action-btn" onclick="lockPermissionsSession()" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:var(--c-red); color:var(--c-red);">
+                  <span>🔒</span> <span>JETZT SPERREN</span>
+                </button>
+              </div>
+
+              <form id="permissionsForm" onsubmit="savePermissionsConfig(event)">
+                <!-- Bereichs-Sperren Grid -->
+                <div style="margin-bottom: 1.5rem;">
+                  <div style="font-family:var(--font-family); font-size:1.05rem; font-weight:700; color:var(--c-primary); letter-spacing:0.05em; margin-bottom:0.6rem; text-transform:uppercase;">
+                    1. BEREICHS-SPERREN KONFIGURIEREN (SICHTBARKEIT IN NAVIGATION)
+                  </div>
+                  <div style="font-size:0.85rem; color:#aaa; margin-bottom:0.75rem;">
+                    Aktivieren Sie die Checkbox für Bereiche, die gesperrt sein sollen. Gesperrte Bereiche werden erst in der Navigationsleiste angezeigt, wenn der Command Code eingegeben wurde.
+                  </div>
+
+                  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:0.75rem;">
+                    <!-- SYSTEM -->
+                    <label class="perm-checkbox-card">
+                      <input type="checkbox" id="permLock_system" value="system" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name">SYSTEM</span>
+                        <span class="perm-desc">System Status &amp; Sensor Verlauf</span>
+                      </div>
+                    </label>
+
+                    <!-- SERVICES -->
+                    <label class="perm-checkbox-card">
+                      <input type="checkbox" id="permLock_services" value="services" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name">SERVICES</span>
+                        <span class="perm-desc">Web-Services &amp; Scanner</span>
+                      </div>
+                    </label>
+
+                    <!-- KI-AGENTEN -->
+                    <label class="perm-checkbox-card">
+                      <input type="checkbox" id="permLock_agents" value="agents" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name">KI-AGENTEN</span>
+                        <span class="perm-desc">9Router, Hermes, IDE</span>
+                      </div>
+                    </label>
+
+                    <!-- KI-INFO -->
+                    <label class="perm-checkbox-card">
+                      <input type="checkbox" id="permLock_ai-info" value="ai-info" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name">KI-INFO</span>
+                        <span class="perm-desc">Telemetrie &amp; Modell-Charts</span>
+                      </div>
+                    </label>
+
+                    <!-- CONFIG -->
+                    <label class="perm-checkbox-card">
+                      <input type="checkbox" id="permLock_config" value="config" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name">CONFIG</span>
+                        <span class="perm-desc">System &amp; Alarm Einstellungen</span>
+                      </div>
+                    </label>
+
+                    <!-- FANTASY -->
+                    <label class="perm-checkbox-card">
+                      <input type="checkbox" id="permLock_fantasy" value="fantasy" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name">FANTASY</span>
+                        <span class="perm-desc">ESPN Fantasy Football</span>
+                      </div>
+                    </label>
+
+                    <!-- SOLAR -->
+                    <label class="perm-checkbox-card">
+                      <input type="checkbox" id="permLock_solar" value="solar" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name">SOLAR</span>
+                        <span class="perm-desc">Balkonsolar Energiemanagement</span>
+                      </div>
+                    </label>
+
+                    <!-- HOME ASSISTANT -->
+                    <label class="perm-checkbox-card">
+                      <input type="checkbox" id="permLock_homeassistant" value="homeassistant" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name">ASSISTANT</span>
+                        <span class="perm-desc">Smart Home Steuerung</span>
+                      </div>
+                    </label>
+
+                    <!-- ZYKLUS (NEW) -->
+                    <label class="perm-checkbox-card" style="border-color:var(--c-secondary);">
+                      <input type="checkbox" id="permLock_cycle" value="cycle" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name" style="color:var(--c-secondary);">ZYKLUS</span>
+                        <span class="perm-desc">Partnerinnen-Zyklus Tracker</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Command Code Ändern -->
+                <div style="margin-bottom:1.5rem; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:1rem;">
+                  <div style="font-family:var(--font-family); font-size:1.05rem; font-weight:700; color:var(--c-gold); letter-spacing:0.05em; margin-bottom:0.6rem; text-transform:uppercase;">
+                    2. COMMAND CODE ÄNDERN (OPTIONAL)
+                  </div>
+                  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:1rem;">
+                    <div class="config-field">
+                      <label for="permNewCode" style="font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem; display:block;">
+                        NEUER COMMAND CODE
+                      </label>
+                      <input type="password" id="permNewCode" placeholder="Leer lassen falls unverändert" class="lcars-input">
+                    </div>
+                    <div class="config-field">
+                      <label for="permNewCodeConfirm" style="font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem; display:block;">
+                        NEUEN CODE WIEDERHOLEN
+                      </label>
+                      <input type="password" id="permNewCodeConfirm" placeholder="Wiederholen" class="lcars-input">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Save Button & Feedback -->
+                <div style="display:flex; justify-content:flex-end; gap:0.75rem; align-items:center;">
+                  <div id="permSaveFeedback" style="display:none; font-family:var(--mono-family); font-size:0.85rem; color:#44dd88;"></div>
+                  <button type="submit" class="left-action-btn" id="btnSavePerm" style="padding:0.5rem 1.25rem; font-size:0.9rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+                    <span>💾</span> <span>RECHTE-KONFIGURATION SPEICHERN</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+
           <!-- HOME ASSISTANT INTEGRATION CONFIG -->
           <div class="lcars-card" style="margin-top: 1.25rem; margin-bottom: 1.25rem; width: 100%; border-left: 6px solid var(--c-secondary);">
             <div class="card-head">
@@ -6363,6 +6704,302 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
+        <!-- KATEGORIE: ZYKLUS-TRACKER // PARTNERINNEN-ZYKLUS -->
+        <section class="lcars-section" id="section-cycle">
+          <div class="lcars-header-bar">
+            <h2>BIO-TELEMETRIE // PARTNERINNEN-ZYKLUS TRACKER</h2>
+            <span class="lcars-pill-tag">MULTI-MONITORING 1-30 TAGE // VERGLEICHSGRAPH</span>
+          </div>
+
+          <!-- Empty State (when no partners exist) -->
+          <div id="cycleEmptyState" class="lcars-card" style="text-align:center; padding:3rem 1.5rem; display:none;">
+            <div style="font-size:3rem; margin-bottom:0.8rem;">🧬</div>
+            <div style="font-family:var(--font-family); font-size:1.4rem; color:var(--c-secondary); letter-spacing:0.06em; margin-bottom:0.5rem; text-transform:uppercase;">
+              KEINE PARTNERINNEN-DATEN ERFASST
+            </div>
+            <p style="color:#aaa; max-width:520px; margin:0 auto 1.5rem auto; font-size:0.9rem;">
+              Legen Sie eine Partnerin mit Namen, Zyklusdauer und letztem Periodenbeginn an, um den Zyklusverlauf, Phasen und den 1-30 Tage Graphen mit Live-Highlighting anzuzeigen.
+            </p>
+            <button class="left-action-btn" onclick="openAddPartnerModal()" style="padding:0.6rem 1.5rem; font-size:1rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
+              <span>➕</span> <span>ERSTE PARTNERIN ANLEGEN</span>
+            </button>
+          </div>
+
+          <!-- Active Content (when partners exist) -->
+          <div id="cycleActiveContent" style="display:none;">
+
+            <!-- 1. DIREKT OBEN UNTER ZYKLUS: DER MULTI-PARTNERINNEN VERGLEICHSGRAPH (1-30 TAGE) -->
+            <div class="lcars-card" style="margin-bottom:1.25rem; padding:1.15rem; width:100%; border-top:4px solid var(--c-secondary);">
+              <div class="card-head" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.75rem;">
+                <div style="display:flex; align-items:center; gap:0.6rem;">
+                  <span class="card-head-title" style="color:var(--c-primary); font-size:1.2rem; font-weight:700; letter-spacing:0.05em;">
+                    ZYKLUSVERLÄUFE ALLER PARTNERINNEN // TAGE 1 BIS 30
+                  </span>
+                  <span class="card-head-icon">📈</span>
+                </div>
+                <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                  <span id="multiCycleCountBadge" class="lcars-pill-tag" style="background:rgba(255,255,255,0.1); color:#fff; font-size:0.78rem;">
+                    ALLE PARTNERINNEN
+                  </span>
+                  <button class="left-action-btn" onclick="openAddPartnerModal()" style="padding:0.35rem 0.85rem; font-size:0.82rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
+                    <span>➕</span> <span>PARTNERIN ANLEGEN</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Badges aller Partnerinnen mit Farbcode, aktuellem Tag & Phase -->
+              <div id="cycleMultiPartnerBadges" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-bottom:0.85rem;">
+                <!-- Populated dynamically via JS -->
+              </div>
+
+              <!-- Canvas for Multi-Partner Chart.js Graph (1-30 Days) -->
+              <div style="position:relative; width:100%; height:320px; margin-bottom:0.6rem;">
+                <canvas id="cycleChart"></canvas>
+              </div>
+
+              <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; font-size:0.75rem; color:#888; font-family:var(--mono-family); border-top:1px solid rgba(255,255,255,0.08); padding-top:0.45rem;">
+                <span>💡 Klicke auf eine Partnerin in den Badges oder der Legende, um ihr Detailprofil aufzurufen oder Kurven zu filtern. Große weiße Punkte = Aktueller Tag (★ HEUTE).</span>
+                <span id="cycleGraphScaleInfo" style="color:var(--c-gold);">BEREICH: TAGE 1 BIS 30 // LIVE-HIGHLIGHT</span>
+              </div>
+            </div>
+
+            <!-- 2. DETAILANSICHT // EINZELPROFIL-TELEMETRIE -->
+            <div class="lcars-card" style="margin-bottom:1.25rem; border-left:6px solid var(--c-secondary); padding:1.1rem;">
+              <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
+                <div style="display:flex; align-items:center; gap:0.75rem;">
+                  <span style="font-size:1.8rem;">🧬</span>
+                  <div>
+                    <div style="display:flex; align-items:baseline; gap:0.6rem; flex-wrap:wrap;">
+                      <div style="font-family:var(--font-family); font-size:1.6rem; font-weight:700; color:#fff; letter-spacing:0.06em; text-transform:uppercase;" id="activePartnerName">
+                        PARTNERIN
+                      </div>
+                      <span id="activePartnerPhaseTag" style="font-family:var(--mono-family); font-size:0.82rem; color:var(--c-gold); font-weight:700;">
+                        ★ AKTIVES PROFIL
+                      </span>
+                    </div>
+                    <div style="font-family:var(--mono-family); font-size:0.8rem; color:#aaa;" id="activePartnerSub">
+                      ZYKLUS: 28 TAGE // PERIODE: 5 TAGE
+                    </div>
+                  </div>
+                </div>
+
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                  <button class="left-action-btn" onclick="triggerNewCycleToday()" title="Setzt den ersten Tag des neuen Zyklus auf das heutige Datum" style="padding:0.4rem 0.8rem; font-size:0.82rem; border-color:var(--c-red); color:var(--c-red);">
+                    <span>🩸</span> <span>NEUER ZYKLUS HEUTE</span>
+                  </button>
+                  <button class="left-action-btn" onclick="openEditPartnerModal()" style="padding:0.4rem 0.8rem; font-size:0.82rem;">
+                    <span>✏️</span> <span>BEARBEITEN</span>
+                  </button>
+                  <button class="left-action-btn" onclick="confirmDeletePartner()" style="padding:0.4rem 0.8rem; font-size:0.82rem; border-color:#888; color:#bbb;">
+                    <span>🗑️</span> <span>LÖSCHEN</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Partner Tabs / Pills to switch inspected profile -->
+              <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem; padding-bottom:0.75rem; border-bottom:1px solid rgba(255,255,255,0.08);">
+                <span style="font-size:0.75rem; color:#888; font-family:var(--mono-family); text-transform:uppercase;">DETAILPROFIL WÄHLEN:</span>
+                <div id="cyclePartnerPills" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                  <!-- Populated dynamically via JS -->
+                </div>
+              </div>
+
+              <!-- Vitals Grid -->
+              <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:1rem;">
+                <!-- Aktueller Tag -->
+                <div class="telemetry-box" style="background:rgba(0,0,0,0.4); border:1px solid var(--c-secondary); border-radius:6px; padding:0.85rem;">
+                  <div style="font-size:0.75rem; color:var(--c-secondary); font-family:var(--mono-family); text-transform:uppercase;">
+                    AKTUELLES STADIUM // HEUTE
+                  </div>
+                  <div style="display:flex; align-items:baseline; gap:0.4rem; margin-top:0.25rem;">
+                    <span style="font-size:2.2rem; font-weight:700; font-family:var(--font-family); color:#ffffff;" id="dispCurrentDay">TAG 14</span>
+                    <span style="font-size:1rem; color:#aaa; font-family:var(--mono-family);" id="dispCycleDuration">/ 28 TAGE</span>
+                  </div>
+                  <div style="margin-top:0.4rem; background:rgba(255,255,255,0.1); border-radius:4px; height:8px; overflow:hidden;">
+                    <div id="dispCycleProgress" style="background:var(--c-secondary); height:100%; width:50%; transition:width 0.4s ease;"></div>
+                  </div>
+                </div>
+
+                <!-- Aktuelle Phase -->
+                <div class="telemetry-box" style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:0.85rem;">
+                  <div style="font-size:0.75rem; color:var(--c-gold); font-family:var(--mono-family); text-transform:uppercase;">
+                    AKTUELLE PHASE &amp; BIORHYTHMUS
+                  </div>
+                  <div style="margin-top:0.35rem;">
+                    <span id="dispPhaseBadge" class="badge-status" style="background:#baa4e5; color:#000; font-weight:700; font-size:0.9rem;">
+                      EISPRUNG / OVULATION
+                    </span>
+                  </div>
+                  <div id="dispPhaseDesc" style="font-size:0.78rem; color:#bbb; margin-top:0.4rem; line-height:1.25;">
+                    LH- &amp; Östrogen-Peak. Höchste Fruchtbarkeit &amp; Energie.
+                  </div>
+                </div>
+
+                <!-- Fruchtbarkeit & Countdown -->
+                <div class="telemetry-box" style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:0.85rem;">
+                  <div style="font-size:0.75rem; color:var(--c-almond); font-family:var(--mono-family); text-transform:uppercase;">
+                    FRUCHTBARKEIT &amp; NÄCHSTE PERIODE
+                  </div>
+                  <div style="font-size:1.15rem; font-weight:700; color:#fff; font-family:var(--font-family); margin-top:0.25rem;" id="dispFertilityStatus">
+                    SEHR HOCH (MAXIMAL)
+                  </div>
+                  <div style="font-size:0.8rem; color:#bbb; font-family:var(--mono-family); margin-top:0.3rem;">
+                    In <span id="dispDaysUntilNext" style="color:var(--c-gold); font-weight:700;">14</span> Tagen (<span id="dispNextDate">29.09.2026</span>)
+                  </div>
+                </div>
+              </div>
+
+              <!-- LCARS 1-30 DAY TAPE (INTERACTIVE TIMELINE) FÜR DAS DETAILPROFIL -->
+              <div style="margin-top:1.25rem; border-top:1px solid rgba(255,255,255,0.1); padding-top:1rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap; gap:0.4rem;">
+                  <span style="font-family:var(--font-family); font-size:0.95rem; font-weight:700; color:var(--c-gold); letter-spacing:0.06em; text-transform:uppercase;">
+                    LCARS 30-TAGE BAND // TAGES-INSPEKTOR (<span id="tapePartnerName">PARTNERIN</span>)
+                  </span>
+                  <span style="font-size:0.75rem; color:#888; font-family:var(--mono-family);">
+                    KLICKE AUF EINEN TAG FÜR DETAILINFOS
+                  </span>
+                </div>
+
+                <div id="cycleTapeContainer" class="cycle-tape-row">
+                  <!-- 30 interactive day cells populated via JS -->
+                </div>
+
+                <!-- Day Inspector Card -->
+                <div id="dayInspectorCard" style="margin-top:0.75rem; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:0.65rem 0.9rem; font-family:var(--mono-family); font-size:0.85rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                  <div>
+                    <span id="inspectDayLabel" style="font-weight:700; color:var(--c-secondary);">TAG 14</span>:
+                    <span id="inspectPhaseLabel" style="color:#fff;">EISPRUNG // OVULATION</span>
+                    <span id="inspectTodayBadge" style="color:var(--c-gold); margin-left:0.5rem; font-weight:700;">(★ HEUTE)</span>
+                  </div>
+                  <div id="inspectInfoText" style="color:#aaa; font-size:0.8rem;">
+                    LH- &amp; Östrogen-Peak! Maximale Fruchtbarkeit, hohe Energie, gesteigerte Libido.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 3. Partnerinnen Übersicht & Schnell-Wechsler Grid -->
+            <div id="allPartnersOverviewCard" class="lcars-card" style="margin-bottom:1.25rem;">
+              <div class="card-head-title" style="margin-bottom:0.75rem;">ALLE ERFASSTEN PARTNERINNEN // ÜBERSICHTSKARTEN</div>
+              <div id="partnersGrid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:0.75rem;">
+                <!-- Cards per partner -->
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- LCARS PARTNER FORM MODAL (ANLEGEN / BEARBEITEN) -->
+        <div id="partnerFormModal" class="ha-modal-overlay" style="display:none;" onclick="handlePartnerModalBackdropClick(event)">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:480px;">
+            <div class="ha-modal-header" style="background:var(--c-secondary); color:#000;">
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <span style="font-size:1.3rem;">🧬</span>
+                <div id="partnerModalTitle" style="font-size:1.15rem; font-weight:700; text-transform:uppercase; font-family:var(--font-family);">
+                  PARTNERIN ANLEGEN
+                </div>
+              </div>
+              <button class="ha-modal-close-btn" onclick="closePartnerModal()">✕</button>
+            </div>
+            <div class="ha-modal-body" style="padding:1.25rem;">
+              <form id="partnerForm" onsubmit="savePartnerData(event)">
+                <input type="hidden" id="formPartnerId" value="">
+
+                <div class="config-field" style="margin-bottom:1rem;">
+                  <label for="formPartnerName" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-secondary); margin-bottom:0.35rem;">
+                    👤 NAME DER PARTNERIN
+                  </label>
+                  <input type="text" id="formPartnerName" class="lcars-input" placeholder="z.B. Sarah" required>
+                </div>
+
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem; margin-bottom:1rem;">
+                  <div class="config-field">
+                    <label for="formCycleDuration" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem;">
+                      ⏱️ ZYKLUSDAUER (TAGE)
+                    </label>
+                    <input type="number" id="formCycleDuration" min="15" max="60" value="28" class="lcars-input" required>
+                    <div style="font-size:0.72rem; color:#888; margin-top:0.25rem;">Standard: 28 Tage (15-60)</div>
+                  </div>
+
+                  <div class="config-field">
+                    <label for="formPeriodDuration" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-red); margin-bottom:0.35rem;">
+                      🩸 PERIODENDAUER (TAGE)
+                    </label>
+                    <input type="number" id="formPeriodDuration" min="1" max="15" value="5" class="lcars-input" required>
+                    <div style="font-size:0.72rem; color:#888; margin-top:0.25rem;">Standard: 5 Tage (1-15)</div>
+                  </div>
+                </div>
+
+                <div class="config-field" style="margin-bottom:1rem;">
+                  <label for="formStartDate" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-primary); margin-bottom:0.35rem;">
+                    📅 LETZTER PERIODENBEGINN (STARTDATUM)
+                  </label>
+                  <input type="date" id="formStartDate" class="lcars-input" required>
+                  <div style="font-size:0.72rem; color:#888; margin-top:0.25rem;">Erster Tag der letzten Menstruation</div>
+                </div>
+
+                <div class="config-field" style="margin-bottom:1.25rem;">
+                  <label for="formNotes" style="display:block; font-size:0.85rem; font-weight:700; color:#aaa; margin-bottom:0.35rem;">
+                    📝 NOTIZEN / BESONDERHEITEN (OPTIONAL)
+                  </label>
+                  <textarea id="formNotes" class="lcars-input" style="height:60px; resize:vertical;" placeholder="z.B. Zyklusschwankungen, Pille, Wohlbefinden..."></textarea>
+                </div>
+
+                <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
+                  <button type="button" class="left-action-btn" onclick="closePartnerModal()" style="padding:0.4rem 0.9rem;">ABBRECHEN</button>
+                  <button type="submit" class="left-action-btn" style="padding:0.4rem 1.2rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
+                    💾 SPEICHERN
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- LCARS GLOBAL COMMAND CODE AUTH MODAL -->
+        <div id="lcarsAuthModal" class="ha-modal-overlay" style="display:none;" onclick="handleAuthModalBackdropClick(event)">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:380px;">
+            <div class="ha-modal-header" style="background:var(--c-primary); color:#000;">
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <span style="font-size:1.3rem;">🔐</span>
+                <div style="font-size:1.1rem; font-weight:700; text-transform:uppercase; font-family:var(--font-family);">
+                  LCARS COMMAND CODE
+                </div>
+              </div>
+              <button class="ha-modal-close-btn" onclick="closeAuthModal()">✕</button>
+            </div>
+            <div class="ha-modal-body" style="text-align:center; padding:1.25rem 1rem;">
+              <div style="font-family:var(--mono-family); font-size:0.82rem; color:var(--c-gold); margin-bottom:1rem;">
+                ZUGANG ZU GESPERRTEN BEREICHEN FREISCHALTEN
+              </div>
+              <div style="display:flex; justify-content:center; gap:0.5rem; margin-bottom:1rem;">
+                <input type="password" id="modalPinInput" maxlength="10" placeholder="••••" class="lcars-input" style="width:160px; font-size:1.6rem; text-align:center; letter-spacing:0.3em; font-family:var(--mono-family);" onkeydown="if(event.key==='Enter') verifyModalPin();">
+                <button type="button" class="left-action-btn" onclick="verifyModalPin()" style="padding:0.4rem 1rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+                  ENTER
+                </button>
+              </div>
+
+              <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:0.4rem; max-width:210px; margin:0 auto 1rem auto;">
+                <button type="button" class="keypad-btn" onclick="appendModalPin('1')">1</button>
+                <button type="button" class="keypad-btn" onclick="appendModalPin('2')">2</button>
+                <button type="button" class="keypad-btn" onclick="appendModalPin('3')">3</button>
+                <button type="button" class="keypad-btn" onclick="appendModalPin('4')">4</button>
+                <button type="button" class="keypad-btn" onclick="appendModalPin('5')">5</button>
+                <button type="button" class="keypad-btn" onclick="appendModalPin('6')">6</button>
+                <button type="button" class="keypad-btn" onclick="appendModalPin('7')">7</button>
+                <button type="button" class="keypad-btn" onclick="appendModalPin('8')">8</button>
+                <button type="button" class="keypad-btn" onclick="appendModalPin('9')">9</button>
+                <button type="button" class="keypad-btn keypad-special" onclick="clearModalPin()">CLR</button>
+                <button type="button" class="keypad-btn" onclick="appendModalPin('0')">0</button>
+                <button type="button" class="keypad-btn keypad-special" onclick="verifyModalPin()">OK</button>
+              </div>
+
+              <div id="modalPinError" style="display:none; color:var(--c-red); font-family:var(--mono-family); font-size:0.85rem; margin-top:0.5rem;">
+                ZUGRIFF VERWEIGERT // CODE UNGÜLTIG
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- LCARS ENTITY CONTROL MODAL -->
         <div id="haControlModal" class="ha-modal-overlay" style="display:none;" onclick="handleModalBackdropClick(event)">
           <div class="ha-modal-content" onclick="event.stopPropagation()">
@@ -6619,7 +7256,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   });
 
-  // 8 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
+  // 9 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
   const CATEGORY_NAMES = {
     'system': 'SYSTEM & SENSOR VERLAUF',
     'services': 'SERVICES & PROZESS-SCANNER',
@@ -6628,10 +7265,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     'config': 'SYSTEM CONFIG & FARBMODI',
     'fantasy': 'ESPN FANTASY FOOTBALL // INCOMPLETE PASS',
     'solar': 'LCARS ENERGIE-MANAGEMENT // BALKONSOLAR',
-    'homeassistant': 'LCARS HAUSSTEUERUNG // HOME ASSISTANT'
+    'homeassistant': 'LCARS HAUSSTEUERUNG // HOME ASSISTANT',
+    'cycle': 'LCARS BIO-TELEMETRIE // PARTNERINNEN-ZYKLUS'
   };
 
   function switchCategory(catId) {
+    if (typeof isCategoryLocked === 'function' && isCategoryLocked(catId)) {
+      pendingUnlockCategory = catId;
+      openAuthModal();
+      return;
+    }
+
     playLcarsBeep(980, 1400);
     currentCategory = catId;
 
@@ -6704,6 +7348,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         haCountdownSeconds = 15;
         updateHaCountdownUI();
         loadHomeAssistantData(false);
+      }, 60);
+    }
+    if (catId === 'cycle') {
+      setTimeout(() => {
+        loadCycleData();
       }, 60);
     }
   }
@@ -10933,6 +11582,974 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
+  // ==========================================================================
+  // LCARS PERMISSIONS & COMMAND CODE CONTROLLER
+  // ==========================================================================
+  var currentLockedSections = ['cycle'];
+  var pendingUnlockCategory = null;
+  var currentAuthCode = sessionStorage.getItem('lcars_auth_code') || '0901';
+
+  function isCategoryLocked(catId) {
+    const isUnlocked = (sessionStorage.getItem('lcars_auth_unlocked') === 'true');
+    return currentLockedSections.includes(catId) && !isUnlocked;
+  }
+
+  async function fetchPermissionsStatus() {
+    try {
+      const resp = await fetch('/api/permissions/status');
+      if (resp.ok) {
+        const data = await resp.json();
+        if (Array.isArray(data.locked_sections)) {
+          currentLockedSections = data.locked_sections;
+        }
+      }
+    } catch (e) {
+      console.warn('Fehler beim Laden der Rechtekonfiguration:', e);
+    }
+    applyPermissionsVisibility();
+  }
+
+  function applyPermissionsVisibility() {
+    const isUnlocked = (sessionStorage.getItem('lcars_auth_unlocked') === 'true');
+    const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle'];
+
+    allSections.forEach(secId => {
+      const btn = document.getElementById('btn-cat-' + secId);
+      if (!btn) return;
+
+      const isLocked = currentLockedSections.includes(secId);
+      if (isLocked && !isUnlocked) {
+        btn.style.display = 'none';
+      } else {
+        if (secId === 'homeassistant') {
+          checkHomeAssistantConfig();
+          return;
+        }
+        btn.style.display = '';
+      }
+    });
+
+    // Update Auth button in left pillar
+    const authBtnLabel = document.getElementById('authBtnLabel');
+    const authBtnIcon = document.getElementById('authBtnIcon');
+    const authBtn = document.getElementById('btn-auth-toggle');
+    if (isUnlocked) {
+      if (authBtnLabel) authBtnLabel.textContent = 'SPERREN';
+      if (authBtnIcon) authBtnIcon.textContent = '🔓';
+      if (authBtn) authBtn.style.backgroundColor = 'var(--c-red)';
+    } else {
+      if (authBtnLabel) authBtnLabel.textContent = 'CODE';
+      if (authBtnIcon) authBtnIcon.textContent = '🔒';
+      if (authBtn) authBtn.style.backgroundColor = 'var(--c-almond)';
+    }
+
+    // Update Config Rechteverwaltung Card
+    updateConfigPermUI(isUnlocked);
+
+    // If current category is locked and not unlocked, fallback to system
+    if (!isUnlocked && currentLockedSections.includes(currentCategory)) {
+      switchCategory('system');
+    }
+  }
+
+  function updateConfigPermUI(isUnlocked) {
+    const lockedView = document.getElementById('permLockedView');
+    const unlockedView = document.getElementById('permUnlockedView');
+    const badge = document.getElementById('permStatusBadge');
+    const icon = document.getElementById('permHeadIcon');
+
+    if (isUnlocked) {
+      if (lockedView) lockedView.style.display = 'none';
+      if (unlockedView) unlockedView.style.display = 'block';
+      if (badge) {
+        badge.textContent = 'ENTSPERRT // STUFE ALPHA';
+        badge.style.backgroundColor = '#44dd88';
+        badge.style.color = '#000000';
+      }
+      if (icon) icon.textContent = '🔓';
+
+      // Check the checkboxes for currentLockedSections
+      const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle'];
+      allSections.forEach(secId => {
+        const cb = document.getElementById('permLock_' + secId);
+        if (cb) {
+          cb.checked = currentLockedSections.includes(secId);
+        }
+      });
+    } else {
+      if (lockedView) lockedView.style.display = 'block';
+      if (unlockedView) unlockedView.style.display = 'none';
+      if (badge) {
+        badge.textContent = 'GESPERRT // STUFE 1';
+        badge.style.backgroundColor = 'var(--c-red)';
+        badge.style.color = '#ffffff';
+      }
+      if (icon) icon.textContent = '🔒';
+    }
+  }
+
+  function openAuthModal() {
+    playLcarsBeep(880, 1400);
+    const modal = document.getElementById('lcarsAuthModal');
+    if (modal) {
+      modal.style.display = 'flex';
+      const inp = document.getElementById('modalPinInput');
+      if (inp) {
+        inp.value = '';
+        inp.focus();
+      }
+      const err = document.getElementById('modalPinError');
+      if (err) err.style.display = 'none';
+    }
+  }
+
+  function closeAuthModal() {
+    playLcarsBeep(440, 220);
+    const modal = document.getElementById('lcarsAuthModal');
+    if (modal) modal.style.display = 'none';
+    pendingUnlockCategory = null;
+  }
+
+  function handleAuthModalBackdropClick(e) {
+    if (e.target && e.target.id === 'lcarsAuthModal') {
+      closeAuthModal();
+    }
+  }
+
+  function toggleAuthModal() {
+    const isUnlocked = (sessionStorage.getItem('lcars_auth_unlocked') === 'true');
+    if (isUnlocked) {
+      lockPermissionsSession();
+    } else {
+      openAuthModal();
+    }
+  }
+
+  function appendModalPin(digit) {
+    playLcarsBeep(1200, 1600);
+    const inp = document.getElementById('modalPinInput');
+    if (inp && inp.value.length < 10) {
+      inp.value += digit;
+    }
+  }
+
+  function clearModalPin() {
+    playLcarsBeep(500, 300);
+    const inp = document.getElementById('modalPinInput');
+    if (inp) inp.value = '';
+    const err = document.getElementById('modalPinError');
+    if (err) err.style.display = 'none';
+  }
+
+  async function verifyModalPin() {
+    const inp = document.getElementById('modalPinInput');
+    const code = inp ? inp.value.trim() : '';
+    if (!code) return;
+
+    try {
+      const resp = await fetch('/api/permissions/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code })
+      });
+      const res = await resp.json();
+      if (res.valid) {
+        sessionStorage.setItem('lcars_auth_unlocked', 'true');
+        sessionStorage.setItem('lcars_auth_code', code);
+        currentAuthCode = code;
+        playLcarsAcknowledge();
+        closeAuthModal();
+        applyPermissionsVisibility();
+        if (pendingUnlockCategory) {
+          const target = pendingUnlockCategory;
+          pendingUnlockCategory = null;
+          switchCategory(target);
+        }
+      } else {
+        playLcarsBeep(300, 150);
+        const err = document.getElementById('modalPinError');
+        if (err) err.style.display = 'block';
+        if (inp) {
+          inp.value = '';
+          inp.focus();
+        }
+      }
+    } catch (e) {
+      alert('Fehler bei der Authentifizierung: ' + e);
+    }
+  }
+
+  function appendConfigPin(digit) {
+    playLcarsBeep(1200, 1600);
+    const inp = document.getElementById('configPinInput');
+    if (inp && inp.value.length < 10) {
+      inp.value += digit;
+    }
+  }
+
+  function clearConfigPin() {
+    playLcarsBeep(500, 300);
+    const inp = document.getElementById('configPinInput');
+    if (inp) inp.value = '';
+    const err = document.getElementById('configPinError');
+    if (err) err.style.display = 'none';
+  }
+
+  async function verifyConfigPin() {
+    const inp = document.getElementById('configPinInput');
+    const code = inp ? inp.value.trim() : '';
+    if (!code) return;
+
+    try {
+      const resp = await fetch('/api/permissions/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code })
+      });
+      const res = await resp.json();
+      if (res.valid) {
+        sessionStorage.setItem('lcars_auth_unlocked', 'true');
+        sessionStorage.setItem('lcars_auth_code', code);
+        currentAuthCode = code;
+        playLcarsAcknowledge();
+        applyPermissionsVisibility();
+      } else {
+        playLcarsBeep(300, 150);
+        const err = document.getElementById('configPinError');
+        if (err) err.style.display = 'block';
+        if (inp) {
+          inp.value = '';
+          inp.focus();
+        }
+      }
+    } catch (e) {
+      alert('Fehler bei der Authentifizierung: ' + e);
+    }
+  }
+
+  function lockPermissionsSession() {
+    playLcarsBeep(440, 220);
+    sessionStorage.removeItem('lcars_auth_unlocked');
+    applyPermissionsVisibility();
+  }
+
+  async function savePermissionsConfig(e) {
+    e.preventDefault();
+    const btn = document.getElementById('btnSavePerm');
+    const feedback = document.getElementById('permSaveFeedback');
+    if (btn) btn.disabled = true;
+
+    const checkedBoxes = document.querySelectorAll('.perm-lock-cb:checked');
+    const lockedSections = Array.from(checkedBoxes).map(cb => cb.value);
+
+    const newCodeInp = document.getElementById('permNewCode');
+    const newCodeConfirmInp = document.getElementById('permNewCodeConfirm');
+    const newCode = newCodeInp ? newCodeInp.value.trim() : '';
+    const newCodeConfirm = newCodeConfirmInp ? newCodeConfirmInp.value.trim() : '';
+
+    if (newCode) {
+      if (newCode.length < 3) {
+        alert('Der neue Command Code muss mindestens 3 Zeichen lang sein.');
+        if (btn) btn.disabled = false;
+        return;
+      }
+      if (newCode !== newCodeConfirm) {
+        alert('Die eingegebenen Command Codes stimmen nicht überein.');
+        if (btn) btn.disabled = false;
+        return;
+      }
+    }
+
+    const payload = {
+      code: sessionStorage.getItem('lcars_auth_code') || currentAuthCode || '0901',
+      locked_sections: lockedSections
+    };
+    if (newCode) {
+      payload.new_code = newCode;
+    }
+
+    try {
+      const resp = await fetch('/api/permissions/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const res = await resp.json();
+      if (res.success) {
+        playLcarsAcknowledge();
+        if (newCode) {
+          sessionStorage.setItem('lcars_auth_code', newCode);
+          currentAuthCode = newCode;
+          if (newCodeInp) newCodeInp.value = '';
+          if (newCodeConfirmInp) newCodeConfirmInp.value = '';
+        }
+        currentLockedSections = res.locked_sections || lockedSections;
+        applyPermissionsVisibility();
+
+        if (feedback) {
+          feedback.textContent = 'RECHTEKONFIGURATION ERFOLGREICH GESPEICHERT';
+          feedback.style.display = 'block';
+          setTimeout(() => { feedback.style.display = 'none'; }, 4000);
+        }
+      } else {
+        alert('Fehler beim Speichern: ' + (res.error || 'Unbekannter Fehler'));
+      }
+    } catch (err) {
+      alert('Netzwerkfehler beim Speichern: ' + err);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+
+  // ==========================================================================
+  // LCARS PARTNERINNEN-ZYKLUS TRACKER CONTROLLER
+  // ==========================================================================
+  var cycleChart = null;
+  var cyclePartners = [];
+  var activePartnerId = null;
+
+  const PARTNER_PALETTE = [
+    { border: '#eb943a', bg: 'rgba(235, 148, 58, 0.12)', fill: 'rgba(235, 148, 58, 0.07)', name: 'LCARS Amber' },
+    { border: '#baa4e5', bg: 'rgba(186, 164, 229, 0.12)', fill: 'rgba(186, 164, 229, 0.07)', name: 'LCARS Lilac' },
+    { border: '#4cd964', bg: 'rgba(76, 217, 100, 0.12)', fill: 'rgba(76, 217, 100, 0.07)', name: 'LCARS Green' },
+    { border: '#5ac8fa', bg: 'rgba(90, 200, 250, 0.12)', fill: 'rgba(90, 200, 250, 0.07)', name: 'LCARS Cyan' },
+    { border: '#ff2d55', bg: 'rgba(255, 45, 85, 0.12)', fill: 'rgba(255, 45, 85, 0.07)', name: 'LCARS Rose' },
+    { border: '#ffcc00', bg: 'rgba(255, 204, 0, 0.12)', fill: 'rgba(255, 204, 0, 0.07)', name: 'LCARS Gold' },
+    { border: '#ff9500', bg: 'rgba(255, 149, 0, 0.12)', fill: 'rgba(255, 149, 0, 0.07)', name: 'LCARS Orange' },
+    { border: '#af52de', bg: 'rgba(175, 82, 222, 0.12)', fill: 'rgba(175, 82, 222, 0.07)', name: 'LCARS Purple' }
+  ];
+
+  async function loadCycleData() {
+    try {
+      const resp = await fetch('/api/cycle/partners');
+      if (resp.ok) {
+        const data = await resp.json();
+        cyclePartners = data.partners || [];
+        renderCycleUI();
+      }
+    } catch (e) {
+      console.warn('Fehler beim Laden der Zyklusdaten:', e);
+    }
+  }
+
+  function renderCycleUI() {
+    const emptyState = document.getElementById('cycleEmptyState');
+    const activeContent = document.getElementById('cycleActiveContent');
+    const pillsContainer = document.getElementById('cyclePartnerPills');
+    const countBadge = document.getElementById('multiCycleCountBadge');
+
+    if (!cyclePartners || cyclePartners.length === 0) {
+      if (emptyState) emptyState.style.display = 'block';
+      if (activeContent) activeContent.style.display = 'none';
+      if (pillsContainer) pillsContainer.innerHTML = '';
+      return;
+    }
+
+    if (emptyState) emptyState.style.display = 'none';
+    if (activeContent) activeContent.style.display = 'block';
+
+    if (countBadge) {
+      countBadge.textContent = `${cyclePartners.length} PARTNERIN${cyclePartners.length > 1 ? 'NEN' : ''} ERFASST // VERGLEICHSGRAPH`;
+    }
+
+    // Determine active partner for detail inspect
+    let activeP = cyclePartners.find(p => p.id === activePartnerId);
+    if (!activeP) {
+      activeP = cyclePartners[0];
+      activePartnerId = activeP.id;
+    }
+
+    // 1. Render Multi-Partner Badges at the top
+    renderMultiPartnerBadges();
+
+    // 2. Render Combined Multi-Partner Chart (1-30 Days) directly at top
+    renderCombinedCycleChart();
+
+    // 3. Render Profile Switcher Pills
+    if (pillsContainer) {
+      pillsContainer.innerHTML = '';
+      cyclePartners.forEach((p, idx) => {
+        const pal = PARTNER_PALETTE[idx % PARTNER_PALETTE.length];
+        const isActive = (p.id === activePartnerId);
+        const pill = document.createElement('button');
+        pill.className = 'left-action-btn' + (isActive ? ' active-range' : '');
+        pill.style.padding = '0.35rem 0.85rem';
+        pill.style.fontSize = '0.82rem';
+        pill.style.borderColor = isActive ? pal.border : '#666';
+        pill.style.color = isActive ? '#ffffff' : '#bbb';
+        pill.innerHTML = `<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${pal.border}; margin-right:4px;"></span> <strong>${escapeHtml(p.name)}</strong> <span style="font-size:0.75rem; color:${isActive ? 'var(--c-gold)' : '#888'};">★ Tag ${p.current_day}/${p.cycle_duration}</span>`;
+        pill.onclick = () => {
+          playLcarsBeep(880, 1320);
+          activePartnerId = p.id;
+          renderCycleUI();
+        };
+        pillsContainer.appendChild(pill);
+      });
+    }
+
+    // 4. Render Active Partner Details (vitals, tape)
+    renderActivePartner(activeP);
+
+    // 5. Render Partners Overview Grid
+    renderPartnersOverviewGrid();
+  }
+
+  function renderMultiPartnerBadges() {
+    const container = document.getElementById('cycleMultiPartnerBadges');
+    if (!container) return;
+    container.innerHTML = '';
+
+    cyclePartners.forEach((p, idx) => {
+      const pal = PARTNER_PALETTE[idx % PARTNER_PALETTE.length];
+      const isSelected = (p.id === activePartnerId);
+      const badge = document.createElement('div');
+      badge.style.background = isSelected ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.55)';
+      badge.style.border = `1px solid ${pal.border}`;
+      badge.style.borderLeft = `5px solid ${pal.border}`;
+      badge.style.borderRadius = '5px';
+      badge.style.padding = '0.35rem 0.75rem';
+      badge.style.display = 'inline-flex';
+      badge.style.alignItems = 'center';
+      badge.style.gap = '0.5rem';
+      badge.style.cursor = 'pointer';
+      badge.style.transition = 'all 0.2s ease';
+      badge.style.fontFamily = 'var(--mono-family)';
+      badge.style.fontSize = '0.82rem';
+
+      const phaseName = p.current_phase ? p.current_phase.name : '';
+      badge.innerHTML = `
+        <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${pal.border}; box-shadow:0 0 6px ${pal.border};"></span>
+        <strong style="color:#ffffff; font-family:var(--font-family); font-size:0.95rem;">${escapeHtml(p.name)}</strong>
+        <span style="background:${pal.border}; color:#000000; font-weight:800; padding:0.12rem 0.45rem; border-radius:3px; font-size:0.75rem;">★ HEUTE: TAG ${p.current_day}/${p.cycle_duration}</span>
+        <span style="color:#ddd; font-size:0.75rem;">${escapeHtml(phaseName)}</span>
+      `;
+      badge.onclick = () => {
+        playLcarsBeep(880, 1320);
+        activePartnerId = p.id;
+        renderCycleUI();
+        const activeSection = document.getElementById('activePartnerName');
+        if (activeSection) {
+          activeSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      };
+      container.appendChild(badge);
+    });
+  }
+
+  function renderActivePartner(p) {
+    const nameEl = document.getElementById('activePartnerName');
+    const subEl = document.getElementById('activePartnerSub');
+    const tapePartnerEl = document.getElementById('tapePartnerName');
+    const curDayEl = document.getElementById('dispCurrentDay');
+    const cycleDurEl = document.getElementById('dispCycleDuration');
+    const progressEl = document.getElementById('dispCycleProgress');
+    const phaseBadgeEl = document.getElementById('dispPhaseBadge');
+    const phaseDescEl = document.getElementById('dispPhaseDesc');
+    const fertilityEl = document.getElementById('dispFertilityStatus');
+    const daysUntilEl = document.getElementById('dispDaysUntilNext');
+    const nextDateEl = document.getElementById('dispNextDate');
+
+    if (nameEl) nameEl.textContent = p.name;
+    if (subEl) subEl.textContent = `ZYKLUS: ${p.cycle_duration} TAGE // BLUTUNG: ${p.period_duration} TAGE // START: ${p.start_date_formatted || p.start_date}`;
+    if (tapePartnerEl) tapePartnerEl.textContent = p.name.toUpperCase();
+    if (curDayEl) curDayEl.textContent = `TAG ${p.current_day}`;
+    if (cycleDurEl) cycleDurEl.textContent = `/ ${p.cycle_duration} TAGE`;
+    if (progressEl) progressEl.style.width = `${p.progress_percent || 50}%`;
+
+    if (phaseBadgeEl && p.current_phase) {
+      phaseBadgeEl.textContent = p.current_phase.name || 'UNBEKANNT';
+      phaseBadgeEl.style.backgroundColor = p.current_phase.color || '#baa4e5';
+      phaseBadgeEl.style.color = (p.current_phase.key === 'menstruation' ? '#ffffff' : '#000000');
+    }
+    if (phaseDescEl && p.current_phase) {
+      phaseDescEl.textContent = p.current_phase.desc || '';
+    }
+
+    if (fertilityEl && p.current_phase) {
+      fertilityEl.textContent = (p.current_phase.fertility || 'Normal').toUpperCase();
+    }
+    if (daysUntilEl) daysUntilEl.textContent = p.days_until_next_period;
+    if (nextDateEl) nextDateEl.textContent = p.next_period_date;
+
+    // Render 30-Day Tape for Active Partner
+    renderCycleTape(p.days_graph || [], p.current_day);
+  }
+
+  function renderCombinedCycleChart() {
+    const canvas = document.getElementById('cycleChart');
+    if (!canvas) return;
+
+    const existing = Chart.getChart(canvas);
+    if (existing) {
+      try { existing.destroy(); } catch (e) {}
+    }
+
+    if (!cyclePartners || cyclePartners.length === 0) return;
+
+    const labels = Array.from({ length: 30 }, (_, i) => 'Tag ' + (i + 1));
+    const datasets = [];
+
+    cyclePartners.forEach((p, idx) => {
+      const pal = PARTNER_PALETTE[idx % PARTNER_PALETTE.length];
+      const isSelected = (p.id === activePartnerId);
+      const curDay = p.current_day;
+      const days = p.days_graph || [];
+
+      const values = [];
+      const pointRadii = [];
+      const pointHoverRadii = [];
+      const pointBgColors = [];
+      const pointBorderColors = [];
+      const pointBorderWidths = [];
+
+      for (let d = 1; d <= 30; d++) {
+        const dayObj = days.find(x => x.day === d);
+        values.push(dayObj ? dayObj.curve_value : 20);
+
+        if (d === curDay) {
+          pointRadii.push(isSelected ? 11 : 9);
+          pointHoverRadii.push(isSelected ? 15 : 13);
+          pointBgColors.push('#ffffff');
+          pointBorderColors.push(pal.border);
+          pointBorderWidths.push(3.5);
+        } else {
+          pointRadii.push(3);
+          pointHoverRadii.push(6);
+          pointBgColors.push(pal.border);
+          pointBorderColors.push('#000000');
+          pointBorderWidths.push(1);
+        }
+      }
+
+      datasets.push({
+        type: 'line',
+        label: `${p.name} (★ Tag ${curDay}/${p.cycle_duration})`,
+        data: values,
+        borderColor: pal.border,
+        backgroundColor: pal.fill,
+        borderWidth: isSelected ? 3.5 : 2.2,
+        tension: 0.35,
+        fill: true,
+        pointRadius: pointRadii,
+        pointHoverRadius: pointHoverRadii,
+        pointBackgroundColor: pointBgColors,
+        pointBorderColor: pointBorderColors,
+        pointBorderWidth: pointBorderWidths,
+        order: isSelected ? 1 : 2
+      });
+    });
+
+    // Custom Chart.js plugin to draw vertical highlight bands, indicator lines and name tags
+    const multiHighlightPlugin = {
+      id: 'multiHighlightPlugin',
+      beforeDatasetsDraw(chart) {
+        const { ctx, chartArea, scales: { x } } = chart;
+        if (!chartArea || !x || !cyclePartners || cyclePartners.length === 0) return;
+
+        cyclePartners.forEach((p, idx) => {
+          const day = p.current_day;
+          if (day >= 1 && day <= 30) {
+            const xPos = x.getPixelForValue(day - 1);
+            const pal = PARTNER_PALETTE[idx % PARTNER_PALETTE.length];
+            const isSelected = (p.id === activePartnerId);
+
+            ctx.save();
+            // Vertical glow band around current day
+            const bandWidth = Math.max(16, (chartArea.width / 30) * 0.75);
+            ctx.fillStyle = isSelected ? pal.bg.replace('0.12', '0.24') : pal.bg.replace('0.12', '0.12');
+            ctx.fillRect(xPos - bandWidth / 2, chartArea.top, bandWidth, chartArea.height);
+
+            // Vertical dashed indicator line
+            ctx.strokeStyle = pal.border;
+            ctx.lineWidth = isSelected ? 2.2 : 1.2;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(xPos, chartArea.top);
+            ctx.lineTo(xPos, chartArea.bottom);
+            ctx.stroke();
+
+            // Marker badge tag at top
+            ctx.setLineDash([]);
+            const tagText = `★ ${p.name} (T${day})`;
+            ctx.font = `bold ${isSelected ? '11px' : '10px'} "Share Tech Mono", monospace`;
+            const textMetrics = ctx.measureText(tagText);
+            const tagW = textMetrics.width + 10;
+            const tagH = 15;
+            const tagY = chartArea.top - tagH - 4;
+
+            ctx.fillStyle = pal.border;
+            ctx.fillRect(xPos - tagW / 2, tagY, tagW, tagH);
+            ctx.fillStyle = '#000000';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(tagText, xPos, tagY + tagH / 2 + 0.5);
+
+            ctx.restore();
+          }
+        });
+      }
+    };
+
+    cycleChart = new Chart(canvas, {
+      data: {
+        labels: labels,
+        datasets: datasets
+      },
+      plugins: [multiHighlightPlugin],
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: {
+          padding: {
+            top: 24,
+            right: 15,
+            bottom: 5,
+            left: 10
+          }
+        },
+        animation: { duration: 350 },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top',
+            labels: {
+              color: '#ffffff',
+              font: { family: 'Share Tech Mono', size: 12 },
+              boxWidth: 14,
+              padding: 14,
+              usePointStyle: true,
+              pointStyle: 'circle'
+            }
+          },
+          tooltip: {
+            backgroundColor: 'rgba(10, 10, 18, 0.95)',
+            titleColor: '#eb943a',
+            titleFont: { family: 'Antonio', size: 14 },
+            bodyColor: '#ffffff',
+            bodyFont: { family: 'Share Tech Mono', size: 12 },
+            borderColor: 'rgba(235, 148, 58, 0.6)',
+            borderWidth: 1,
+            padding: 10,
+            callbacks: {
+              title: function(items) {
+                if (!items || items.length === 0) return '';
+                const dayNum = items[0].dataIndex + 1;
+                const todayPartners = cyclePartners.filter(p => p.current_day === dayNum);
+                let t = `TAG ${dayNum} // BIO-STATUS`;
+                if (todayPartners.length > 0) {
+                  t += ` ★ HEUTE: ` + todayPartners.map(p => p.name).join(', ');
+                }
+                return t;
+              },
+              label: function(item) {
+                const pIdx = item.datasetIndex;
+                const partner = cyclePartners[pIdx];
+                if (!partner) return '';
+                const dayNum = item.dataIndex + 1;
+                const d = (partner.days_graph || []).find(x => x.day === dayNum);
+                const isCur = (partner.current_day === dayNum);
+                const phaseStr = d ? `${d.phase_name} (${d.fertility})` : '';
+                return ` ${partner.name}: ${item.raw}% - ${phaseStr}${isCur ? ' ★ HEUTE!' : ''}`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: {
+              color: function(ctx) {
+                const day = ctx.index + 1;
+                const isToday = cyclePartners.some(p => p.current_day === day);
+                return isToday ? 'rgba(255, 255, 255, 0.25)' : 'rgba(255, 255, 255, 0.05)';
+              },
+              lineWidth: function(ctx) {
+                const day = ctx.index + 1;
+                return cyclePartners.some(p => p.current_day === day) ? 2 : 1;
+              }
+            },
+            ticks: {
+              color: function(ctx) {
+                const day = ctx.index + 1;
+                const matching = cyclePartners.find(p => p.current_day === day);
+                if (matching) {
+                  const idx = cyclePartners.indexOf(matching);
+                  return PARTNER_PALETTE[idx % PARTNER_PALETTE.length].border;
+                }
+                return '#888888';
+              },
+              font: function(ctx) {
+                const day = ctx.index + 1;
+                const isToday = cyclePartners.some(p => p.current_day === day);
+                return {
+                  family: 'Share Tech Mono',
+                  size: isToday ? 12 : 10,
+                  weight: isToday ? 'bold' : 'normal'
+                };
+              }
+            }
+          },
+          y: {
+            min: 0,
+            max: 115,
+            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+            ticks: {
+              color: '#777777',
+              font: { family: 'Share Tech Mono', size: 10 },
+              callback: function(v) {
+                if (v === 20) return 'Ruhe / Regel';
+                if (v === 55) return 'Aktiv';
+                if (v === 100) return 'Peak (Eisprung)';
+                return '';
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function renderCycleTape(daysGraph, currentDay) {
+    const container = document.getElementById('cycleTapeContainer');
+    if (!container) return;
+    container.innerHTML = '';
+
+    daysGraph.forEach(d => {
+      const isCur = (d.day === currentDay);
+      const cell = document.createElement('div');
+      cell.className = 'cycle-tape-cell' + (isCur ? ' current-day' : '');
+      cell.style.backgroundColor = isCur ? '#ffffff' : d.color;
+      cell.style.color = (d.phase_key === 'menstruation' && !isCur) ? '#ffffff' : '#000000';
+      cell.innerHTML = `<span>${isCur ? '★' : ''}${d.day}</span>`;
+      cell.title = `Tag ${d.day}: ${d.phase_name} (${d.fertility})`;
+      cell.onclick = () => {
+        playLcarsBeep(700, 1050);
+        inspectDay(d.day, d.phase_name, d.fertility, d.desc, isCur);
+      };
+      container.appendChild(cell);
+    });
+
+    // Default inspection: current day
+    const curObj = daysGraph.find(d => d.day === currentDay) || daysGraph[0];
+    if (curObj) {
+      inspectDay(curObj.day, curObj.phase_name, curObj.fertility, curObj.desc, true);
+    }
+  }
+
+  function inspectDay(day, phaseName, fertility, desc, isCur) {
+    const dayLabel = document.getElementById('inspectDayLabel');
+    const phaseLabel = document.getElementById('inspectPhaseLabel');
+    const todayBadge = document.getElementById('inspectTodayBadge');
+    const infoText = document.getElementById('inspectInfoText');
+
+    if (dayLabel) dayLabel.textContent = `TAG ${day}`;
+    if (phaseLabel) phaseLabel.textContent = `${phaseName.toUpperCase()} // FRUCHTBARKEIT: ${fertility.toUpperCase()}`;
+    if (todayBadge) todayBadge.style.display = isCur ? 'inline' : 'none';
+    if (infoText) infoText.textContent = desc || '';
+  }
+
+  function renderPartnersOverviewGrid() {
+    const grid = document.getElementById('partnersGrid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    cyclePartners.forEach(p => {
+      const isSelected = (p.id === activePartnerId);
+      const card = document.createElement('div');
+      card.style.background = isSelected ? 'rgba(186, 164, 229, 0.15)' : 'rgba(0,0,0,0.4)';
+      card.style.border = `1px solid ${isSelected ? 'var(--c-secondary)' : 'rgba(255,255,255,0.1)'}`;
+      card.style.borderRadius = '6px';
+      card.style.padding = '0.85rem';
+      card.style.cursor = 'pointer';
+      card.style.transition = 'all 0.2s';
+      card.onclick = () => {
+        playLcarsBeep(880, 1320);
+        activePartnerId = p.id;
+        renderCycleUI();
+      };
+
+      card.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+          <strong style="font-size:1.1rem; color:#fff; font-family:var(--font-family);">${escapeHtml(p.name)}</strong>
+          <span style="font-family:var(--mono-family); font-size:0.8rem; color:${p.current_phase ? p.current_phase.color : 'var(--c-secondary)'}; font-weight:700;">
+            TAG ${p.current_day}/${p.cycle_duration}
+          </span>
+        </div>
+        <div style="font-size:0.8rem; color:#bbb; font-family:var(--mono-family); margin-bottom:0.3rem;">
+          Phase: <span style="color:#fff;">${p.current_phase ? p.current_phase.name : '--'}</span>
+        </div>
+        <div style="font-size:0.75rem; color:#888; font-family:var(--mono-family);">
+          Nächste Periode in: <strong style="color:var(--c-gold);">${p.days_until_next_period} Tagen</strong> (${p.next_period_date})
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+  }
+
+  function openAddPartnerModal() {
+    playLcarsBeep(880, 1320);
+    const modal = document.getElementById('partnerFormModal');
+    const title = document.getElementById('partnerModalTitle');
+    const idInp = document.getElementById('formPartnerId');
+    const nameInp = document.getElementById('formPartnerName');
+    const cycleInp = document.getElementById('formCycleDuration');
+    const periodInp = document.getElementById('formPeriodDuration');
+    const dateInp = document.getElementById('formStartDate');
+    const notesInp = document.getElementById('formNotes');
+
+    if (title) title.textContent = 'PARTNERIN ANLEGEN';
+    if (idInp) idInp.value = '';
+    if (nameInp) nameInp.value = '';
+    if (cycleInp) cycleInp.value = '28';
+    if (periodInp) periodInp.value = '5';
+    if (dateInp) dateInp.value = new Date().toISOString().split('T')[0];
+    if (notesInp) notesInp.value = '';
+
+    if (modal) {
+      modal.style.display = 'flex';
+      if (nameInp) nameInp.focus();
+    }
+  }
+
+  function openEditPartnerModal() {
+    const p = cyclePartners.find(x => x.id === activePartnerId);
+    if (!p) return;
+
+    playLcarsBeep(880, 1320);
+    const modal = document.getElementById('partnerFormModal');
+    const title = document.getElementById('partnerModalTitle');
+    const idInp = document.getElementById('formPartnerId');
+    const nameInp = document.getElementById('formPartnerName');
+    const cycleInp = document.getElementById('formCycleDuration');
+    const periodInp = document.getElementById('formPeriodDuration');
+    const dateInp = document.getElementById('formStartDate');
+    const notesInp = document.getElementById('formNotes');
+
+    if (title) title.textContent = `PARTNERIN BEARBEITEN // ${p.name.toUpperCase()}`;
+    if (idInp) idInp.value = p.id;
+    if (nameInp) nameInp.value = p.name;
+    if (cycleInp) cycleInp.value = p.cycle_duration || 28;
+    if (periodInp) periodInp.value = p.period_duration || 5;
+    if (dateInp) dateInp.value = p.start_date || new Date().toISOString().split('T')[0];
+    if (notesInp) notesInp.value = p.notes || '';
+
+    if (modal) {
+      modal.style.display = 'flex';
+      if (nameInp) nameInp.focus();
+    }
+  }
+
+  function closePartnerModal() {
+    playLcarsBeep(440, 220);
+    const modal = document.getElementById('partnerFormModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function handlePartnerModalBackdropClick(e) {
+    if (e.target && e.target.id === 'partnerFormModal') {
+      closePartnerModal();
+    }
+  }
+
+  async function savePartnerData(e) {
+    e.preventDefault();
+    const idInp = document.getElementById('formPartnerId');
+    const nameInp = document.getElementById('formPartnerName');
+    const cycleInp = document.getElementById('formCycleDuration');
+    const periodInp = document.getElementById('formPeriodDuration');
+    const dateInp = document.getElementById('formStartDate');
+    const notesInp = document.getElementById('formNotes');
+
+    const partnerId = idInp ? idInp.value.trim() : '';
+    const payload = {
+      name: nameInp ? nameInp.value.trim() : '',
+      cycle_duration: cycleInp ? parseInt(cycleInp.value) || 28 : 28,
+      period_duration: periodInp ? parseInt(periodInp.value) || 5 : 5,
+      start_date: dateInp ? dateInp.value : '',
+      notes: notesInp ? notesInp.value.trim() : ''
+    };
+
+    try {
+      let resp;
+      if (partnerId) {
+        resp = await fetch(`/api/cycle/partners/${partnerId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } else {
+        resp = await fetch('/api/cycle/partners', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      }
+      const res = await resp.json();
+      if (res.success) {
+        playLcarsAcknowledge();
+        closePartnerModal();
+        if (res.partner && res.partner.id) {
+          activePartnerId = res.partner.id;
+        }
+        await loadCycleData();
+      } else {
+        alert('Fehler beim Speichern: ' + (res.error || 'Unbekannt'));
+      }
+    } catch (err) {
+      alert('Netzwerkfehler: ' + err);
+    }
+  }
+
+  async function confirmDeletePartner() {
+    const p = cyclePartners.find(x => x.id === activePartnerId);
+    if (!p) return;
+
+    if (!confirm(`Möchten Sie den Zyklus-Eintrag für "${p.name}" wirklich löschen?`)) {
+      return;
+    }
+
+    try {
+      const resp = await fetch(`/api/cycle/partners/${p.id}`, { method: 'DELETE' });
+      const res = await resp.json();
+      if (res.success) {
+        playLcarsBeep(600, 300);
+        activePartnerId = null;
+        await loadCycleData();
+      } else {
+        alert('Fehler beim Löschen: ' + (res.error || 'Unbekannt'));
+      }
+    } catch (err) {
+      alert('Netzwerkfehler: ' + err);
+    }
+  }
+
+  async function triggerNewCycleToday() {
+    const p = cyclePartners.find(x => x.id === activePartnerId);
+    if (!p) return;
+
+    if (!confirm(`Neuen Zyklus für "${p.name}" mit heutigem Datum als Tag 1 starten?`)) {
+      return;
+    }
+
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const resp = await fetch(`/api/cycle/partners/${p.id}/start-cycle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_date: todayStr })
+      });
+      const res = await resp.json();
+      if (res.success) {
+        playLcarsAcknowledge();
+        await loadCycleData();
+      } else {
+        alert('Fehler beim Aktualisieren: ' + (res.error || 'Unbekannt'));
+      }
+    } catch (err) {
+      alert('Netzwerkfehler: ' + err);
+    }
+  }
+
   // Window Resize Listener
   window.addEventListener('resize', () => {
     if (historyChart) historyChart.resize();
@@ -10947,6 +12564,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     if (nineRouterTimelineChart) nineRouterTimelineChart.resize();
     if (nineRouterModelChart) nineRouterModelChart.resize();
+    if (cycleChart) cycleChart.resize();
   });
 
   // Initialer Boot-Ablauf
@@ -10969,6 +12587,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     loadSolarData(false);
     startSolarAutoRefresh();
     initLcarsVoiceComm();
+    fetchPermissionsStatus();
+    loadCycleData();
   }
 
   if (document.readyState === 'loading') {
@@ -11252,6 +12872,64 @@ if USE_FLASK:
             return jsonify({"success": False, "error": "ha_service nicht verfügbar"}), 503
         return jsonify(ha_service.get_solar_data())
 
+    @app.route("/api/permissions/status", methods=["GET"])
+    def api_permissions_status():
+        if permissions_service:
+            return jsonify(permissions_service.get_public_status())
+        return jsonify({"locked_sections": ["cycle"], "has_code": True})
+
+    @app.route("/api/permissions/verify", methods=["POST"])
+    def api_permissions_verify():
+        if not permissions_service:
+            return jsonify({"valid": False, "error": "Service nicht verfügbar"}), 503
+        data = request.get_json(silent=True) or {}
+        code = data.get("code", "")
+        valid = permissions_service.verify_code(code)
+        return jsonify({"valid": valid, "locked_sections": permissions_service.locked_sections if valid else []})
+
+    @app.route("/api/permissions/config", methods=["POST"])
+    def api_permissions_config():
+        if not permissions_service:
+            return jsonify({"success": False, "error": "Service nicht verfügbar"}), 503
+        data = request.get_json(silent=True) or {}
+        current_code = data.get("code") or data.get("current_code") or ""
+        new_code = data.get("new_code")
+        locked_sections = data.get("locked_sections")
+        res = permissions_service.update_permissions(current_code, new_code=new_code, locked_sections=locked_sections)
+        return jsonify(res)
+
+    @app.route("/api/cycle/partners", methods=["GET", "POST"])
+    def api_cycle_partners():
+        if not cycle_service:
+            return jsonify({"success": False, "error": "Service nicht verfügbar"}), 503
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            res = cycle_service.add_partner(
+                name=data.get("name"),
+                cycle_duration=data.get("cycle_duration", 28),
+                start_date=data.get("start_date"),
+                period_duration=data.get("period_duration", 5),
+                notes=data.get("notes", "")
+            )
+            return jsonify(res)
+        return jsonify({"partners": cycle_service.get_all_partners()})
+
+    @app.route("/api/cycle/partners/<partner_id>", methods=["PUT", "DELETE"])
+    def api_cycle_partner_detail(partner_id):
+        if not cycle_service:
+            return jsonify({"success": False, "error": "Service nicht verfügbar"}), 503
+        if request.method == "DELETE":
+            return jsonify(cycle_service.delete_partner(partner_id))
+        data = request.get_json(silent=True) or {}
+        return jsonify(cycle_service.update_partner(partner_id, data))
+
+    @app.route("/api/cycle/partners/<partner_id>/start-cycle", methods=["POST"])
+    def api_cycle_start_new(partner_id):
+        if not cycle_service:
+            return jsonify({"success": False, "error": "Service nicht verfügbar"}), 503
+        data = request.get_json(silent=True) or {}
+        return jsonify(cycle_service.start_new_cycle(partner_id, data.get("start_date")))
+
 
     def run_server():
         print("[START] Starte System Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
@@ -11363,6 +13041,22 @@ else:
             elif parsed.path == "/api/solar/data":
                 solar_data = ha_service.get_solar_data() if ha_service else {"success": False, "error": "ha_service nicht verfügbar"}
                 data = json.dumps(solar_data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/permissions/status":
+                status = permissions_service.get_public_status() if permissions_service else {"locked_sections": ["cycle"], "has_code": True}
+                data = json.dumps(status).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/cycle/partners":
+                partners = cycle_service.get_all_partners() if cycle_service else []
+                data = json.dumps({"partners": partners}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
@@ -11543,6 +13237,100 @@ else:
                 service = data.get("service", "")
                 service_data = data.get("service_data") or data.get("data") or {}
                 res = ha_service.call_service(domain, service, service_data) if ha_service else {"success": False}
+                resp = json.dumps(res).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/permissions/verify":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try: data = json.loads(body)
+                except Exception: data = {}
+                code = data.get("code", "")
+                valid = permissions_service.verify_code(code) if permissions_service else False
+                resp = json.dumps({"valid": valid, "locked_sections": permissions_service.locked_sections if valid else []}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/permissions/config":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try: data = json.loads(body)
+                except Exception: data = {}
+                current_code = data.get("code") or data.get("current_code") or ""
+                new_code = data.get("new_code")
+                locked_sections = data.get("locked_sections")
+                res = permissions_service.update_permissions(current_code, new_code=new_code, locked_sections=locked_sections) if permissions_service else {"success": False}
+                resp = json.dumps(res).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/cycle/partners":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try: data = json.loads(body)
+                except Exception: data = {}
+                res = cycle_service.add_partner(
+                    name=data.get("name"),
+                    cycle_duration=data.get("cycle_duration", 28),
+                    start_date=data.get("start_date"),
+                    period_duration=data.get("period_duration", 5),
+                    notes=data.get("notes", "")
+                ) if cycle_service else {"success": False}
+                resp = json.dumps(res).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path.startswith("/api/cycle/partners/") and parsed.path.endswith("/start-cycle"):
+                parts = parsed.path.split("/")
+                partner_id = parts[4] if len(parts) > 4 else ""
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try: data = json.loads(body)
+                except Exception: data = {}
+                res = cycle_service.start_new_cycle(partner_id, data.get("start_date")) if cycle_service else {"success": False}
+                resp = json.dumps(res).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def do_PUT(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path.startswith("/api/cycle/partners/"):
+                partner_id = parsed.path.split("/")[-1]
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try: data = json.loads(body)
+                except Exception: data = {}
+                res = cycle_service.update_partner(partner_id, data) if cycle_service else {"success": False}
+                resp = json.dumps(res).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def do_DELETE(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path.startswith("/api/cycle/partners/"):
+                partner_id = parsed.path.split("/")[-1]
+                res = cycle_service.delete_partner(partner_id) if cycle_service else {"success": False}
                 resp = json.dumps(res).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
