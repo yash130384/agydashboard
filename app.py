@@ -38,6 +38,12 @@ try:
 except ImportError:
     yaml = None
 
+try:
+    import requests
+except ImportError:
+    requests = None
+
+
 # Automatische Installation von psutil falls nicht vorhanden
 try:
     import psutil
@@ -533,14 +539,14 @@ STATIC_PORT_SUBDOMAINS = {
 
 class CloudflaredNamedTunnelManager:
     """Verwaltet Cloudflare Named Tunnel (pimmel-tunnel) für entdeckte Webdienste.
-    Konfiguriert Ingress-Regeln in /home/yash/.cloudflared/config.yml und registriert
+    Konfiguriert Ingress-Regeln in /home/cb/.cloudflared/config.yml und registriert
     2-4 Buchstaben DNS-Subdomains auf *.pimmel.site.
     """
 
     def __init__(
         self,
-        config_path="/home/yash/.cloudflared/config.yml",
-        binary_path="/home/yash/bin/cloudflared",
+        config_path="/home/cb/.cloudflared/config.yml",
+        binary_path="/home/cb/bin/cloudflared",
         tunnel_name="pimmel-tunnel",
         base_domain="pimmel.site",
     ):
@@ -1109,7 +1115,7 @@ class HermesManager:
         self._lock = threading.Lock()
 
     def _read_db(self):
-        db_paths = glob.glob("/home/yash/.hermes/state.db") + glob.glob("/home/yash/.hermes/profiles/*/state.db")
+        db_paths = glob.glob("/home/cb/.hermes/state.db") + glob.glob("/home/cb/.hermes/profiles/*/state.db")
         aggregated = {}
         total_sessions = 0
         total_input = 0
@@ -1213,7 +1219,7 @@ class OpenRouterManager:
         self._fetching = False
 
     def get_api_key(self):
-        env_path = "/home/yash/.hermes/.env"
+        env_path = "/home/cb/.hermes/.env"
         if os.path.exists(env_path):
             try:
                 with open(env_path, "r", encoding="utf-8") as f:
@@ -1381,7 +1387,7 @@ def get_antigravity_status(cache_ttl=20.0):
         if _antigravity_cache is not None and (now - _antigravity_cache_ts < cache_ttl):
             return _antigravity_cache
 
-    oauth_path = "/home/yash/.gemini/antigravity-cli/antigravity-oauth-token"
+    oauth_path = "/home/cb/.gemini/antigravity-cli/antigravity-oauth-token"
     token_present = False
     auth_method = "consumer"
 
@@ -1396,7 +1402,7 @@ def get_antigravity_status(cache_ttl=20.0):
 
     session_ids = set()
     mtimes = []
-    for p in glob.glob("/home/yash/.gemini/antigravity-cli/conversations/*.db"):
+    for p in glob.glob("/home/cb/.gemini/antigravity-cli/conversations/*.db"):
         fname = os.path.basename(p)
         if not fname.endswith("-shm") and not fname.endswith("-wal"):
             session_ids.add(fname[:-3])
@@ -1405,7 +1411,7 @@ def get_antigravity_status(cache_ttl=20.0):
             except Exception:
                 pass
 
-    for p in glob.glob("/home/yash/.gemini/antigravity-cli/brain/*"):
+    for p in glob.glob("/home/cb/.gemini/antigravity-cli/brain/*"):
         if os.path.isdir(p) and not os.path.basename(p).startswith("."):
             session_ids.add(os.path.basename(p))
             try:
@@ -2364,7 +2370,7 @@ def create_hermes_profile(name, description="", clone_from="default", model=""):
     if clean_name == "default":
         return {"success": False, "error": "Der Name 'default' ist für das Hauptprofil reserviert."}
 
-    hermes_bin = "/home/yash/.local/bin/hermes"
+    hermes_bin = "/home/cb/.local/bin/hermes"
     if not os.path.exists(hermes_bin):
         hermes_bin = "hermes"
 
@@ -2409,7 +2415,7 @@ def hermes_chat_prompt(profile, message):
     if not message or not message.strip():
         return {"success": False, "error": "Leere Nachricht übermittelt."}
 
-    python_bin = "/home/yash/.hermes/hermes-agent/venv/bin/python"
+    python_bin = "/home/cb/.hermes/hermes-agent/venv/bin/python"
     if not os.path.exists(python_bin):
         python_bin = sys.executable
 
@@ -3102,7 +3108,75 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .pill-solar { background-color: var(--c-gold); color: #000; }
     .pill-ha { background-color: var(--c-secondary); }
     .pill-cycle { background-color: var(--c-secondary); color: #000; }
+    .pill-pulsecast { background-color: var(--c-butterscotch); color: #000; }
     .pill-auth  { background-color: var(--c-almond); color: #000; }
+
+    /* PulseCast Media & Downloads Styling */
+    .pulsecast-catalog-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+      gap: 1rem;
+    }
+    .pulsecast-card {
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(235, 148, 58, 0.35);
+      border-radius: 6px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+    .pulsecast-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--c-primary);
+      box-shadow: 0 4px 16px rgba(235, 148, 58, 0.2);
+    }
+    .pulsecast-card-poster {
+      width: 100%;
+      aspect-ratio: 2 / 3;
+      object-fit: cover;
+      background: #111;
+      display: block;
+    }
+    .pulsecast-card-body {
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      justify-content: space-between;
+    }
+    .pulsecast-progress-container {
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+      height: 14px;
+      position: relative;
+      overflow: hidden;
+      margin: 0.4rem 0;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .pulsecast-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--c-primary), var(--c-gold));
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+    .lcars-tag-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
+      color: #ddd;
+      font-family: var(--mono-family);
+      font-size: 0.78rem;
+      padding: 0.2rem 0.6rem;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .lcars-tag-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fff;
+      border-color: var(--c-primary);
+    }
+
 
     /* Command Code Keypad & Rights Management */
     .keypad-btn {
@@ -4744,6 +4818,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="lcars-pill-btn pill-cycle" onclick="switchCategory('cycle')" id="btn-cat-cycle" style="display: none;">
           ZYKLUS
         </button>
+        <button class="lcars-pill-btn pill-pulsecast" onclick="switchCategory('pulsecast')" id="btn-cat-pulsecast" style="display: none;">
+          PULSECAST
+        </button>
         <button class="lcars-pill-btn pill-auth" onclick="toggleAuthModal()" id="btn-auth-toggle">
           <span id="authBtnIcon">🔒</span> <span id="authBtnLabel">CODE</span>
         </button>
@@ -5323,7 +5400,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 </div>
                 <div class="ide-param-item">
                   <div class="ide-param-lbl">LOKALER PROJEKT-PFAD</div>
-                  <div class="ide-param-val">/home/yash/Projects/agydashboard</div>
+                  <div class="ide-param-val">/home/cb/Projects/agydashboard</div>
                 </div>
               </div>
 
@@ -5868,6 +5945,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                       <div class="perm-card-info">
                         <span class="perm-name" style="color:var(--c-secondary);">ZYKLUS</span>
                         <span class="perm-desc">Partnerinnen-Zyklus Tracker</span>
+                      </div>
+                    </label>
+
+                    <!-- PULSECAST (NEW) -->
+                    <label class="perm-checkbox-card" style="border-color:var(--c-butterscotch);">
+                      <input type="checkbox" id="permLock_pulsecast" value="pulsecast" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name" style="color:var(--c-butterscotch);">PULSECAST</span>
+                        <span class="perm-desc">Media &amp; Download Hub</span>
                       </div>
                     </label>
                   </div>
@@ -6888,6 +6974,274 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
+        <!-- KATEGORIE: PULSECAST // MEDIA & DOWNLOAD HUB -->
+        <section class="lcars-section" id="section-pulsecast">
+          <div class="lcars-header-bar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+            <div style="display:flex; align-items:center; gap:0.8rem;">
+              <h2>LCARS PULSECAST // MEDIA &amp; DOWNLOAD HUB</h2>
+              <span id="pulsecastOnlineBadge" class="lcars-pill-tag" style="background:var(--c-butterscotch); color:#000;">RELAY INITIALISIERUNG...</span>
+            </div>
+            <div style="display:flex; gap:0.5rem; align-items:center;">
+              <span id="pulsecastActiveSpeedBadge" class="lcars-pill-tag" style="background:rgba(255,255,255,0.08); color:var(--c-butterscotch); font-family:var(--mono-family); font-size:0.82rem;">0.00 MB/s</span>
+              <button class="left-action-btn" onclick="refreshPulsecastData(true)" style="padding:0.35rem 0.85rem; font-size:0.82rem; border-color:var(--c-butterscotch); color:var(--c-butterscotch); font-weight:700;">
+                <span>🔄</span> <span>AKTUALISIEREN</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Command Code Gate View (when locked & unauthorized) -->
+          <div id="pulsecastGateView" class="lcars-card" style="text-align:center; padding:3rem 1.5rem; display:none; border-top:4px solid var(--c-butterscotch);">
+            <div style="font-size:3rem; margin-bottom:0.8rem;">🔒</div>
+            <div style="font-family:var(--font-family); font-size:1.35rem; color:var(--c-butterscotch); letter-spacing:0.06em; margin-bottom:0.5rem; text-transform:uppercase;">
+              ZUGANG GESPERRT // LEVEL 1 SICHERHEITSPROTOKOLL
+            </div>
+            <p style="color:#bbb; max-width:520px; margin:0 auto 1.5rem auto; font-size:0.95rem;">
+              Der Zugriff auf den Bereich PULSECAST erfordert die Autorisierung mit dem LCARS Command Code.
+            </p>
+            <button class="left-action-btn" onclick="openAuthModal()" style="padding:0.6rem 1.5rem; font-size:1rem; border-color:var(--c-butterscotch); color:var(--c-butterscotch); font-weight:700;">
+              <span>🔐</span> <span>COMMAND CODE EINGEBEN</span>
+            </button>
+          </div>
+
+          <!-- Offline Notice (when port 3000 unreachable) -->
+          <div id="pulsecastOfflineNotice" class="lcars-card" style="text-align:center; padding:2.5rem 1.5rem; display:none; border-top:4px solid var(--c-red); background:rgba(207,79,79,0.1);">
+            <div style="font-size:3rem; margin-bottom:0.8rem;">📡⚠️</div>
+            <div style="font-family:var(--font-family); font-size:1.3rem; color:var(--c-red); letter-spacing:0.06em; margin-bottom:0.5rem; text-transform:uppercase;">
+              SUBRAUM-RELAY ZU PULSECAST OFFLINE
+            </div>
+            <p style="color:#ddd; max-width:560px; margin:0 auto 1.2rem auto; font-size:0.92rem; font-family:var(--mono-family);">
+              Keine Verbindung zum PulseCast Hub auf Port 3000 (http://127.0.0.1:3000). Bitte stellen Sie sicher, dass der Node.js Dienst (xdcc-load-cast) aktiv ist.
+            </p>
+            <button class="left-action-btn" onclick="refreshPulsecastData(true)" style="padding:0.5rem 1.2rem; font-size:0.9rem; border-color:var(--c-gold); color:var(--c-gold); font-weight:700;">
+              <span>🔄</span> <span>VERBINDUNG ERNEUT TESTEN</span>
+            </button>
+          </div>
+
+          <!-- Active Content (when authorized & online) -->
+          <div id="pulsecastActiveContent" style="display:none;">
+            <!-- Subnav Tabs -->
+            <div style="display:flex; gap:0.75rem; margin-bottom:1.25rem; flex-wrap:wrap;">
+              <button type="button" class="lcars-subnav-pill active" id="pulsecast-tab-btn-downloads" onclick="switchPulsecastSubtab('downloads')">
+                <span>⬇️</span> <span>DOWNLOADS</span>
+                <span id="pulsecastDownloadsCountBadge" style="background:rgba(0,0,0,0.5); padding:2px 8px; border-radius:12px; font-size:0.75rem; margin-left:4px;">0</span>
+              </button>
+              <button type="button" class="lcars-subnav-pill" id="pulsecast-tab-btn-catalog" onclick="switchPulsecastSubtab('catalog')">
+                <span>📺</span> <span>KATALOG-BROWSER</span>
+              </button>
+              <button type="button" class="lcars-subnav-pill" id="pulsecast-tab-btn-xdcc" onclick="switchPulsecastSubtab('xdcc')">
+                <span>🔍</span> <span>XDCC-SUCHE</span>
+              </button>
+            </div>
+
+            <!-- SUBVIEW 1: DOWNLOADS -->
+            <div id="pulsecast-subview-downloads" class="pulsecast-subview" style="display:block;">
+              <div class="lcars-card" style="margin-bottom:1.25rem; padding:1rem; border-top:3px solid var(--c-butterscotch);">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:0.75rem;">
+                  <div style="display:flex; align-items:center; gap:0.6rem;">
+                    <span style="color:var(--c-primary); font-size:1.15rem; font-weight:700; letter-spacing:0.05em;">
+                      AKTIVE TRANSFERS &amp; WARTESCHLANGE
+                    </span>
+                    <span style="font-size:1.1rem;">📥</span>
+                  </div>
+                  <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                    <span id="pulsecastQueueSummary" class="lcars-pill-tag" style="background:rgba(255,255,255,0.08); color:#fff; font-size:0.78rem;">
+                      0 TRANSFERS
+                    </span>
+                  </div>
+                </div>
+
+                <!-- Live Downloads Container -->
+                <div id="pulsecastDownloadsList" style="display:flex; flex-direction:column; gap:0.75rem;">
+                  <!-- Dynamically populated download items -->
+                </div>
+
+                <!-- Empty state for downloads -->
+                <div id="pulsecastDownloadsEmpty" style="text-align:center; padding:2.5rem 1rem; color:#888; font-family:var(--mono-family); font-size:0.9rem; display:none;">
+                  KEINE AKTIVEN ODER GESPEICHERTEN DOWNLOADS VORHANDEN
+                </div>
+              </div>
+            </div>
+
+            <!-- SUBVIEW 2: KATALOG-BROWSER -->
+            <div id="pulsecast-subview-catalog" class="pulsecast-subview" style="display:none;">
+              <div class="lcars-card" style="margin-bottom:1.25rem; padding:1rem; border-top:3px solid var(--c-primary);">
+                <!-- Filter Bar -->
+                <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:0.75rem; margin-bottom:1rem; background:rgba(0,0,0,0.3); padding:0.75rem; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+                  <!-- Type Filter (Filme / Serien) -->
+                  <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                    <button type="button" class="lcars-pill-btn active" id="cat-pill-Filme" onclick="setPulsecastCatalogCategory('Filme')" style="height:38px; padding:0 1.2rem; font-size:0.85rem; background:var(--c-primary); color:#000;">
+                      🎬 FILME <span id="pulsecastCountFilme" style="margin-left:4px; font-size:0.75rem; opacity:0.85;"></span>
+                    </button>
+                    <button type="button" class="lcars-pill-btn" id="cat-pill-Serien" onclick="setPulsecastCatalogCategory('Serien')" style="height:38px; padding:0 1.2rem; font-size:0.85rem; background:rgba(0,0,0,0.5); color:var(--c-secondary); border:1px solid var(--c-secondary);">
+                      📺 SERIEN <span id="pulsecastCountSerien" style="margin-left:4px; font-size:0.75rem; opacity:0.85;"></span>
+                    </button>
+                    <button type="button" class="lcars-pill-btn" id="cat-pill-all" onclick="setPulsecastCatalogCategory('all')" style="height:38px; padding:0 1rem; font-size:0.85rem; background:rgba(0,0,0,0.5); color:#aaa; border:1px solid rgba(255,255,255,0.2);">
+                      📁 ALLE
+                    </button>
+                  </div>
+
+                  <!-- Subcategory Dropdown (dynamisch aus PulseCast geladen) -->
+                  <div style="display:flex; align-items:center; gap:0.5rem; flex:1; min-width:240px; max-width:380px;">
+                    <label style="font-size:0.8rem; color:var(--c-gold); font-weight:700; white-space:nowrap;">KATEGORIE:</label>
+                    <select id="pulsecastSubcatSelect" class="lcars-input" style="flex:1; height:38px; padding:0 0.6rem; font-size:0.85rem; cursor:pointer;" onchange="onPulsecastSubcatChanged()">
+                      <option value="all">ALLE KATEGORIEN</option>
+                    </select>
+                  </div>
+
+                  <!-- Quick Search -->
+                  <div style="display:flex; align-items:center; gap:0.4rem; min-width:260px;">
+                    <input type="text" id="pulsecastCatalogSearchInput" placeholder="Titel / Darsteller suchen..." class="lcars-input" style="height:38px; font-size:0.85rem; flex:1;" onkeydown="if(event.key==='Enter') pulsecastCatalogSearchTrigger();">
+                    <button type="button" class="left-action-btn" onclick="pulsecastCatalogSearchTrigger()" style="height:38px; padding:0 0.9rem; font-size:0.82rem; border-color:var(--c-primary); color:var(--c-primary);">
+                      <span>🔍</span>
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="pulsecastCatalogSearchClear()" style="height:38px; padding:0 0.6rem; font-size:0.82rem; border-color:#888; color:#888;" title="Filter zurücksetzen">
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Catalog Loading -->
+                <div id="pulsecastCatalogLoading" style="text-align:center; padding:3rem 1rem; display:none;">
+                  <div style="font-family:var(--font-family); font-size:1.1rem; color:var(--c-primary); letter-spacing:0.06em; margin-bottom:0.5rem;">
+                    DATENKASKADE WIRD GELADEN...
+                  </div>
+                  <div style="font-family:var(--mono-family); font-size:0.85rem; color:#888;">
+                    Katalogabfrage über Subraum-Relay aktiv
+                  </div>
+                </div>
+
+                <!-- Catalog Grid -->
+                <div id="pulsecastCatalogGrid" class="pulsecast-catalog-grid" style="min-height:280px;">
+                  <!-- Dynamically populated cards -->
+                </div>
+
+                <!-- Catalog Empty State -->
+                <div id="pulsecastCatalogEmpty" style="text-align:center; padding:3rem 1rem; color:#888; font-family:var(--mono-family); display:none;">
+                  KEINE MEDIENEINTRÄGE FÜR DIE AUSGEWÄHLTEN FILTER GEFUNDEN
+                </div>
+
+                <!-- Pagination Bar -->
+                <div id="pulsecastPaginationBar" style="display:flex; justify-content:center; align-items:center; gap:0.75rem; margin-top:1.5rem; flex-wrap:wrap;">
+                  <button type="button" class="left-action-btn" id="pulsecastPrevPageBtn" onclick="pulsecastChangePage(-1)" style="padding:0.4rem 1.1rem; font-size:0.85rem;">
+                    ◀ VORHERIGE
+                  </button>
+                  <span id="pulsecastPageIndicator" style="font-family:var(--mono-family); font-size:0.9rem; color:var(--c-gold); padding:0 0.5rem;">
+                    SEITE 1 VON 1 (0 EINTRÄGE)
+                  </span>
+                  <button type="button" class="left-action-btn" id="pulsecastNextPageBtn" onclick="pulsecastChangePage(1)" style="padding:0.4rem 1.1rem; font-size:0.85rem;">
+                    NÄCHSTE ▶
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- SUBVIEW 3: XDCC-SUCHE -->
+            <div id="pulsecast-subview-xdcc" class="pulsecast-subview" style="display:none;">
+              <div class="lcars-card" style="margin-bottom:1.25rem; padding:1.15rem; border-top:3px solid var(--c-blue);">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;">
+                  <div style="display:flex; align-items:center; gap:0.6rem;">
+                    <span style="color:var(--c-blue); font-size:1.2rem; font-weight:700; letter-spacing:0.05em;">
+                      KLASSISCHE IRC &amp; XDCC PAKET-SUCHE
+                    </span>
+                    <span style="font-size:1.1rem;">📡</span>
+                  </div>
+                  <span class="lcars-pill-tag" style="background:var(--c-blue); color:#000;">XDCC.EU RELAY</span>
+                </div>
+
+                <!-- Search Input Bar -->
+                <div style="display:flex; gap:0.6rem; align-items:center; margin-bottom:1rem; flex-wrap:wrap;">
+                  <input type="text" id="pulsecastXdccInput" placeholder="Suchbegriff (z.B. Star Trek, Linux, 1080p, 2026)..." class="lcars-input" style="flex:1; min-width:240px; height:42px; font-size:0.95rem;" onkeydown="if(event.key==='Enter') pulsecastXdccSearch();">
+                  <button type="button" class="left-action-btn" onclick="pulsecastXdccSearch()" style="height:42px; padding:0 1.5rem; font-size:0.95rem; border-color:var(--c-blue); color:var(--c-blue); font-weight:700;">
+                    <span>🚀</span> <span>IRC SCAN STARTEN</span>
+                  </button>
+                </div>
+
+                <!-- Quick suggestion chips -->
+                <div style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; margin-bottom:1.2rem; font-size:0.8rem;">
+                  <span style="color:#888; font-family:var(--mono-family);">SCHNELLFILTER:</span>
+                  <button type="button" class="lcars-tag-btn" onclick="pulsecastXdccChipSearch('Star Trek')">Star Trek</button>
+                  <button type="button" class="lcars-tag-btn" onclick="pulsecastXdccChipSearch('Section 31')">Section 31</button>
+                  <button type="button" class="lcars-tag-btn" onclick="pulsecastXdccChipSearch('Strange New Worlds')">Strange New Worlds</button>
+                  <button type="button" class="lcars-tag-btn" onclick="pulsecastXdccChipSearch('1080p German')">1080p German</button>
+                  <button type="button" class="lcars-tag-btn" onclick="pulsecastXdccChipSearch('2160p')">2160p UHD</button>
+                </div>
+
+                <!-- Search Status & Indicator -->
+                <div id="pulsecastXdccStatus" style="font-family:var(--mono-family); font-size:0.85rem; color:var(--c-gold); margin-bottom:0.75rem; display:none;"></div>
+
+                <!-- Results Table / List -->
+                <div id="pulsecastXdccResultsContainer" style="overflow-x:auto;">
+                  <table class="services-table" id="pulsecastXdccTable" style="display:none; width:100%;">
+                    <thead>
+                      <tr>
+                        <th style="width:140px;">BOT NAME</th>
+                        <th style="width:75px;">PACK #</th>
+                        <th>DATEINAME</th>
+                        <th style="width:95px;">GRÖSSE</th>
+                        <th style="width:180px;">SERVER / NETZ</th>
+                        <th style="width:120px; text-align:right;">AKTION</th>
+                      </tr>
+                    </thead>
+                    <tbody id="pulsecastXdccTbody">
+                      <!-- Results rows -->
+                    </tbody>
+                  </table>
+                </div>
+
+                <!-- XDCC Empty / Placeholder -->
+                <div id="pulsecastXdccEmpty" style="text-align:center; padding:2.5rem 1rem; color:#777; font-family:var(--mono-family); font-size:0.9rem;">
+                  GEBEN SIE EINEN SUCHBEGRIFF EIN, UM DIE XDCC-BOTS IM IRC ZU DURCHSUCHEN
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- LCARS PULSECAST SERIES EPISODES MODAL -->
+        <div id="pulsecastSeriesModal" class="ha-modal-overlay" style="display:none;" onclick="handlePulsecastSeriesModalBackdropClick(event)">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:820px; width:95%; max-height:90vh; display:flex; flex-direction:column;">
+            <div class="ha-modal-header" style="background:var(--c-secondary); color:#000;">
+              <div style="display:flex; align-items:center; gap:0.6rem; min-width:0;">
+                <span style="font-size:1.4rem; flex-shrink:0;">📺</span>
+                <div style="min-width:0;">
+                  <div id="pulsecastModalSeriesTitle" style="font-size:1.15rem; font-weight:700; color:#000; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    Serientitel
+                  </div>
+                  <div id="pulsecastModalSeriesMeta" style="font-size:0.75rem; color:#111; font-family:var(--mono-family);">
+                    Staffeln &amp; Episodenübersicht
+                  </div>
+                </div>
+              </div>
+              <button class="ha-modal-close-btn" onclick="closePulsecastSeriesModal()">✕ SCHLIESSEN</button>
+            </div>
+            <div class="ha-modal-body" style="padding:1rem; overflow-y:auto; flex:1;">
+              <!-- Batch Download / Season Controls -->
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:0.5rem; background:rgba(0,0,0,0.3); padding:0.6rem 0.8rem; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+                <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                  <label style="font-size:0.8rem; color:var(--c-gold); font-weight:700;">STAFFEL:</label>
+                  <select id="pulsecastSeasonFilterSelect" class="lcars-input" style="height:32px; padding:0 0.6rem; font-size:0.82rem;" onchange="filterPulsecastEpisodesBySeason()">
+                    <option value="all">ALLE STAFFELN</option>
+                  </select>
+                </div>
+                <div style="display:flex; gap:0.5rem;">
+                  <button type="button" class="left-action-btn" onclick="downloadAllVisibleEpisodes()" style="padding:0.35rem 0.9rem; font-size:0.82rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
+                    <span>⬇️</span> <span>ANGEZEIGTE EPISODEN HERUNTERLADEN</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Episodes List -->
+              <div id="pulsecastEpisodesLoading" style="text-align:center; padding:2rem; color:var(--c-primary); font-family:var(--font-family);">
+                EPISODENDATEN WERDEN AUS XTREAM-CODES GELADEN...
+              </div>
+              <div id="pulsecastEpisodesList" style="display:flex; flex-direction:column; gap:0.5rem;">
+                <!-- Dynamically populated episode items -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+
         <!-- LCARS PARTNER FORM MODAL (ANLEGEN / BEARBEITEN) -->
         <div id="partnerFormModal" class="ha-modal-overlay" style="display:none;" onclick="handlePartnerModalBackdropClick(event)">
           <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:480px;">
@@ -7256,7 +7610,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   });
 
-  // 9 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
+  // 10 KATEGORIEN NAVIGATION (OHNE ZAHLEN)
   const CATEGORY_NAMES = {
     'system': 'SYSTEM & SENSOR VERLAUF',
     'services': 'SERVICES & PROZESS-SCANNER',
@@ -7266,7 +7620,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     'fantasy': 'ESPN FANTASY FOOTBALL // INCOMPLETE PASS',
     'solar': 'LCARS ENERGIE-MANAGEMENT // BALKONSOLAR',
     'homeassistant': 'LCARS HAUSSTEUERUNG // HOME ASSISTANT',
-    'cycle': 'LCARS BIO-TELEMETRIE // PARTNERINNEN-ZYKLUS'
+    'cycle': 'LCARS BIO-TELEMETRIE // PARTNERINNEN-ZYKLUS',
+    'pulsecast': 'LCARS PULSECAST // MEDIA & DOWNLOAD HUB'
   };
 
   function switchCategory(catId) {
@@ -7274,6 +7629,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       pendingUnlockCategory = catId;
       openAuthModal();
       return;
+    }
+
+    if (catId !== 'pulsecast' && typeof stopPulsecastPolling === 'function') {
+      stopPulsecastPolling();
     }
 
     playLcarsBeep(980, 1400);
@@ -7353,6 +7712,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (catId === 'cycle') {
       setTimeout(() => {
         loadCycleData();
+      }, 60);
+    }
+    if (catId === 'pulsecast') {
+      setTimeout(() => {
+        initPulsecastSection();
       }, 60);
     }
   }
@@ -11611,7 +11975,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function applyPermissionsVisibility() {
     const isUnlocked = (sessionStorage.getItem('lcars_auth_unlocked') === 'true');
-    const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle'];
+    const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast'];
 
     allSections.forEach(secId => {
       const btn = document.getElementById('btn-cat-' + secId);
@@ -11669,7 +12033,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (icon) icon.textContent = '🔓';
 
       // Check the checkboxes for currentLockedSections
-      const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle'];
+      const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast'];
       allSections.forEach(secId => {
         const cb = document.getElementById('permLock_' + secId);
         if (cb) {
@@ -12567,6 +12931,938 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (cycleChart) cycleChart.resize();
   });
 
+  // ==========================================================================
+  // LCARS PULSECAST CONTROLLER (MEDIA & DOWNLOAD HUB)
+  // ==========================================================================
+  let pulsecastIsOnline = false;
+  let pulsecastPollTimer = null;
+  let pulsecastActiveSubtab = 'downloads';
+  let pulsecastCatalogCategory = 'Filme';
+  let pulsecastCatalogSubcategory = 'all';
+  let pulsecastCatalogSearchQuery = '';
+  let pulsecastCatalogPage = 1;
+  let pulsecastCatalogTotalPages = 1;
+  let pulsecastCurrentSeriesEpisodes = [];
+  let pulsecastActiveSeries = null;
+  let pulsecastDownloadsCache = [];
+
+  function getPulsecastHeaders() {
+    const code = sessionStorage.getItem('lcars_auth_code') || currentAuthCode || '0901';
+    return {
+      'Content-Type': 'application/json',
+      'X-Command-Code': code
+    };
+  }
+
+  async function checkPulsecastStatus() {
+    try {
+      const resp = await fetch('/api/pulsecast/status');
+      if (resp.ok) {
+        const data = await resp.json();
+        pulsecastIsOnline = !!data.online;
+      } else {
+        pulsecastIsOnline = false;
+      }
+    } catch (e) {
+      pulsecastIsOnline = false;
+    }
+    updatePulsecastStatusBadge();
+    return pulsecastIsOnline;
+  }
+
+  function updatePulsecastStatusBadge() {
+    const badge = document.getElementById('pulsecastOnlineBadge');
+    if (!badge) return;
+    if (pulsecastIsOnline) {
+      badge.textContent = 'ONLINE // PORT 3000';
+      badge.style.backgroundColor = '#44dd88';
+      badge.style.color = '#000000';
+    } else {
+      badge.textContent = 'SUBRAUM-RELAY OFFLINE';
+      badge.style.backgroundColor = 'var(--c-red)';
+      badge.style.color = '#ffffff';
+    }
+  }
+
+  async function initPulsecastSection() {
+    const isLocked = isCategoryLocked('pulsecast');
+    const gateView = document.getElementById('pulsecastGateView');
+    const offlineNotice = document.getElementById('pulsecastOfflineNotice');
+    const activeContent = document.getElementById('pulsecastActiveContent');
+
+    if (isLocked) {
+      if (gateView) gateView.style.display = 'block';
+      if (offlineNotice) offlineNotice.style.display = 'none';
+      if (activeContent) activeContent.style.display = 'none';
+      stopPulsecastPolling();
+      return;
+    }
+
+    if (gateView) gateView.style.display = 'none';
+
+    await checkPulsecastStatus();
+    if (!pulsecastIsOnline) {
+      if (offlineNotice) offlineNotice.style.display = 'block';
+      if (activeContent) activeContent.style.display = 'none';
+      stopPulsecastPolling();
+      return;
+    }
+
+    if (offlineNotice) offlineNotice.style.display = 'none';
+    if (activeContent) activeContent.style.display = 'block';
+
+    switchPulsecastSubtab(pulsecastActiveSubtab || 'downloads');
+  }
+
+  function refreshPulsecastData(force) {
+    playLcarsBeep(1200, 1600);
+    initPulsecastSection();
+  }
+
+  function switchPulsecastSubtab(subtab) {
+    playLcarsBeep(1100, 1400);
+    pulsecastActiveSubtab = subtab;
+
+    document.querySelectorAll('[id^="pulsecast-tab-btn-"]').forEach(btn => btn.classList.remove('active'));
+    const activeBtn = document.getElementById('pulsecast-tab-btn-' + subtab);
+    if (activeBtn) activeBtn.classList.add('active');
+
+    document.querySelectorAll('.pulsecast-subview').forEach(view => view.style.display = 'none');
+    const activeView = document.getElementById('pulsecast-subview-' + subtab);
+    if (activeView) activeView.style.display = 'block';
+
+    if (subtab === 'downloads') {
+      loadPulsecastDownloads();
+      startPulsecastPolling();
+    } else {
+      stopPulsecastPolling();
+    }
+
+    if (subtab === 'catalog') {
+      loadPulsecastCatalog(pulsecastCatalogPage);
+    }
+
+    if (subtab === 'xdcc') {
+      const inp = document.getElementById('pulsecastXdccInput');
+      if (inp) inp.focus();
+    }
+  }
+
+  function startPulsecastPolling() {
+    stopPulsecastPolling();
+    pulsecastPollTimer = setInterval(() => {
+      if (currentCategory === 'pulsecast' && pulsecastActiveSubtab === 'downloads' && pulsecastIsOnline) {
+        loadPulsecastDownloads(true);
+      }
+    }, 2500);
+  }
+
+  function stopPulsecastPolling() {
+    if (pulsecastPollTimer) {
+      clearInterval(pulsecastPollTimer);
+      pulsecastPollTimer = null;
+    }
+  }
+
+  function formatBytes(bytes, decimals = 1) {
+    if (!bytes || bytes <= 0) return '0 B';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+  }
+
+  function formatEta(seconds) {
+    if (!seconds || seconds <= 0 || !isFinite(seconds)) return '--';
+    const s = Math.round(seconds);
+    const m = Math.floor(s / 60);
+    const h = Math.floor(m / 60);
+    if (h > 0) return `${h}h ${m % 60}m`;
+    if (m > 0) return `${m}m ${s % 60}s`;
+    return `${s}s`;
+  }
+
+  async function loadPulsecastDownloads(isPoll = false) {
+    try {
+      const resp = await fetch('/api/pulsecast/downloads', {
+        headers: getPulsecastHeaders()
+      });
+      if (resp.status === 403) {
+        initPulsecastSection();
+        return;
+      }
+      if (!resp.ok) {
+        if (resp.status === 503) {
+          pulsecastIsOnline = false;
+          initPulsecastSection();
+        }
+        return;
+      }
+      const downloads = await resp.json();
+      pulsecastDownloadsCache = Array.isArray(downloads) ? downloads : [];
+      renderPulsecastDownloads(pulsecastDownloadsCache);
+    } catch (e) {
+      console.warn('Fehler beim Laden der PulseCast Downloads:', e);
+    }
+  }
+
+  function renderPulsecastDownloads(list) {
+    const container = document.getElementById('pulsecastDownloadsList');
+    const emptyEl = document.getElementById('pulsecastDownloadsEmpty');
+    const badgeEl = document.getElementById('pulsecastDownloadsCountBadge');
+    const summaryEl = document.getElementById('pulsecastQueueSummary');
+    const speedBadge = document.getElementById('pulsecastActiveSpeedBadge');
+
+    let totalSpeed = 0;
+    let activeCount = 0;
+
+    list.forEach(d => {
+      if (d.status === 'downloading' || d.status === 'dcc_downloading') {
+        activeCount++;
+        totalSpeed += (d.speed || 0);
+      }
+    });
+
+    if (badgeEl) badgeEl.textContent = String(list.length);
+    if (summaryEl) summaryEl.textContent = `${activeCount} AKTIV // ${list.length} GESAMT`;
+    if (speedBadge) {
+      const mbps = (totalSpeed / (1024 * 1024)).toFixed(2);
+      speedBadge.textContent = `${mbps} MB/s`;
+      speedBadge.style.color = (totalSpeed > 0) ? '#44dd88' : 'var(--c-butterscotch)';
+    }
+
+    if (!container) return;
+
+    if (!list || list.length === 0) {
+      container.innerHTML = '';
+      if (emptyEl) emptyEl.style.display = 'block';
+      return;
+    }
+
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    let html = '';
+    list.forEach(item => {
+      const id = item.id || '';
+      const filename = item.filename || item.offeredFilename || 'Unbekannte Datei';
+      const expectedSize = item.expectedSize || 0;
+      const bytesReceived = item.bytesReceived || 0;
+      const pct = (expectedSize > 0) ? Math.min(100, (bytesReceived / expectedSize * 100)).toFixed(1) : 0;
+      const speedMb = ((item.speed || 0) / (1024 * 1024)).toFixed(2);
+      const etaStr = formatEta(item.eta);
+      const status = item.status || 'unknown';
+
+      let statusBadge = '';
+      let actionButtons = '';
+
+      if (status === 'downloading' || status === 'dcc_downloading') {
+        statusBadge = '<span class="badge-status" style="background:#44dd88; color:#000;">LÄUFT</span>';
+        actionButtons = `
+          <button type="button" class="left-action-btn" onclick="pausePulsecastDownload('${encodeURIComponent(id)}')" style="padding:0.3rem 0.75rem; font-size:0.78rem; border-color:var(--c-gold); color:var(--c-gold);" title="Pausieren">
+            ⏸ PAUSE
+          </button>
+          <button type="button" class="left-action-btn" onclick="cancelPulsecastDownload('${encodeURIComponent(id)}')" style="padding:0.3rem 0.75rem; font-size:0.78rem; border-color:var(--c-red); color:var(--c-red);" title="Abbrechen">
+            ✕ ABBRECHEN
+          </button>
+        `;
+      } else if (status === 'paused') {
+        statusBadge = '<span class="badge-status" style="background:var(--c-gold); color:#000;">PAUSIERT</span>';
+        actionButtons = `
+          <button type="button" class="left-action-btn" onclick="resumePulsecastDownload('${encodeURIComponent(id)}')" style="padding:0.3rem 0.75rem; font-size:0.78rem; border-color:#44dd88; color:#44dd88;" title="Fortsetzen">
+            ▶ WEITER
+          </button>
+          <button type="button" class="left-action-btn" onclick="cancelPulsecastDownload('${encodeURIComponent(id)}')" style="padding:0.3rem 0.75rem; font-size:0.78rem; border-color:var(--c-red); color:var(--c-red);" title="Abbrechen">
+            ✕ ABBRECHEN
+          </button>
+        `;
+      } else if (status === 'queued' || status === 'connecting') {
+        statusBadge = '<span class="badge-status" style="background:var(--c-blue); color:#000;">WARTESCHLANGE</span>';
+        actionButtons = `
+          <button type="button" class="left-action-btn" onclick="cancelPulsecastDownload('${encodeURIComponent(id)}')" style="padding:0.3rem 0.75rem; font-size:0.78rem; border-color:var(--c-red); color:var(--c-red);" title="Aus Warteschlange entfernen">
+            ✕ ABBRECHEN
+          </button>
+        `;
+      } else if (status === 'completed') {
+        statusBadge = '<span class="badge-status" style="background:var(--c-secondary); color:#000;">FERTIG</span>';
+        actionButtons = `
+          <button type="button" class="left-action-btn" onclick="deletePulsecastDownload('${encodeURIComponent(id)}')" style="padding:0.3rem 0.75rem; font-size:0.78rem; border-color:#888; color:#aaa;" title="Aus Liste entfernen">
+            🗑 ENTFERNEN
+          </button>
+        `;
+      } else {
+        statusBadge = `<span class="badge-status" style="background:var(--c-red); color:#fff;">${escapeHtml(status.toUpperCase())}</span>`;
+        actionButtons = `
+          <button type="button" class="left-action-btn" onclick="deletePulsecastDownload('${encodeURIComponent(id)}')" style="padding:0.3rem 0.75rem; font-size:0.78rem; border-color:#888; color:#aaa;" title="Entfernen">
+            🗑 ENTFERNEN
+          </button>
+        `;
+      }
+
+      const icon = filename.match(/\\.(mkv|mp4|avi|webm)$/i) ? '🎬' : '📦';
+
+      html += `
+        <div style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.85rem; border-left:4px solid var(--c-butterscotch);">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.4rem;">
+            <div style="display:flex; align-items:center; gap:0.5rem; min-width:0; flex:1;">
+              <span style="font-size:1.15rem; flex-shrink:0;">${icon}</span>
+              <span style="font-family:var(--font-family); font-weight:700; font-size:0.95rem; color:#fff; word-break:break-all;" title="${escapeHtml(filename)}">
+                ${escapeHtml(filename)}
+              </span>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              ${statusBadge}
+              ${actionButtons}
+            </div>
+          </div>
+
+          <!-- LCARS Progress Bar -->
+          <div class="pulsecast-progress-container">
+            <div class="pulsecast-progress-fill" style="width:${pct}%;"></div>
+          </div>
+
+          <!-- Progress Details -->
+          <div style="display:flex; justify-content:space-between; align-items:center; font-family:var(--mono-family); font-size:0.8rem; color:#aaa; flex-wrap:wrap; gap:0.4rem; margin-top:0.35rem;">
+            <span>${pct}% // ${formatBytes(bytesReceived)} von ${formatBytes(expectedSize)}</span>
+            <div style="display:flex; gap:0.8rem; align-items:center;">
+              ${(status === 'downloading' || status === 'dcc_downloading') ? `<span style="color:#44dd88;">⚡ ${speedMb} MB/s</span><span style="color:var(--c-gold);">⏳ ${etaStr}</span>` : ''}
+              ${item.server ? `<span style="color:#666;">[${escapeHtml(item.server)}]</span>` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    });
+
+    container.innerHTML = html;
+  }
+
+  async function pausePulsecastDownload(encodedId) {
+    playLcarsBeep(900, 1100);
+    try {
+      await fetch(`/api/pulsecast/download/${encodedId}/pause`, {
+        method: 'POST',
+        headers: getPulsecastHeaders()
+      });
+      loadPulsecastDownloads();
+    } catch (e) {
+      console.warn('Fehler bei Pause:', e);
+    }
+  }
+
+  async function resumePulsecastDownload(encodedId) {
+    playLcarsBeep(1100, 1400);
+    try {
+      await fetch(`/api/pulsecast/download/${encodedId}/resume`, {
+        method: 'POST',
+        headers: getPulsecastHeaders()
+      });
+      loadPulsecastDownloads();
+    } catch (e) {
+      console.warn('Fehler bei Resume:', e);
+    }
+  }
+
+  async function cancelPulsecastDownload(encodedId) {
+    playLcarsBeep(400, 200);
+    try {
+      await fetch(`/api/pulsecast/download/${encodedId}/cancel`, {
+        method: 'POST',
+        headers: getPulsecastHeaders()
+      });
+      loadPulsecastDownloads();
+    } catch (e) {
+      console.warn('Fehler bei Cancel:', e);
+    }
+  }
+
+  async function deletePulsecastDownload(encodedId) {
+    playLcarsBeep(500, 300);
+    try {
+      await fetch(`/api/pulsecast/download/${encodedId}`, {
+        method: 'DELETE',
+        headers: getPulsecastHeaders()
+      });
+      loadPulsecastDownloads();
+    } catch (e) {
+      console.warn('Fehler bei Delete:', e);
+    }
+  }
+
+  // KATALOG CONTROLLER
+  function setPulsecastCatalogCategory(cat) {
+    playLcarsBeep(1000, 1300);
+    pulsecastCatalogCategory = cat;
+    pulsecastCatalogSubcategory = 'all';
+    pulsecastCatalogPage = 1;
+
+    ['Filme', 'Serien', 'all'].forEach(c => {
+      const btn = document.getElementById('cat-pill-' + c);
+      if (btn) {
+        if (c === cat) {
+          btn.classList.add('active');
+          btn.style.background = (c === 'Serien') ? 'var(--c-secondary)' : 'var(--c-primary)';
+          btn.style.color = '#000';
+        } else {
+          btn.classList.remove('active');
+          btn.style.background = 'rgba(0,0,0,0.5)';
+          btn.style.color = (c === 'Serien') ? 'var(--c-secondary)' : (c === 'Filme' ? 'var(--c-primary)' : '#aaa');
+        }
+      }
+    });
+
+    loadPulsecastCatalog(1);
+  }
+
+  function onPulsecastSubcatChanged() {
+    const sel = document.getElementById('pulsecastSubcatSelect');
+    if (sel) {
+      pulsecastCatalogSubcategory = sel.value;
+      pulsecastCatalogPage = 1;
+      loadPulsecastCatalog(1);
+    }
+  }
+
+  function pulsecastCatalogSearchTrigger() {
+    const inp = document.getElementById('pulsecastCatalogSearchInput');
+    pulsecastCatalogSearchQuery = inp ? inp.value.trim() : '';
+    pulsecastCatalogPage = 1;
+    loadPulsecastCatalog(1);
+  }
+
+  function pulsecastCatalogSearchClear() {
+    const inp = document.getElementById('pulsecastCatalogSearchInput');
+    if (inp) inp.value = '';
+    pulsecastCatalogSearchQuery = '';
+    pulsecastCatalogPage = 1;
+    loadPulsecastCatalog(1);
+  }
+
+  function pulsecastChangePage(delta) {
+    const target = pulsecastCatalogPage + delta;
+    if (target >= 1 && target <= pulsecastCatalogTotalPages) {
+      playLcarsBeep(1200, 1500);
+      loadPulsecastCatalog(target);
+    }
+  }
+
+  async function loadPulsecastCatalog(page = 1) {
+    pulsecastCatalogPage = page;
+    const grid = document.getElementById('pulsecastCatalogGrid');
+    const loading = document.getElementById('pulsecastCatalogLoading');
+    const emptyEl = document.getElementById('pulsecastCatalogEmpty');
+
+    if (loading) loading.style.display = 'block';
+    if (grid) grid.style.display = 'none';
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    try {
+      const params = new URLSearchParams({
+        category: pulsecastCatalogCategory,
+        subcategory: pulsecastCatalogSubcategory,
+        search: pulsecastCatalogSearchQuery,
+        page: String(page),
+        limit: '40'
+      });
+
+      const resp = await fetch(`/api/pulsecast/media-library?${params.toString()}`, {
+        headers: getPulsecastHeaders()
+      });
+
+      if (loading) loading.style.display = 'none';
+
+      if (resp.status === 403) {
+        initPulsecastSection();
+        return;
+      }
+
+      if (!resp.ok) {
+        if (resp.status === 503) {
+          pulsecastIsOnline = false;
+          initPulsecastSection();
+        }
+        return;
+      }
+
+      const data = await resp.json();
+      const items = data.items || [];
+      pulsecastCatalogTotalPages = data.totalPages || 1;
+
+      // Update Subcategories dropdown dynamically
+      if (Array.isArray(data.availableSubcategories)) {
+        updatePulsecastSubcatDropdown(data.availableSubcategories);
+      }
+
+      // Update Counts
+      if (data.counts) {
+        const cFilme = document.getElementById('pulsecastCountFilme');
+        const cSerien = document.getElementById('pulsecastCountSerien');
+        if (cFilme && data.counts.Filme !== undefined) cFilme.textContent = `(${data.counts.Filme})`;
+        if (cSerien && data.counts.Serien !== undefined) cSerien.textContent = `(${data.counts.Serien})`;
+      }
+
+      // Update pagination UI
+      updatePulsecastPaginationUI(data.currentPage || page, pulsecastCatalogTotalPages, data.totalItems || 0);
+
+      if (items.length === 0) {
+        if (grid) grid.style.display = 'none';
+        if (emptyEl) emptyEl.style.display = 'block';
+      } else {
+        if (grid) {
+          grid.style.display = 'grid';
+          renderPulsecastCatalogGrid(items);
+        }
+      }
+    } catch (e) {
+      if (loading) loading.style.display = 'none';
+      console.warn('Fehler beim Laden des Katalogs:', e);
+    }
+  }
+
+  function updatePulsecastSubcatDropdown(subcats) {
+    const sel = document.getElementById('pulsecastSubcatSelect');
+    if (!sel) return;
+    const currentVal = pulsecastCatalogSubcategory;
+    let html = '<option value="all">ALLE KATEGORIEN</option>';
+    subcats.forEach(sub => {
+      if (sub === 'all') return;
+      const isSel = (sub === currentVal) ? 'selected' : '';
+      html += `<option value="${escapeHtml(sub)}" ${isSel}>${escapeHtml(sub)}</option>`;
+    });
+    sel.innerHTML = html;
+  }
+
+  function updatePulsecastPaginationUI(current, total, totalItems) {
+    const indicator = document.getElementById('pulsecastPageIndicator');
+    const prevBtn = document.getElementById('pulsecastPrevPageBtn');
+    const nextBtn = document.getElementById('pulsecastNextPageBtn');
+
+    if (indicator) {
+      indicator.textContent = `SEITE ${current} VON ${total} (${totalItems} EINTRÄGE)`;
+    }
+    if (prevBtn) prevBtn.disabled = (current <= 1);
+    if (nextBtn) nextBtn.disabled = (current >= total);
+  }
+
+  function renderPulsecastCatalogGrid(items) {
+    const grid = document.getElementById('pulsecastCatalogGrid');
+    if (!grid) return;
+
+    let html = '';
+    items.forEach(item => {
+      const isSeries = !!item.isGroup || item.type === 'series' || item.category === 'Serien' || item.metadata?.type === 'series';
+      const title = item.title || item.metadata?.title || item.filename || 'Ohne Titel';
+      const year = item.year || item.metadata?.year || '';
+      const poster = item.posterUrl || item.coverUrl || item.metadata?.posterUrl || item.metadata?.coverUrl || '';
+      const subcat = item.subcategory || item.metadata?.subcategory || item.category || '';
+      const seriesId = item.xtreamSeriesId || item.id || '';
+
+      const safeTitle = escapeHtml(title);
+      const safePoster = poster ? escapeHtml(poster) : '';
+      const safeSubcat = escapeHtml(subcat);
+
+      html += `
+        <div class="pulsecast-card">
+          <div style="position:relative; width:100%; aspect-ratio:2/3; background:#111; overflow:hidden;">
+            ${poster ? `<img src="${safePoster}" alt="${safeTitle}" class="pulsecast-card-poster" loading="lazy" onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+            <div style="position:absolute; inset:0; display:${poster ? 'none' : 'flex'}; align-items:center; justify-content:center; flex-direction:column; background:rgba(0,0,0,0.6); color:#777; font-size:2.5rem;">
+              ${isSeries ? '📺' : '🎬'}
+              <span style="font-size:0.75rem; font-family:var(--font-family); color:var(--c-gold); margin-top:0.4rem; padding:0 0.5rem; text-align:center;">${isSeries ? 'SERIE' : 'FILM'}</span>
+            </div>
+            ${year ? `<span style="position:absolute; top:6px; right:6px; background:rgba(0,0,0,0.75); border:1px solid rgba(255,255,255,0.2); color:var(--c-gold); font-family:var(--mono-family); font-size:0.75rem; padding:2px 6px; border-radius:4px;">${escapeHtml(String(year))}</span>` : ''}
+          </div>
+          <div class="pulsecast-card-body">
+            <div>
+              <div style="font-family:var(--font-family); font-size:0.9rem; font-weight:700; color:#fff; line-height:1.25; margin-bottom:0.3rem; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;" title="${safeTitle}">
+                ${safeTitle}
+              </div>
+              ${subcat ? `<div style="font-size:0.72rem; color:var(--c-butterscotch); font-family:var(--mono-family); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:0.6rem;" title="${safeSubcat}">${safeSubcat}</div>` : ''}
+            </div>
+
+            <div style="margin-top:auto;">
+              ${isSeries ? `
+                <button type="button" class="left-action-btn" onclick="openPulsecastSeriesEpisodes('${escapeHtml(String(seriesId))}', '${safeTitle.replace(/'/g, "\\'")}', '${safePoster}')" style="width:100%; justify-content:center; padding:0.35rem 0.6rem; font-size:0.8rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
+                  <span>📋</span> <span>EPISODEN</span>
+                </button>
+              ` : `
+                <button type="button" class="left-action-btn" onclick="triggerPulsecastMovieDownload('${escapeHtml(String(item.streamUrl || item.filename))}', '${safeTitle.replace(/'/g, "\\'")}')" style="width:100%; justify-content:center; padding:0.35rem 0.6rem; font-size:0.8rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+                  <span>⬇️</span> <span>DOWNLOAD</span>
+                </button>
+              `}
+            </div>
+          </div>
+        </div>
+      `;
+    });
+
+    grid.innerHTML = html;
+  }
+
+  async function triggerPulsecastMovieDownload(url, title) {
+    if (!url || !title) return;
+    playLcarsBeep(1200, 1600);
+    try {
+      const resp = await fetch('/api/pulsecast/download/media', {
+        method: 'POST',
+        headers: getPulsecastHeaders(),
+        body: JSON.stringify({ url: url, title: title })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        playLcarsAcknowledge();
+        alert(`Download gestartet: ${title}`);
+        switchPulsecastSubtab('downloads');
+      } else {
+        alert(`Download-Fehler: ${data.error || 'Unbekannter Fehler'}`);
+      }
+    } catch (e) {
+      alert(`Download-Fehler: ${e}`);
+    }
+  }
+
+  // SERIEN-EPISODEN MODAL
+  async function openPulsecastSeriesEpisodes(seriesId, title, poster) {
+    playLcarsBeep(980, 1300);
+    pulsecastActiveSeries = { id: seriesId, title: title, poster: poster };
+    const modal = document.getElementById('pulsecastSeriesModal');
+    const modalTitle = document.getElementById('pulsecastModalSeriesTitle');
+    const modalMeta = document.getElementById('pulsecastModalSeriesMeta');
+    const listEl = document.getElementById('pulsecastEpisodesList');
+    const loadingEl = document.getElementById('pulsecastEpisodesLoading');
+
+    if (modalTitle) modalTitle.textContent = title;
+    if (modalMeta) modalMeta.textContent = `SERIEN-ID: ${seriesId} // LADE EPISODEN...`;
+    if (listEl) listEl.innerHTML = '';
+    if (loadingEl) loadingEl.style.display = 'block';
+    if (modal) modal.style.display = 'flex';
+
+    try {
+      const resp = await fetch(`/api/pulsecast/series-episodes?seriesId=${encodeURIComponent(seriesId)}`, {
+        headers: getPulsecastHeaders()
+      });
+      if (loadingEl) loadingEl.style.display = 'none';
+
+      if (!resp.ok) {
+        const err = await resp.json();
+        if (listEl) listEl.innerHTML = `<div style="color:var(--c-red); font-family:var(--mono-family); padding:1rem; text-align:center;">${escapeHtml(err.error || 'Episoden konnten nicht geladen werden')}</div>`;
+        return;
+      }
+
+      const episodes = await resp.json();
+      pulsecastCurrentSeriesEpisodes = Array.isArray(episodes) ? episodes : [];
+      if (modalMeta) modalMeta.textContent = `${pulsecastCurrentSeriesEpisodes.length} EPISODEN VERFÜGBAR`;
+
+      populateSeasonFilter(pulsecastCurrentSeriesEpisodes);
+      renderEpisodesList(pulsecastCurrentSeriesEpisodes);
+    } catch (e) {
+      if (loadingEl) loadingEl.style.display = 'none';
+      if (listEl) listEl.innerHTML = `<div style="color:var(--c-red); font-family:var(--mono-family); padding:1rem; text-align:center;">Fehler beim Laden: ${escapeHtml(String(e))}</div>`;
+    }
+  }
+
+  function closePulsecastSeriesModal() {
+    playLcarsBeep(500, 300);
+    const modal = document.getElementById('pulsecastSeriesModal');
+    if (modal) modal.style.display = 'none';
+    pulsecastCurrentSeriesEpisodes = [];
+    pulsecastActiveSeries = null;
+  }
+
+  function handlePulsecastSeriesModalBackdropClick(e) {
+    if (e.target && e.target.id === 'pulsecastSeriesModal') {
+      closePulsecastSeriesModal();
+    }
+  }
+
+  function populateSeasonFilter(episodes) {
+    const sel = document.getElementById('pulsecastSeasonFilterSelect');
+    if (!sel) return;
+    const seasons = new Set();
+    episodes.forEach(ep => {
+      const se = ep.metadata?.seasonEpisode || '';
+      const m = se.match(/^S(\\d+)/i);
+      if (m) seasons.add(parseInt(m[1], 10));
+    });
+
+    let html = '<option value="all">ALLE STAFFELN</option>';
+    Array.from(seasons).sort((a, b) => a - b).forEach(s => {
+      html += `<option value="S${s}">STAFFEL ${s}</option>`;
+    });
+    sel.innerHTML = html;
+  }
+
+  function filterPulsecastEpisodesBySeason() {
+    const sel = document.getElementById('pulsecastSeasonFilterSelect');
+    const season = sel ? sel.value : 'all';
+    let filtered = pulsecastCurrentSeriesEpisodes;
+    if (season !== 'all') {
+      const prefix = season.toUpperCase();
+      filtered = pulsecastCurrentSeriesEpisodes.filter(ep => {
+        const se = (ep.metadata?.seasonEpisode || '').toUpperCase();
+        return se.startsWith(prefix);
+      });
+    }
+    renderEpisodesList(filtered);
+  }
+
+  function renderEpisodesList(episodes) {
+    const listEl = document.getElementById('pulsecastEpisodesList');
+    if (!listEl) return;
+
+    if (episodes.length === 0) {
+      listEl.innerHTML = '<div style="text-align:center; padding:1.5rem; color:#888; font-family:var(--mono-family);">KEINE EPISODEN GEFUNDEN</div>';
+      return;
+    }
+
+    let html = '';
+    episodes.forEach((ep, idx) => {
+      const title = ep.metadata?.title || ep.filename || `Episode ${idx + 1}`;
+      const seasonEpisode = ep.metadata?.seasonEpisode || '';
+      const duration = ep.metadata?.cast?.duration || '';
+      const rating = ep.metadata?.cast?.rating ? `★ ${ep.metadata.cast.rating.toFixed(1)}` : '';
+      const streamUrl = ep.filename || '';
+
+      const safeTitle = escapeHtml(title);
+      const safeUrl = escapeHtml(streamUrl);
+
+      html += `
+        <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.08); border-radius:4px; padding:0.6rem 0.8rem; gap:0.5rem; flex-wrap:wrap;">
+          <div style="display:flex; align-items:center; gap:0.6rem; min-width:0; flex:1;">
+            ${seasonEpisode ? `<span class="badge-status" style="background:var(--c-secondary); color:#000; font-size:0.75rem; flex-shrink:0;">${escapeHtml(seasonEpisode)}</span>` : ''}
+            <div style="min-width:0;">
+              <div style="font-family:var(--font-family); font-weight:700; font-size:0.9rem; color:#fff; word-break:break-all;">
+                ${safeTitle}
+              </div>
+              <div style="font-family:var(--mono-family); font-size:0.75rem; color:#888; display:flex; gap:0.8rem;">
+                ${duration ? `<span>⏱ ${escapeHtml(duration)}</span>` : ''}
+                ${rating ? `<span style="color:var(--c-gold);">${rating}</span>` : ''}
+              </div>
+            </div>
+          </div>
+          <button type="button" class="left-action-btn" onclick="downloadSingleEpisode('${safeUrl}', '${safeTitle.replace(/'/g, "\\'")}', '${seasonEpisode}')" style="padding:0.3rem 0.8rem; font-size:0.78rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+            <span>⬇️</span> <span>DOWNLOAD</span>
+          </button>
+        </div>
+      `;
+    });
+
+    listEl.innerHTML = html;
+  }
+
+  async function downloadSingleEpisode(url, title, seasonEpisode) {
+    if (!url) return;
+    playLcarsBeep(1200, 1600);
+    const seriesTitle = pulsecastActiveSeries ? pulsecastActiveSeries.title : '';
+    const fullTitle = seasonEpisode ? `${seasonEpisode} - ${title}` : title;
+    try {
+      const resp = await fetch('/api/pulsecast/download/media', {
+        method: 'POST',
+        headers: getPulsecastHeaders(),
+        body: JSON.stringify({ url: url, title: fullTitle, seriesTitle: seriesTitle })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        playLcarsAcknowledge();
+        alert(`Download gestartet: ${fullTitle}`);
+      } else {
+        alert(`Fehler: ${data.error || 'Download fehlgeschlagen'}`);
+      }
+    } catch (e) {
+      alert(`Fehler beim Starten: ${e}`);
+    }
+  }
+
+  async function downloadAllVisibleEpisodes() {
+    const sel = document.getElementById('pulsecastSeasonFilterSelect');
+    const season = sel ? sel.value : 'all';
+    let episodes = pulsecastCurrentSeriesEpisodes;
+    if (season !== 'all') {
+      const prefix = season.toUpperCase();
+      episodes = pulsecastCurrentSeriesEpisodes.filter(ep => (ep.metadata?.seasonEpisode || '').toUpperCase().startsWith(prefix));
+    }
+
+    if (!episodes || episodes.length === 0) {
+      alert('Keine Episoden zum Herunterladen vorhanden.');
+      return;
+    }
+
+    if (!confirm(`${episodes.length} Episoden zur Download-Warteschlange hinzufügen?`)) {
+      return;
+    }
+
+    playLcarsBeep(1300, 1800);
+    const seriesTitle = pulsecastActiveSeries ? pulsecastActiveSeries.title : '';
+    const items = episodes.map(ep => {
+      const title = ep.metadata?.title || ep.filename;
+      const se = ep.metadata?.seasonEpisode || '';
+      return {
+        url: ep.filename,
+        title: se ? `${se} - ${title}` : title,
+        seriesTitle: seriesTitle
+      };
+    });
+
+    try {
+      const resp = await fetch('/api/pulsecast/download/media', {
+        method: 'POST',
+        headers: getPulsecastHeaders(),
+        body: JSON.stringify({ items: items })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        playLcarsAcknowledge();
+        alert(`${data.count || items.length} Episoden erfolgreich in die Download-Warteschlange eingereiht!`);
+        closePulsecastSeriesModal();
+        switchPulsecastSubtab('downloads');
+      } else {
+        alert(`Batch-Download Fehler: ${data.error || 'Fehlgeschlagen'}`);
+      }
+    } catch (e) {
+      alert(`Batch-Download Fehler: ${e}`);
+    }
+  }
+
+  // XDCC SUCHE CONTROLLER
+  function pulsecastXdccChipSearch(q) {
+    const inp = document.getElementById('pulsecastXdccInput');
+    if (inp) inp.value = q;
+    pulsecastXdccSearch();
+  }
+
+  async function pulsecastXdccSearch() {
+    const inp = document.getElementById('pulsecastXdccInput');
+    const query = inp ? inp.value.trim() : '';
+    if (!query) {
+      alert('Bitte geben Sie einen Suchbegriff ein.');
+      return;
+    }
+
+    playLcarsBeep(1200, 1500);
+    const statusEl = document.getElementById('pulsecastXdccStatus');
+    const tableEl = document.getElementById('pulsecastXdccTable');
+    const emptyEl = document.getElementById('pulsecastXdccEmpty');
+    const tbody = document.getElementById('pulsecastXdccTbody');
+
+    if (statusEl) {
+      statusEl.style.display = 'block';
+      statusEl.textContent = `SCANNE IRC-NETZWERKE NACH "${query.toUpperCase()}"...`;
+      statusEl.style.color = 'var(--c-blue)';
+    }
+    if (tableEl) tableEl.style.display = 'none';
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    try {
+      const resp = await fetch(`/api/pulsecast/search?q=${encodeURIComponent(query)}`, {
+        headers: getPulsecastHeaders()
+      });
+
+      if (resp.status === 403) {
+        initPulsecastSection();
+        return;
+      }
+
+      if (!resp.ok) {
+        const err = await resp.json();
+        if (statusEl) {
+          statusEl.textContent = `SUCHFEHLER: ${err.error || 'Fehler bei der XDCC-Suche'}`;
+          statusEl.style.color = 'var(--c-red)';
+        }
+        return;
+      }
+
+      const data = await resp.json();
+      const results = data.results || (Array.isArray(data) ? data : []);
+
+      if (statusEl) {
+        statusEl.textContent = `${results.length} PAKET(E) GEFUNDEN // FILTER: "${query.toUpperCase()}"`;
+        statusEl.style.color = 'var(--c-gold)';
+      }
+
+      if (results.length === 0) {
+        if (tableEl) tableEl.style.display = 'none';
+        if (emptyEl) {
+          emptyEl.style.display = 'block';
+          emptyEl.textContent = `KEINE XDCC-PAKETE FÜR "${query.toUpperCase()}" GEFUNDEN`;
+        }
+        return;
+      }
+
+      if (emptyEl) emptyEl.style.display = 'none';
+      if (tableEl) tableEl.style.display = 'table';
+
+      let html = '';
+      results.forEach(res => {
+        const bot = res.botName || 'Bot';
+        const pack = res.packNumber || '';
+        const file = res.filename || '';
+        const sizeStr = res.sizeStr || (res.sizeBytes ? formatBytes(res.sizeBytes) : '--');
+        const server = res.server || '';
+        const channel = res.channel || '';
+        const sizeBytes = res.sizeBytes || 0;
+
+        const safeBot = escapeHtml(bot);
+        const safePack = escapeHtml(pack);
+        const safeFile = escapeHtml(file);
+        const safeServer = escapeHtml(server);
+        const safeChannel = escapeHtml(channel);
+
+        html += `
+          <tr>
+            <td style="font-family:var(--font-family); font-weight:700; color:var(--c-blue);">${safeBot}</td>
+            <td style="font-family:var(--mono-family); font-weight:700; color:var(--c-gold);">#${safePack}</td>
+            <td style="font-family:var(--mono-family); font-size:0.85rem; word-break:break-all; color:#fff;" title="${safeFile}">
+              ${safeFile}
+            </td>
+            <td style="font-family:var(--mono-family); color:#44dd88; white-space:nowrap;">${escapeHtml(sizeStr)}</td>
+            <td style="font-family:var(--mono-family); font-size:0.75rem; color:#888;">
+              ${safeServer ? `<div>${safeServer}</div>` : ''}
+              ${safeChannel ? `<div style="color:var(--c-secondary);">${safeChannel}</div>` : ''}
+            </td>
+            <td style="text-align:right;">
+              <button type="button" class="left-action-btn" onclick="triggerPulsecastXdccDownload('${safeServer}', '${safeChannel}', '${safeBot.replace(/'/g, "\\'")}', '${safePack}', '${safeFile.replace(/'/g, "\\'")}', ${sizeBytes})" style="padding:0.3rem 0.8rem; font-size:0.8rem; border-color:var(--c-blue); color:var(--c-blue); font-weight:700;">
+                <span>⬇️</span> <span>LADEN</span>
+              </button>
+            </td>
+          </tr>
+        `;
+      });
+
+      if (tbody) tbody.innerHTML = html;
+    } catch (e) {
+      if (statusEl) {
+        statusEl.textContent = `VERBINDUNGSFEHLER: ${e}`;
+        statusEl.style.color = 'var(--c-red)';
+      }
+    }
+  }
+
+  async function triggerPulsecastXdccDownload(server, channel, botName, packNumber, filename, expectedSize) {
+    playLcarsBeep(1200, 1600);
+    try {
+      const resp = await fetch('/api/pulsecast/download/xdcc', {
+        method: 'POST',
+        headers: getPulsecastHeaders(),
+        body: JSON.stringify({
+          server: server,
+          channel: channel,
+          botName: botName,
+          packNumber: packNumber,
+          filename: filename,
+          expectedSize: expectedSize
+        })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        playLcarsAcknowledge();
+        alert(`XDCC Download angefordert:\nBot: ${botName}\nPack: #${packNumber}\nDatei: ${filename}`);
+        switchPulsecastSubtab('downloads');
+      } else {
+        alert(`XDCC Fehler: ${data.error || 'Fehlgeschlagen'}`);
+      }
+    } catch (e) {
+      alert(`XDCC Fehler: ${e}`);
+    }
+  }
+
   // Initialer Boot-Ablauf
   function bootDashboard() {
     renderStats(initialStats);
@@ -12589,6 +13885,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     initLcarsVoiceComm();
     fetchPermissionsStatus();
     loadCycleData();
+    checkPulsecastStatus();
   }
 
   if (document.readyState === 'loading') {
@@ -12930,6 +14227,154 @@ if USE_FLASK:
         data = request.get_json(silent=True) or {}
         return jsonify(cycle_service.start_new_cycle(partner_id, data.get("start_date")))
 
+    # -----------------------------------------------------------------------
+    # PulseCast (Media & Download Hub) Proxy Endpoints
+    # -----------------------------------------------------------------------
+    PULSECAST_BASE_URL = "http://127.0.0.1:3000"
+
+    def _pulsecast_authorized():
+        if not permissions_service:
+            return True
+        with permissions_service.lock:
+            if "pulsecast" not in permissions_service.locked_sections:
+                return True
+        code = (
+            request.headers.get("X-Command-Code")
+            or request.headers.get("X-Auth-Code")
+            or request.args.get("code")
+        )
+        if not code and request.is_json:
+            b = request.get_json(silent=True) or {}
+            code = b.get("code")
+        if not code:
+            auth_hdr = request.headers.get("Authorization", "")
+            if auth_hdr.startswith("Bearer "):
+                code = auth_hdr.split(" ", 1)[1].strip()
+        return permissions_service.verify_code(code)
+
+    def _pulsecast_proxy(method, endpoint, params=None, json_data=None, timeout=12):
+        if not _pulsecast_authorized():
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Command Code Autorisierung erforderlich", "locked": True}), 403
+        url = f"{PULSECAST_BASE_URL}{endpoint}"
+        if not requests:
+            return jsonify({"success": False, "error": "requests Bibliothek nicht verfügbar"}), 500
+        try:
+            if method == "GET":
+                r = requests.get(url, params=params, timeout=timeout)
+            elif method == "POST":
+                r = requests.post(url, json=json_data, timeout=timeout)
+            elif method == "DELETE":
+                r = requests.delete(url, params=params, timeout=timeout)
+            else:
+                return jsonify({"success": False, "error": f"Nicht unterstützte HTTP-Methode: {method}"}), 405
+
+            try:
+                return jsonify(r.json()), r.status_code
+            except Exception:
+                return r.content, r.status_code, {"Content-Type": r.headers.get("Content-Type", "application/json")}
+        except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout):
+            return jsonify({"success": False, "error": "Subraum-Relay zu PulseCast offline (Port 3000)", "offline": True}), 503
+        except requests.exceptions.Timeout:
+            return jsonify({"success": False, "error": "PulseCast Subraum-Relay Zeitüberschreitung (Timeout)", "offline": False}), 504
+        except Exception as e:
+            return jsonify({"success": False, "error": f"PulseCast Proxy Fehler: {e}"}), 500
+
+    @app.route("/api/pulsecast/status", methods=["GET"])
+    def api_pulsecast_status():
+        is_locked = False
+        if permissions_service:
+            with permissions_service.lock:
+                is_locked = "pulsecast" in permissions_service.locked_sections
+        online = False
+        if requests:
+            try:
+                r = requests.get(f"{PULSECAST_BASE_URL}/api/downloads", timeout=2)
+                online = (r.status_code == 200)
+            except Exception:
+                online = False
+        return jsonify({
+            "online": online,
+            "locked": is_locked,
+            "port": 3000,
+            "host": PULSECAST_BASE_URL,
+            "message": "Online" if online else "Subraum-Relay zu PulseCast offline"
+        })
+
+    @app.route("/api/pulsecast/downloads", methods=["GET"])
+    def api_pulsecast_downloads():
+        return _pulsecast_proxy("GET", "/api/downloads")
+
+    @app.route("/api/pulsecast/download/<download_id>/pause", methods=["POST"])
+    def api_pulsecast_download_pause(download_id):
+        safe_id = urllib.parse.quote(download_id, safe="")
+        return _pulsecast_proxy("POST", f"/api/download/{safe_id}/pause")
+
+    @app.route("/api/pulsecast/download/<download_id>/resume", methods=["POST"])
+    def api_pulsecast_download_resume(download_id):
+        safe_id = urllib.parse.quote(download_id, safe="")
+        return _pulsecast_proxy("POST", f"/api/download/{safe_id}/resume")
+
+    @app.route("/api/pulsecast/download/<download_id>/cancel", methods=["POST"])
+    def api_pulsecast_download_cancel(download_id):
+        safe_id = urllib.parse.quote(download_id, safe="")
+        return _pulsecast_proxy("POST", f"/api/download/{safe_id}/cancel")
+
+    @app.route("/api/pulsecast/download/<download_id>", methods=["DELETE"])
+    def api_pulsecast_download_delete(download_id):
+        safe_id = urllib.parse.quote(download_id, safe="")
+        delete_file = request.args.get("deleteFile", "false")
+        return _pulsecast_proxy("DELETE", f"/api/download/{safe_id}", params={"deleteFile": delete_file})
+
+    @app.route("/api/pulsecast/media-library", methods=["GET"])
+    def api_pulsecast_media_library():
+        params = {
+            "category": request.args.get("category", "Filme"),
+            "subcategory": request.args.get("subcategory", "all"),
+            "search": request.args.get("search", ""),
+            "page": request.args.get("page", 1),
+            "limit": request.args.get("limit", 40)
+        }
+        return _pulsecast_proxy("GET", "/api/media-library", params=params, timeout=20)
+
+    @app.route("/api/pulsecast/series-episodes", methods=["GET"])
+    def api_pulsecast_series_episodes():
+        series_id = request.args.get("seriesId")
+        if not series_id:
+            return jsonify({"success": False, "error": "Parameter seriesId erforderlich"}), 400
+        return _pulsecast_proxy("GET", "/api/xtream/series-episodes", params={"seriesId": series_id}, timeout=20)
+
+    @app.route("/api/pulsecast/download/media", methods=["POST"])
+    def api_pulsecast_download_media():
+        data = request.get_json(silent=True) or {}
+        if "items" in data and isinstance(data["items"], list):
+            return _pulsecast_proxy("POST", "/api/xtream/download-batch", json_data={"items": data["items"]})
+        else:
+            url = data.get("url")
+            title = data.get("title")
+            series_title = data.get("seriesTitle")
+            if not url or not title:
+                return jsonify({"success": False, "error": "Parameter url und title erforderlich"}), 400
+            payload = {"url": url, "title": title}
+            if series_title:
+                payload["seriesTitle"] = series_title
+            return _pulsecast_proxy("POST", "/api/xtream/download", json_data=payload)
+
+    @app.route("/api/pulsecast/search", methods=["GET"])
+    def api_pulsecast_search():
+        query = request.args.get("q", "")
+        if not query:
+            return jsonify({"success": False, "error": "Suchbegriff (Parameter q) erforderlich"}), 400
+        source = request.args.get("source", "xdcc")
+        return _pulsecast_proxy("GET", "/api/search", params={"q": query, "source": source}, timeout=30)
+
+    @app.route("/api/pulsecast/download/xdcc", methods=["POST"])
+    def api_pulsecast_download_xdcc():
+        data = request.get_json(silent=True) or {}
+        for req_field in ["server", "channel", "botName", "packNumber", "filename"]:
+            if not data.get(req_field):
+                return jsonify({"success": False, "error": f"Fehlender Parameter: {req_field}"}), 400
+        return _pulsecast_proxy("POST", "/api/download", json_data=data)
+
 
     def run_server():
         print("[START] Starte System Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
@@ -13062,6 +14507,43 @@ else:
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+            elif parsed.path.startswith("/api/pulsecast/"):
+                if parsed.path == "/api/pulsecast/status":
+                    online = False
+                    if requests:
+                        try:
+                            r = requests.get("http://127.0.0.1:3000/api/downloads", timeout=2)
+                            online = (r.status_code == 200)
+                        except Exception:
+                            online = False
+                    is_locked = "pulsecast" in permissions_service.locked_sections if permissions_service else False
+                    data = json.dumps({"online": online, "locked": is_locked, "port": 3000}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                else:
+                    subpath = parsed.path.replace("/api/pulsecast", "/api", 1)
+                    if parsed.path == "/api/pulsecast/series-episodes":
+                        subpath = "/api/xtream/series-episodes"
+                    target_url = f"http://127.0.0.1:3000{subpath}"
+                    if parsed.query:
+                        target_url += f"?{parsed.query}"
+                    try:
+                        r = requests.get(target_url, timeout=15)
+                        self.send_response(r.status_code)
+                        self.send_header("Content-Type", r.headers.get("Content-Type", "application/json"))
+                        self.send_header("Content-Length", str(len(r.content)))
+                        self.end_headers()
+                        self.wfile.write(r.content)
+                    except Exception as e:
+                        err = json.dumps({"success": False, "error": str(e), "offline": True}).encode("utf-8")
+                        self.send_response(503)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(err)))
+                        self.end_headers()
+                        self.wfile.write(err)
             else:
                 stats = get_system_stats()
                 html = render_html_fallback(stats).encode("utf-8")
@@ -13303,6 +14785,35 @@ else:
                 self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()
                 self.wfile.write(resp)
+            elif parsed.path.startswith("/api/pulsecast/"):
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+                subpath = parsed.path.replace("/api/pulsecast", "/api", 1)
+                if parsed.path == "/api/pulsecast/download/media":
+                    subpath = "/api/xtream/download"
+                elif parsed.path == "/api/pulsecast/download/xdcc":
+                    subpath = "/api/download"
+                target_url = f"http://127.0.0.1:3000{subpath}"
+                try:
+                    try:
+                        json_body = json.loads(body.decode("utf-8"))
+                    except Exception:
+                        json_body = {}
+                    if parsed.path == "/api/pulsecast/download/media" and "items" in json_body:
+                        target_url = "http://127.0.0.1:3000/api/xtream/download-batch"
+                    r = requests.post(target_url, json=json_body, timeout=15)
+                    self.send_response(r.status_code)
+                    self.send_header("Content-Type", r.headers.get("Content-Type", "application/json"))
+                    self.send_header("Content-Length", str(len(r.content)))
+                    self.end_headers()
+                    self.wfile.write(r.content)
+                except Exception as e:
+                    err = json.dumps({"success": False, "error": str(e), "offline": True}).encode("utf-8")
+                    self.send_response(503)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(err)))
+                    self.end_headers()
+                    self.wfile.write(err)
             else:
                 self.send_response(404)
                 self.end_headers()
@@ -13337,6 +14848,25 @@ else:
                 self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()
                 self.wfile.write(resp)
+            elif parsed.path.startswith("/api/pulsecast/"):
+                subpath = parsed.path.replace("/api/pulsecast", "/api", 1)
+                target_url = f"http://127.0.0.1:3000{subpath}"
+                if parsed.query:
+                    target_url += f"?{parsed.query}"
+                try:
+                    r = requests.delete(target_url, timeout=15)
+                    self.send_response(r.status_code)
+                    self.send_header("Content-Type", r.headers.get("Content-Type", "application/json"))
+                    self.send_header("Content-Length", str(len(r.content)))
+                    self.end_headers()
+                    self.wfile.write(r.content)
+                except Exception as e:
+                    err = json.dumps({"success": False, "error": str(e), "offline": True}).encode("utf-8")
+                    self.send_response(503)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(err)))
+                    self.end_headers()
+                    self.wfile.write(err)
             else:
                 self.send_response(404)
                 self.end_headers()

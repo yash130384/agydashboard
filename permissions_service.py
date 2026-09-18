@@ -11,7 +11,7 @@ import sys
 import threading
 
 DEFAULT_COMMAND_CODE = "0901"
-DEFAULT_LOCKED_SECTIONS = ["cycle"]
+DEFAULT_LOCKED_SECTIONS = ["cycle", "pulsecast"]
 VALID_SECTIONS = [
     "system",
     "services",
@@ -22,7 +22,9 @@ VALID_SECTIONS = [
     "solar",
     "homeassistant",
     "cycle",
+    "pulsecast",
 ]
+
 
 
 class PermissionsService:
