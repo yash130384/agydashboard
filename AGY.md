@@ -250,19 +250,38 @@ Aufruf des Dashboards unter `http://localhost:5000` bzw. `https://dash.pimmel.si
 
 # PulseCast Media & XDCC Erweiterungen
 
-## 1. Direkte Wiedergabe im lokalen Media Player (HTTP Range Streaming)
+## 1. Direkte Wiedergabe im lokalen Media Player (HTTP Range Streaming & M3U-Streamdateien)
 - **Streaming-Proxy-Endpunkt**:
   `GET /api/pulsecast/media/stream/<path:filename>` (sowie `HEAD`)
   Leitet native HTTP Range Requests transparent an `http://127.0.0.1:3000/api/media/stream/<filename>` weiter.
-  - Transparente Weiterleitung von Request-Headern (`Range`, `If-Range`).
+  - Transparente Weiterleitung von Request-Headern (`Range`, `If-Range`) und Query-Parametern (`transcode=audio`, `ss=...`).
   - Durchreichen relevanter Response-Header (`206 Partial Content`, `Content-Range`, `Accept-Ranges: bytes`, `Content-Type`, `Content-Length`, `Cache-Control`, `ETag`, `Last-Modified`).
-  - Flüssiges Seeken und latenzfreies Streaming ohne `.m3u` Playlist-Download.
+  - Flüssiges Seeken und latenzfreies Streaming.
+- **M3U Stream-Datei Generator / Proxy**:
+  `GET /api/pulsecast/media/stream.m3u`
+  - Parameter: `filename` (z.B. `Filme/1108046_Coyote_vs_ACME_2026_NEU.mkv`), optional `title` (Anzeigetitel), optional `code` (Command Code z.B. `0901`).
+  - Validiert Autorisierung (`_pulsecast_authorized()`).
+  - Generiert `#EXTM3U` Playlist-Datei mit dynamischer Stream-URL (`http(s)://<host>/api/pulsecast/media/stream/<filename>?code=...`).
+  - Response-Header: `Content-Type: application/x-mpegurl; charset=utf-8`, `Content-Disposition: attachment; filename="<clean_title>.m3u"`, `Cache-Control: no-cache`.
+  - **1-Klick Wiedergabe**: Beim Anklicken/Download öffnet das Betriebssystem (Windows, macOS, Linux, Android) die Datei sofort im verknüpften Player (VLC, PotPlayer, IINA) mit voller nativer Audio-Unterstützung (AC3, E-AC3, DTS, TrueHD) und Seeking!
+- **Audio-Transcode Proxy & Codec-Probing**:
+  - `GET /api/pulsecast/media/probe/<path:filename>`:
+    Fragt `http://127.0.0.1:3000/api/media/probe/<filename>` ab und liefert JSON `{ filename, needsAudioTranscode: true/false }` zurück (mittels `ffprobe`-Analyse unkompatibler Browser-Audiocodecs wie AC3, E-AC3, DTS).
+  - `GET /api/pulsecast/media/transcode/<path:filename>` (sowie `HEAD`):
+    Transparentes Streaming von `http://127.0.0.1:3000/api/media/transcode/<filename>` mit On-the-Fly Konvertierung von Video-Audiospuren nach AAC.
+  - Query-Parameter `?transcode=audio` oder `?transcode=true` an `/api/pulsecast/media/stream/<filename>` wird transparent an Port 3000 durchgereicht.
 - **LCARS Media Player Modal (`#pulsecastPlayerModal`)**:
-  - **VLC Media Player**: Ruft `vlc://<stream_url>` auf.
-  - **PotPlayer (Windows)**: Ruft `potplayer://<stream_url>` auf.
-  - **IINA (macOS)**: Ruft `iina://weblink?url=<encoded_url>` auf.
-  - **nPlayer (Mobile)**: Ruft `nplayer-<stream_url>` auf.
+  - **📥 1-Klick M3U Stream-Datei**: Prominenter LCARS Action-Button `📥 VLC / MEDIA PLAYER STREAM-DATEI (.M3U)` zum direkten Download der Playlist für externe Player.
   - **Web-Player (Browser)**: Integriertes LCARS HTML5 `<video controls autoplay playsinline>` Player-Modal direkt im Dashboard.
+    - Automatisches Codec-Probing beim Start: Erkennt AC-3/DTS und schaltet automatisch auf Audio-Transcoding um.
+    - Audio-Umschalter im UI: `🔊 TON: AAC (KOMPATIBEL)` / `🎬 TON: ORIGINAL (NATIV)` inklusive Beibehaltung der aktuellen Abspielposition (`currentTime`).
+    - Visueller Status-Hinweis über aktiven Audiomodus (`🔊 Audio-Transcoding aktiv (AAC Stereo/5.1 für ruckelfreien Browser-Ton)`).
+  - **App-Protokoll URL-Schemes**:
+    - **VLC Media Player**: `vlc://<stream_url>`
+    - **PotPlayer (Windows)**: `potplayer://<stream_url>`
+    - **IINA (macOS)**: `iina://weblink?url=<encoded_url>`
+    - **nPlayer (Mobile)**: `nplayer-<stream_url>`
+    - Ergänzt um deutliche Hinweise: `(Nur wenn App-Protokoll registriert)`.
   - **Im neuen Tab öffnen**: Direkte Wiedergabe via `window.open(streamUrl, '_blank')`.
   - **Stream-URL kopieren**: Kopiert direkte HTTP Range Stream-URL in die Zwischenablage inkl. optischer Erfolgsanzeige.
 - **UI-Aktion `▶ IN PLAYER ÖFFNEN`**:

@@ -7439,6 +7439,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 </div>
               </div>
 
+              <!-- 1-Click M3U Stream-Datei Box (Empfohlen für Desktop & Mobile) -->
+              <div style="background:rgba(68,221,136,0.08); border:1px solid rgba(68,221,136,0.35); border-left:5px solid #44dd88; border-radius:6px; padding:0.85rem 1rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.6rem;">
+                  <a id="pulsecastM3uDownloadBtn" href="#" download class="lcars-btn" onclick="playLcarsBeep(1400, 1800)" style="flex:1; min-width:260px; display:inline-flex; align-items:center; justify-content:center; gap:0.6rem; background:#44dd88; color:#000; font-weight:800; font-size:0.95rem; font-family:var(--font-family); text-decoration:none; padding:0.7rem 1.2rem; border-radius:4px; box-shadow:0 0 15px rgba(68,221,136,0.4); text-transform:uppercase; letter-spacing:0.05em; transition:all 0.2s ease;">
+                    <span style="font-size:1.15rem;">📥</span> VLC / MEDIA PLAYER STREAM-DATEI (.M3U)
+                  </a>
+                </div>
+                <div style="font-size:0.75rem; color:#aaffcc; font-family:var(--mono-family); margin-top:0.45rem;">
+                  💡 1-Klick: Öffnet sofort VLC / PotPlayer / IINA auf Ihrem Computer mit nativem AC3/DTS-Mehrkanalton.
+                </div>
+              </div>
+
               <!-- Player Selection Grid -->
               <div>
                 <div style="font-family:var(--font-family); font-size:0.85rem; color:var(--c-butterscotch); font-weight:700; letter-spacing:0.06em; margin-bottom:0.6rem;">
@@ -7446,38 +7458,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 </div>
                 <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.6rem;">
                   <!-- VLC Media Player -->
-                  <a id="playerBtnVlc" href="#" class="lcars-card" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid var(--c-primary); border-left:4px solid var(--c-primary); cursor:pointer; background:rgba(255,153,0,0.06);">
+                  <a id="playerBtnVlc" href="#" class="lcars-card" title="(Nur wenn App-Protokoll im Browser/OS registriert ist)" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid var(--c-primary); border-left:4px solid var(--c-primary); cursor:pointer; background:rgba(255,153,0,0.06);">
                     <span style="font-size:1.6rem;">🟠</span>
                     <div>
                       <div style="color:var(--c-primary); font-weight:700; font-size:0.85rem; font-family:var(--font-family);">VLC MEDIA PLAYER</div>
-                      <div style="color:#888; font-size:0.7rem; font-family:var(--mono-family);">vlc:// URL-Schema</div>
+                      <div style="color:#888; font-size:0.68rem; font-family:var(--mono-family);">vlc:// URL-Schema (Nur wenn App-Protokoll registriert)</div>
                     </div>
                   </a>
 
                   <!-- PotPlayer (Windows) -->
-                  <a id="playerBtnPotPlayer" href="#" class="lcars-card" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid var(--c-blue); border-left:4px solid var(--c-blue); cursor:pointer; background:rgba(0,170,255,0.06);">
+                  <a id="playerBtnPotPlayer" href="#" class="lcars-card" title="(Nur wenn App-Protokoll im Browser/OS registriert ist)" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid var(--c-blue); border-left:4px solid var(--c-blue); cursor:pointer; background:rgba(0,170,255,0.06);">
                     <span style="font-size:1.6rem;">🟡</span>
                     <div>
                       <div style="color:var(--c-blue); font-weight:700; font-size:0.85rem; font-family:var(--font-family);">POTPLAYER (WIN)</div>
-                      <div style="color:#888; font-size:0.7rem; font-family:var(--mono-family);">potplayer:// URL-Schema</div>
+                      <div style="color:#888; font-size:0.68rem; font-family:var(--mono-family);">potplayer:// URL-Schema (Nur wenn App-Protokoll registriert)</div>
                     </div>
                   </a>
 
                   <!-- IINA (macOS) -->
-                  <a id="playerBtnIina" href="#" class="lcars-card" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid var(--c-secondary); border-left:4px solid var(--c-secondary); cursor:pointer; background:rgba(180,100,255,0.06);">
+                  <a id="playerBtnIina" href="#" class="lcars-card" title="(Nur wenn App-Protokoll im Browser/OS registriert ist)" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid var(--c-secondary); border-left:4px solid var(--c-secondary); cursor:pointer; background:rgba(180,100,255,0.06);">
                     <span style="font-size:1.6rem;">🟣</span>
                     <div>
                       <div style="color:var(--c-secondary); font-weight:700; font-size:0.85rem; font-family:var(--font-family);">IINA (macOS)</div>
-                      <div style="color:#888; font-size:0.7rem; font-family:var(--mono-family);">iina://weblink?url=</div>
+                      <div style="color:#888; font-size:0.68rem; font-family:var(--mono-family);">iina://weblink?url= (Nur wenn App-Protokoll registriert)</div>
                     </div>
                   </a>
 
                   <!-- nPlayer (Mobile) -->
-                  <a id="playerBtnNplayer" href="#" class="lcars-card" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid #44dd88; border-left:4px solid #44dd88; cursor:pointer; background:rgba(68,221,136,0.06);">
+                  <a id="playerBtnNplayer" href="#" class="lcars-card" title="(Nur wenn App-Protokoll im Browser/OS registriert ist)" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid #44dd88; border-left:4px solid #44dd88; cursor:pointer; background:rgba(68,221,136,0.06);">
                     <span style="font-size:1.6rem;">📱</span>
                     <div>
                       <div style="color:#44dd88; font-weight:700; font-size:0.85rem; font-family:var(--font-family);">nPLAYER (MOBILE)</div>
-                      <div style="color:#888; font-size:0.7rem; font-family:var(--mono-family);">nplayer- URL-Schema</div>
+                      <div style="color:#888; font-size:0.68rem; font-family:var(--mono-family);">nplayer- URL-Schema (Nur wenn App-Protokoll registriert)</div>
                     </div>
                   </a>
 
@@ -7486,25 +7498,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     <span style="font-size:1.6rem;">🌐</span>
                     <div>
                       <div style="color:var(--c-gold); font-weight:700; font-size:0.85rem; font-family:var(--font-family);">WEB-PLAYER (BROWSER)</div>
-                      <div style="color:#888; font-size:0.7rem; font-family:var(--mono-family);">LCARS HTML5 Player</div>
+                      <div style="color:#888; font-size:0.7rem; font-family:var(--mono-family);">LCARS HTML5 Player + Auto-Transcode</div>
                     </div>
                   </button>
                 </div>
               </div>
 
               <!-- Integrated HTML5 Video Player Container -->
-              <div id="pulsecastWebPlayerContainer" style="display:none; background:#000; border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:0.75rem; flex-direction:column; gap:0.5rem;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div id="pulsecastWebPlayerContainer" style="display:none; background:#000; border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:0.75rem; flex-direction:column; gap:0.6rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
                   <span style="font-family:var(--font-family); font-size:0.85rem; color:var(--c-gold); font-weight:700;">
-                    LCARS HTML5 BROWSER-STREAM (VIDEO CONTROLS AUTOPLAY)
+                    LCARS HTML5 BROWSER-STREAM (AUTOPLAY)
                   </span>
-                  <button type="button" class="left-action-btn" onclick="togglePulsecastWebPlayer(false)" style="border-color:#888; color:#888; padding:0.2rem 0.5rem; font-size:0.72rem;">
-                    PLAYER SCHLIESSEN
-                  </button>
+                  <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                    <button type="button" id="pulsecastAudioModeToggle" class="left-action-btn" onclick="togglePulsecastAudioMode()" style="padding:0.25rem 0.7rem; font-size:0.75rem; font-weight:700; border-radius:4px; border:1px solid #44dd88; color:#44dd88; background:rgba(68,221,136,0.15); white-space:nowrap;">
+                      🔊 TON: AAC (KOMPATIBEL)
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="togglePulsecastWebPlayer(false)" style="border-color:#888; color:#888; padding:0.25rem 0.6rem; font-size:0.75rem;">
+                      PLAYER SCHLIESSEN
+                    </button>
+                  </div>
                 </div>
+
+                <!-- Audio Status Notice -->
+                <div id="pulsecastAudioStatusHint" style="font-size:0.75rem; font-family:var(--mono-family); padding:0.35rem 0.6rem; border-radius:4px; background:rgba(255,255,255,0.03); color:#44dd88; border:1px solid rgba(255,255,255,0.08);">
+                  🔊 Audio-Transcoding aktiv (AAC Stereo/5.1 für ruckelfreien Browser-Ton)
+                </div>
+
                 <video id="pulsecastWebPlayerVideo" controls autoplay playsinline style="width:100%; max-height:55vh; background:#000; border-radius:4px; outline:none;"></video>
-                <div style="font-size:0.72rem; color:#888; font-family:var(--mono-family); text-align:right;">
-                  Tipp: Für MKV oder Multikanal-Audio wird die Wiedergabe in VLC, PotPlayer oder IINA empfohlen.
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.4rem; font-size:0.72rem; color:#888; font-family:var(--mono-family);">
+                  <span>💡 Umschalten auf ORIGINAL, falls Datei bereits AAC/MP3-Ton besitzt.</span>
+                  <span>Tipp: Für MKV / Mehrkanal-Ton wird die .M3U-Datei in VLC empfohlen.</span>
                 </div>
               </div>
 
@@ -13729,6 +13753,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let pulsecastDownloadsCache = [];
   let pulsecastXdccSource = 'xdcc';
   let currentPulsecastStreamUrl = '';
+  let currentPulsecastFilename = '';
+  let currentPulsecastDisplayTitle = '';
+  let currentPulsecastAudioTranscode = false;
+  let currentPulsecastNeedsTranscode = false;
 
   function escapeJsString(str) {
     if (!str) return '';
@@ -14822,8 +14850,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const inputEl = document.getElementById('pulsecastPlayerStreamUrlInput');
     const webPlayerContainer = document.getElementById('pulsecastWebPlayerContainer');
     const videoEl = document.getElementById('pulsecastWebPlayerVideo');
+    const m3uBtn = document.getElementById('pulsecastM3uDownloadBtn');
 
     const cleanTitle = displayTitle || filename;
+    currentPulsecastFilename = filename;
+    currentPulsecastDisplayTitle = cleanTitle;
+    currentPulsecastAudioTranscode = false;
+    currentPulsecastNeedsTranscode = false;
+
     if (titleEl) titleEl.textContent = cleanTitle;
     if (metaEl) metaEl.textContent = `DATEI: ${filename} // HTTP RANGE NATIVE STREAM`;
 
@@ -14833,6 +14867,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     currentPulsecastStreamUrl = streamUrl;
 
     if (inputEl) inputEl.value = streamUrl;
+
+    // 1-Click M3U playlist download URL
+    const safeTitle = cleanTitle.replace(/[^\\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'stream';
+    const m3uUrl = `${window.location.origin}/api/pulsecast/media/stream.m3u?filename=${encodeURIComponent(cleanFn)}${code ? `&code=${encodeURIComponent(code)}` : ''}&title=${encodeURIComponent(cleanTitle)}`;
+    if (m3uBtn) {
+      m3uBtn.href = m3uUrl;
+      m3uBtn.download = `${safeTitle}.m3u`;
+    }
 
     // Direct app protocol schemes
     const vlcBtn = document.getElementById('playerBtnVlc');
@@ -14867,6 +14909,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       videoEl.removeAttribute('src');
       videoEl.load();
     }
+    currentPulsecastAudioTranscode = false;
+    currentPulsecastNeedsTranscode = false;
     if (modal) modal.style.display = 'none';
   }
 
@@ -14876,19 +14920,116 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  function togglePulsecastWebPlayer(show) {
+  async function togglePulsecastWebPlayer(show) {
     const container = document.getElementById('pulsecastWebPlayerContainer');
     const videoEl = document.getElementById('pulsecastWebPlayerVideo');
     if (!container || !videoEl) return;
     if (show) {
       playLcarsBeep(1100, 1400);
       container.style.display = 'flex';
-      videoEl.src = currentPulsecastStreamUrl;
-      videoEl.play().catch(e => console.log('Autoplay info:', e));
+
+      const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '0901');
+      const cleanFn = (currentPulsecastFilename || '').replace(/^[/]+/, '');
+
+      updatePulsecastAudioUI(true, '🔍 Analysiere Audio-Codecs via PulseCast Probe...');
+
+      let needsTranscode = false;
+      try {
+        const probeUrl = `/api/pulsecast/media/probe/${encodeURI(cleanFn)}${code ? `?code=${encodeURIComponent(code)}` : ''}`;
+        const res = await fetch(probeUrl, {
+          headers: getPulsecastHeaders()
+        });
+        if (res.ok) {
+          const data = await res.json();
+          needsTranscode = !!data.needsAudioTranscode;
+        }
+      } catch (err) {
+        console.warn('PulseCast Probe fehlgeschlagen, nutze Standard:', err);
+      }
+
+      currentPulsecastNeedsTranscode = needsTranscode;
+      currentPulsecastAudioTranscode = needsTranscode;
+      loadPulsecastVideoSource(false);
     } else {
       playLcarsBeep(700, 400);
       videoEl.pause();
+      videoEl.removeAttribute('src');
+      videoEl.load();
       container.style.display = 'none';
+    }
+  }
+
+  function loadPulsecastVideoSource(preserveTime = false) {
+    const videoEl = document.getElementById('pulsecastWebPlayerVideo');
+    if (!videoEl || !currentPulsecastFilename) return;
+
+    const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '0901');
+    const cleanFn = (currentPulsecastFilename || '').replace(/^[/]+/, '');
+
+    let targetSrc = '';
+    if (currentPulsecastAudioTranscode) {
+      targetSrc = `${window.location.origin}/api/pulsecast/media/transcode/${encodeURI(cleanFn)}${code ? `?code=${encodeURIComponent(code)}` : ''}`;
+    } else {
+      targetSrc = `${window.location.origin}/api/pulsecast/media/stream/${encodeURI(cleanFn)}${code ? `?code=${encodeURIComponent(code)}` : ''}`;
+    }
+
+    const prevTime = preserveTime ? (videoEl.currentTime || 0) : 0;
+    videoEl.src = targetSrc;
+    if (prevTime > 0) {
+      videoEl.onloadedmetadata = () => {
+        try { videoEl.currentTime = prevTime; } catch (_) {}
+        videoEl.onloadedmetadata = null;
+      };
+    }
+    videoEl.play().catch(e => console.log('Autoplay info:', e));
+    updatePulsecastAudioUI();
+  }
+
+  function togglePulsecastAudioMode() {
+    playLcarsBeep(1200, 1500);
+    currentPulsecastAudioTranscode = !currentPulsecastAudioTranscode;
+    loadPulsecastVideoSource(true);
+  }
+
+  function updatePulsecastAudioUI(probing = false, probingText = '') {
+    const toggleBtn = document.getElementById('pulsecastAudioModeToggle');
+    const hintEl = document.getElementById('pulsecastAudioStatusHint');
+
+    if (probing) {
+      if (hintEl) {
+        hintEl.innerHTML = probingText || '🔍 Audio-Codecs werden geprüft...';
+        hintEl.style.color = 'var(--c-gold)';
+      }
+      return;
+    }
+
+    if (toggleBtn) {
+      if (currentPulsecastAudioTranscode) {
+        toggleBtn.innerHTML = '🔊 TON: AAC (KOMPATIBEL)';
+        toggleBtn.style.background = 'rgba(68,221,136,0.18)';
+        toggleBtn.style.color = '#44dd88';
+        toggleBtn.style.borderColor = '#44dd88';
+      } else {
+        toggleBtn.innerHTML = '🎬 TON: ORIGINAL (NATIV)';
+        toggleBtn.style.background = 'rgba(255,153,0,0.18)';
+        toggleBtn.style.color = 'var(--c-butterscotch)';
+        toggleBtn.style.borderColor = 'var(--c-butterscotch)';
+      }
+    }
+
+    if (hintEl) {
+      if (currentPulsecastAudioTranscode) {
+        hintEl.innerHTML = '🔊 Audio-Transcoding aktiv (AAC Stereo/5.1 für ruckelfreien Browser-Ton)';
+        hintEl.style.color = '#44dd88';
+      } else {
+        if (currentPulsecastNeedsTranscode) {
+          hintEl.innerHTML = '🎬 Nativer Originalstream aktiv ⚠️ (Achtung: Diese Datei enthält AC3/DTS und bleibt im Browser ohne Transcoding vermutlich stumm!)';
+          hintEl.style.color = 'var(--c-primary)';
+        } else {
+          hintEl.innerHTML = '🎬 Nativer Originalstream aktiv (Browser-kompatibler Ton)';
+          hintEl.style.color = '#888';
+        }
+      }
     }
   }
 
@@ -15434,25 +15575,22 @@ if USE_FLASK:
                 return jsonify({"success": False, "error": f"Fehlender Parameter: {req_field}"}), 400
         return _pulsecast_proxy("POST", "/api/download", json_data=data)
 
-    @app.route("/api/pulsecast/media/stream/<path:filename>", methods=["GET", "HEAD"])
-    def api_pulsecast_media_stream(filename):
-        if not _pulsecast_authorized():
-            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Command Code Autorisierung erforderlich", "locked": True}), 403
-
-        safe_filename = urllib.parse.quote(filename, safe="/")
-        target_url = f"{PULSECAST_BASE_URL}/api/media/stream/{safe_filename}"
-
+    def _pulsecast_stream_proxy(target_url):
         req_headers = {}
         if "Range" in request.headers:
             req_headers["Range"] = request.headers["Range"]
         if "If-Range" in request.headers:
             req_headers["If-Range"] = request.headers["If-Range"]
 
+        params = dict(request.args)
+        params.pop("code", None)
+
         try:
             r = requests.request(
                 method=request.method,
                 url=target_url,
                 headers=req_headers,
+                params=params,
                 stream=True,
                 timeout=30
             )
@@ -15494,6 +15632,71 @@ if USE_FLASK:
             return jsonify({"success": False, "error": "PulseCast Subraum-Relay Zeitüberschreitung (Timeout)", "offline": False}), 504
         except Exception as e:
             return jsonify({"success": False, "error": f"PulseCast Stream Proxy Fehler: {e}"}), 500
+
+    @app.route("/api/pulsecast/media/stream.m3u", methods=["GET"])
+    def api_pulsecast_media_m3u():
+        if not _pulsecast_authorized():
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Command Code Autorisierung erforderlich", "locked": True}), 403
+
+        filename = request.args.get("filename", "").strip()
+        if not filename:
+            return jsonify({"success": False, "error": "Parameter filename erforderlich"}), 400
+
+        clean_filename = filename.lstrip("/")
+        title_param = request.args.get("title") or request.args.get("display_title")
+        if title_param:
+            display_title = title_param.strip()
+        else:
+            base = os.path.basename(clean_filename)
+            display_title = os.path.splitext(base)[0]
+
+        code = (
+            request.args.get("code")
+            or request.headers.get("X-Command-Code")
+            or request.headers.get("X-Auth-Code")
+            or ""
+        ).strip()
+
+        scheme = request.headers.get("X-Forwarded-Proto") or request.scheme
+        host_url = f"{scheme}://{request.host}".rstrip("/")
+        if not request.headers.get("X-Forwarded-Proto") and request.host_url:
+            host_url = request.host_url.rstrip("/")
+
+        safe_encoded_fn = urllib.parse.quote(clean_filename, safe="/")
+        code_query = f"?code={urllib.parse.quote(code)}" if code else ""
+        full_stream_url = f"{host_url}/api/pulsecast/media/stream/{safe_encoded_fn}{code_query}"
+
+        clean_title = re.sub(r'[^\w\-\.]+', '_', display_title).strip('_') or "stream"
+        m3u_content = f"#EXTM3U\n#EXTINF:-1 tvg-name=\"{display_title}\",{display_title}\n{full_stream_url}\n"
+
+        response = Response(m3u_content, status=200, mimetype="application/x-mpegurl")
+        response.headers["Content-Type"] = "application/x-mpegurl; charset=utf-8"
+        response.headers["Content-Disposition"] = f'attachment; filename="{clean_title}.m3u"'
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+    @app.route("/api/pulsecast/media/stream/<path:filename>", methods=["GET", "HEAD"])
+    def api_pulsecast_media_stream(filename):
+        if not _pulsecast_authorized():
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Command Code Autorisierung erforderlich", "locked": True}), 403
+
+        safe_filename = urllib.parse.quote(filename, safe="/")
+        target_url = f"{PULSECAST_BASE_URL}/api/media/stream/{safe_filename}"
+        return _pulsecast_stream_proxy(target_url)
+
+    @app.route("/api/pulsecast/media/transcode/<path:filename>", methods=["GET", "HEAD"])
+    def api_pulsecast_media_transcode(filename):
+        if not _pulsecast_authorized():
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Command Code Autorisierung erforderlich", "locked": True}), 403
+
+        safe_filename = urllib.parse.quote(filename, safe="/")
+        target_url = f"{PULSECAST_BASE_URL}/api/media/transcode/{safe_filename}"
+        return _pulsecast_stream_proxy(target_url)
+
+    @app.route("/api/pulsecast/media/probe/<path:filename>", methods=["GET"])
+    def api_pulsecast_media_probe(filename):
+        safe_filename = urllib.parse.quote(filename, safe="/")
+        return _pulsecast_proxy("GET", f"/api/media/probe/{safe_filename}", timeout=15)
 
     # ---------------------------------------------------------------------------
     # LCARS Authentication & User Management Routes
@@ -15858,10 +16061,44 @@ else:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
-                elif parsed.path.startswith("/api/pulsecast/media/stream/"):
-                    subpath = parsed.path.replace("/api/pulsecast/media/stream/", "", 1)
+                elif parsed.path == "/api/pulsecast/media/stream.m3u":
+                    qs = urllib.parse.parse_qs(parsed.query)
+                    filename = qs.get("filename", [""])[0].strip()
+                    if not filename:
+                        err = json.dumps({"success": False, "error": "Parameter filename erforderlich"}).encode("utf-8")
+                        self.send_response(400)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(err)))
+                        self.end_headers()
+                        self.wfile.write(err)
+                    else:
+                        clean_fn = filename.lstrip("/")
+                        title_param = qs.get("title", [""])[0] or qs.get("display_title", [""])[0]
+                        display_title = title_param if title_param else os.path.splitext(os.path.basename(clean_fn))[0]
+                        code = qs.get("code", [""])[0]
+                        host = self.headers.get("Host", "localhost:5000")
+                        proto = self.headers.get("X-Forwarded-Proto", "http")
+                        safe_encoded_fn = urllib.parse.quote(clean_fn, safe="/")
+                        code_query = f"?code={urllib.parse.quote(code)}" if code else ""
+                        full_stream_url = f"{proto}://{host}/api/pulsecast/media/stream/{safe_encoded_fn}{code_query}"
+                        clean_title = re.sub(r'[^\w\-\.]+', '_', display_title).strip('_') or "stream"
+                        m3u = f"#EXTM3U\n#EXTINF:-1 tvg-name=\"{display_title}\",{display_title}\n{full_stream_url}\n".encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/x-mpegurl; charset=utf-8")
+                        self.send_header("Content-Disposition", f'attachment; filename="{clean_title}.m3u"')
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Content-Length", str(len(m3u)))
+                        self.end_headers()
+                        self.wfile.write(m3u)
+                elif parsed.path.startswith("/api/pulsecast/media/stream/") or parsed.path.startswith("/api/pulsecast/media/transcode/"):
+                    is_transcode = parsed.path.startswith("/api/pulsecast/media/transcode/")
+                    prefix = "/api/pulsecast/media/transcode/" if is_transcode else "/api/pulsecast/media/stream/"
+                    subpath = parsed.path.replace(prefix, "", 1)
                     safe_fn = urllib.parse.quote(urllib.parse.unquote(subpath), safe="/")
-                    target_url = f"http://127.0.0.1:3000/api/media/stream/{safe_fn}"
+                    endpoint = "transcode" if is_transcode else "stream"
+                    target_url = f"http://127.0.0.1:3000/api/media/{endpoint}/{safe_fn}"
+                    if parsed.query:
+                        target_url += f"?{parsed.query}"
                     req_headers = {}
                     if "Range" in self.headers:
                         req_headers["Range"] = self.headers["Range"]
