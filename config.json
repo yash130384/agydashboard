@@ -18,11 +18,11 @@
   "home_assistant": {
     "enabled": true,
     "url": "http://127.0.0.1:8123",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI3Y2Y5NGRjZGJmMzU0ZTU5YTZjNWRkODZiMTkzZjdjZCIsImlhdCI6MTc4OTc3NzAwNCwiZXhwIjoxNzg5Nzc4ODA0fQ.FjwyQ6ldDkq9YwJMKb5wGQzuNlk1sDXQqE6H11pg158",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI3Y2Y5NGRjZGJmMzU0ZTU5YTZjNWRkODZiMTkzZjdjZCIsImlhdCI6MTc4OTgwMzg0OSwiZXhwIjoxNzg5ODA1NjQ5fQ.lgdS5B_nHaHvyZUp3n9OJJbhJRRubKGCI77iTsVeHCk",
     "username": "cb",
     "password": "mymaajen",
     "refresh_token": "e2e1a52cf9bc59f6990f74a1586db8f8e9a5203aef6c462a05f0a7a54816ff7dfe36248ce0aa1a28140e94dfd29b3b694eac6fe8260aa342aef3b2c08dd9d453",
-    "token_expires_at": 1789778744.1794107,
+    "token_expires_at": 1789805589.427507,
     "name": "Assistant"
   },
   "permissions": {

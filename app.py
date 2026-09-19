@@ -66,7 +66,7 @@ if psutil:
 
 # Flask Import mit Fallback zu http.server
 try:
-    from flask import Flask, jsonify, render_template_string, request, send_from_directory, Response, stream_with_context
+    from flask import Flask, jsonify, render_template_string, request, send_from_directory, Response, stream_with_context, redirect, make_response
     USE_FLASK = True
 except ImportError:
     print("[INFO] Flask nicht installiert, verwende Python Standardbibliothek (http.server).")
@@ -100,6 +100,27 @@ try:
 except Exception as _cycle_err:
     cycle_service = None
     print(f"[WARN] cycle_service konnte nicht importiert werden: {_cycle_err}", file=sys.stderr)
+
+# LCARS Central User & Session Service Import
+try:
+    from user_service import user_service
+except Exception as _user_err:
+    user_service = None
+    print(f"[WARN] user_service konnte nicht importiert werden: {_user_err}", file=sys.stderr)
+
+# LCARS Login Interface HTML Import
+try:
+    from login_page import LOGIN_HTML
+except Exception as _login_err:
+    LOGIN_HTML = None
+    print(f"[WARN] login_page konnte nicht importiert werden: {_login_err}", file=sys.stderr)
+
+# LCARS Auth Reverse Proxy Import
+try:
+    from auth_proxy import auth_proxy
+except Exception as _proxy_err:
+    auth_proxy = None
+    print(f"[WARN] auth_proxy konnte nicht importiert werden: {_proxy_err}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +210,18 @@ SERVICE_REGISTRY = {
         "cf_url": "https://mat.pimmel.site",
         "tailscale_url": "http://pimmel.tail3a782b.ts.net:5580",
         "lan_url": "http://192.168.31.210:5580",
+    },
+    "cups": {
+        "name": "CUPS",
+        "title": "CUPS Druckerdienst",
+        "icon": "🖨️",
+        "port": 631,
+        "description": "Netzwerkdrucker Verwaltung",
+        "allow_external": True,
+        "cf_key": None,
+        "cf_url": "https://port.pimmel.site",
+        "tailscale_url": "http://pimmel.tail3a782b.ts.net:631",
+        "lan_url": "http://192.168.31.210:631",
     },
     "postgres": {
         "name": "PostgreSQL 17",
@@ -534,7 +567,9 @@ STATIC_PORT_SUBDOMAINS = {
     8000: "tele",
     5580: "mat",
     8787: "head",
+    631: "port",
 }
+DIRECT_AUTH_PORTS = {5000, 8123, 20128}
 
 
 class CloudflaredNamedTunnelManager:
@@ -604,8 +639,18 @@ class CloudflaredNamedTunnelManager:
                     m = re.search(r":(\d+)$", service)
                     if m:
                         port = int(m.group(1))
-                        if port not in self._url_cache or hostname.startswith("dash."):
-                            self._url_cache[port] = f"https://{hostname}"
+                        if port == 5050:
+                            sub = hostname.split(".")[0]
+                            for sp, sname in STATIC_PORT_SUBDOMAINS.items():
+                                if sname == sub:
+                                    self._url_cache[sp] = f"https://{hostname}"
+                                    break
+                            if auth_proxy and sub in auth_proxy.subdomain_map:
+                                p_auth = auth_proxy.subdomain_map[sub]["port"]
+                                self._url_cache[p_auth] = f"https://{hostname}"
+                        else:
+                            if port not in self._url_cache or hostname.startswith("dash."):
+                                self._url_cache[port] = f"https://{hostname}"
         except Exception as e:
             print(f"[WARN] Fehler beim Laden von {self.config_path}: {e}", file=sys.stderr)
 
@@ -721,7 +766,17 @@ class CloudflaredNamedTunnelManager:
 
             subdomain = self.generate_subdomain(port, process_name=process_name, title=title)
             hostname = f"{subdomain}.{self.base_domain}"
-            target_service = f"http://localhost:{port}"
+            if port in DIRECT_AUTH_PORTS:
+                target_service = f"http://localhost:{port}"
+            else:
+                target_service = "http://localhost:5050"
+                if auth_proxy:
+                    auth_proxy.register_subdomain(
+                        subdomain=subdomain,
+                        target_port=port,
+                        service_key=subdomain,
+                        name=title or process_name or subdomain.upper(),
+                    )
 
             dns_ok = self._route_dns(subdomain)
             if not dns_ok:
@@ -835,6 +890,10 @@ class CloudflaredNamedTunnelManager:
 CloudflaredTunnelManager = CloudflaredNamedTunnelManager
 cf_tunnel_manager = CloudflaredNamedTunnelManager()
 atexit.register(cf_tunnel_manager.stop_all)
+
+if auth_proxy:
+    auth_proxy.start_background()
+    atexit.register(auth_proxy.stop)
 
 
 # ---------------------------------------------------------------------------
@@ -5988,6 +6047,62 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                   </button>
                 </div>
               </form>
+
+              <!-- 3. LCARS BENUTZER- & ZUGRIFFSVERWALTUNG (*.PIMMEL.SITE) -->
+              <div style="margin-top:2rem; border-top:2px solid var(--c-primary); padding-top:1.5rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
+                  <div>
+                    <div style="font-family:var(--font-family); font-size:1.25rem; font-weight:700; color:var(--c-primary); letter-spacing:0.06em; text-transform:uppercase;">
+                      3. LCARS BENUTZER- &amp; ZUGRIFFSVERWALTUNG (*.PIMMEL.SITE)
+                    </div>
+                    <div style="font-family:var(--mono-family); font-size:0.85rem; color:#aaa;">
+                      Zentrale Accounts für geschützte Dienste via Cloudflare Named Tunnel (cast, tele, mat, head, port)
+                    </div>
+                  </div>
+                  <div style="display:flex; gap:0.5rem;">
+                    <button type="button" class="left-action-btn" onclick="openNewUserModal()" style="padding:0.45rem 1rem; font-size:0.85rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+                      <span>➕</span> <span>NEUER BENUTZER</span>
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="loadLcarsUsers(); loadLcarsAuditLog();" style="padding:0.45rem 0.8rem; font-size:0.85rem; border-color:var(--c-gold); color:var(--c-gold);">
+                      <span>⟳</span> <span>AKTUALISIEREN</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Benutzer-Tabelle -->
+                <div style="overflow-x:auto; background:rgba(0,0,0,0.4); border:1px solid rgba(235,148,58,0.25); border-radius:6px; margin-bottom:1.5rem;">
+                  <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;" id="lcarsUsersTable">
+                    <thead>
+                      <tr style="background:rgba(235,148,58,0.15); border-bottom:1px solid rgba(235,148,58,0.3); text-align:left; font-family:var(--mono-family); color:var(--c-gold);">
+                        <th style="padding:0.6rem 0.75rem;">STATUS</th>
+                        <th style="padding:0.6rem 0.75rem;">BENUTZER</th>
+                        <th style="padding:0.6rem 0.75rem;">NAME / NOTIZ</th>
+                        <th style="padding:0.6rem 0.75rem;">BERECHTIGTE DIENSTE</th>
+                        <th style="padding:0.6rem 0.75rem;">LETZTER LOGIN</th>
+                        <th style="padding:0.6rem 0.75rem; text-align:right;">AKTIONEN</th>
+                      </tr>
+                    </thead>
+                    <tbody id="lcarsUsersTableBody">
+                      <tr><td colspan="6" style="padding:1.5rem; text-align:center; color:#888; font-family:var(--mono-family);">Lade Benutzerdaten...</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <!-- LCARS Audit-Log Terminal -->
+                <div style="margin-top:1.5rem; background:#040407; border:1px solid rgba(136,153,255,0.3); border-radius:6px; padding:1rem;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem;">
+                    <span style="font-family:var(--mono-family); font-size:0.85rem; color:var(--c-blue); font-weight:700; letter-spacing:0.05em;">
+                      🛡️ LCARS SUBRAUM AUTHENTIFIZIERUNGS-LOG (LETZTE 25 EREIGNISSE)
+                    </span>
+                    <button type="button" class="left-action-btn" onclick="loadLcarsAuditLog()" style="padding:0.2rem 0.6rem; font-size:0.75rem; border-color:var(--c-blue); color:var(--c-blue);">
+                      <span>⟳</span> <span>LOG NEU LADEN</span>
+                    </button>
+                  </div>
+                  <div id="lcarsAuditLogList" style="max-height:220px; overflow-y:auto; font-family:var(--mono-family); font-size:0.8rem; line-height:1.45; background:#000; padding:0.6rem; border-radius:4px; border:1px solid #1a1a24;">
+                    <div style="color:#666;">Keine Authentifizierungsereignisse protokolliert.</div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -7456,6 +7571,134 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                   <button type="button" class="left-action-btn" onclick="closePartnerModal()" style="padding:0.4rem 0.9rem;">ABBRECHEN</button>
                   <button type="submit" class="left-action-btn" style="padding:0.4rem 1.2rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
                     💾 SPEICHERN
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        <!-- LCARS USER FORM MODAL (ANLEGEN / BEARBEITEN) -->
+        <div id="userFormModal" class="ha-modal-overlay" style="display:none;" onclick="if(event.target===this) closeUserFormModal()">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:540px; width:95%; background:#08080d; border:2px solid var(--c-primary); border-radius:8px; overflow:hidden;">
+            <div class="ha-modal-header" style="background:var(--c-primary); color:#000; padding:0.6rem 1rem; display:flex; justify-content:space-between; align-items:center;">
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <span style="font-size:1.3rem;">👤</span>
+                <div id="userFormModalTitle" style="font-size:1.15rem; font-weight:700; text-transform:uppercase; font-family:var(--font-family);">
+                  NEUER LCARS BENUTZER
+                </div>
+              </div>
+              <button type="button" class="ha-modal-close-btn" onclick="closeUserFormModal()" style="border-color:#000; color:#000; font-weight:700;">✕</button>
+            </div>
+            <div class="ha-modal-body" style="padding:1.25rem;">
+              <form id="userForm" onsubmit="submitUserForm(event)">
+                <input type="hidden" id="formUserId" value="">
+
+                <div class="config-field" style="margin-bottom:1rem;">
+                  <label for="formUserUsername" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-primary); margin-bottom:0.35rem;">
+                    BENUTZERNAME (OFFICER ID)
+                  </label>
+                  <input type="text" id="formUserUsername" class="lcars-input" placeholder="z.B. user1, gast" required pattern="[a-zA-Z0-9_-]+" title="Nur Buchstaben, Zahlen, Bindestrich und Unterstrich">
+                </div>
+
+                <div id="formUserPasswordGroup" class="config-field" style="margin-bottom:1rem;">
+                  <label for="formUserPassword" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem;">
+                    PASSWORT (MIN. 6 ZEICHEN)
+                  </label>
+                  <input type="password" id="formUserPassword" class="lcars-input" placeholder="••••••••••••" minlength="6">
+                </div>
+
+                <div class="config-field" style="margin-bottom:1rem;">
+                  <label for="formUserDisplayName" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-secondary); margin-bottom:0.35rem;">
+                    ANZEIGENAME / VOLLER NAME (OPTIONAL)
+                  </label>
+                  <input type="text" id="formUserDisplayName" class="lcars-input" placeholder="z.B. Cdr. Data">
+                </div>
+
+                <!-- Berechtigungs-Matrix -->
+                <div style="margin-bottom:1.2rem; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:0.85rem;">
+                  <div style="font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.5rem; text-transform:uppercase;">
+                    🛡️ ZUGRIFFSBERECHTIGUNGEN (*.PIMMEL.SITE)
+                  </div>
+                  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:0.5rem;">
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                      <input type="checkbox" id="userSvc_all" value="*" class="user-svc-cb" onchange="handleUserSvcAllToggle()">
+                      <span style="font-family:var(--mono-family); font-size:0.85rem; color:var(--c-primary); font-weight:700;">★ Alle Dienste (*)</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                      <input type="checkbox" id="userSvc_pulsecast" value="pulsecast" class="user-svc-cb">
+                      <span style="font-family:var(--mono-family); font-size:0.82rem;">PulseCast (cast)</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                      <input type="checkbox" id="userSvc_telemetryvault" value="telemetryvault" class="user-svc-cb">
+                      <span style="font-family:var(--mono-family); font-size:0.82rem;">Telemetry (tele)</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                      <input type="checkbox" id="userSvc_matter" value="matter" class="user-svc-cb">
+                      <span style="font-family:var(--mono-family); font-size:0.82rem;">Matter Server (mat)</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                      <input type="checkbox" id="userSvc_headroom" value="headroom" class="user-svc-cb">
+                      <span style="font-family:var(--mono-family); font-size:0.82rem;">Headroom AI (head)</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                      <input type="checkbox" id="userSvc_cups" value="cups" class="user-svc-cb">
+                      <span style="font-family:var(--mono-family); font-size:0.82rem;">CUPS Drucker (port)</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="config-field" style="margin-bottom:1rem;">
+                  <label for="formUserNotes" style="display:block; font-size:0.85rem; font-weight:700; color:#aaa; margin-bottom:0.35rem;">
+                    NOTIZEN / ZWECK
+                  </label>
+                  <input type="text" id="formUserNotes" class="lcars-input" placeholder="z.B. Familie, Freund, Smart TV">
+                </div>
+
+                <div style="margin-bottom:1.25rem;">
+                  <label style="display:flex; align-items:center; gap:0.6rem; cursor:pointer;">
+                    <input type="checkbox" id="formUserIsActive" checked>
+                    <span style="font-family:var(--mono-family); font-size:0.85rem; color:#44dd88;">BENUTZERKONTO AKTIV (ZUGRIFF ERLAUBT)</span>
+                  </label>
+                </div>
+
+                <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
+                  <button type="button" class="left-action-btn" onclick="closeUserFormModal()" style="padding:0.4rem 0.9rem;">ABBRECHEN</button>
+                  <button type="submit" class="left-action-btn" style="padding:0.4rem 1.2rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+                    💾 SPEICHERN
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- LCARS USER PASSWORD RESET MODAL -->
+        <div id="userPasswordModal" class="ha-modal-overlay" style="display:none;" onclick="if(event.target===this) closeChangePasswordModal()">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:420px; width:95%; background:#08080d; border:2px solid var(--c-gold); border-radius:8px; overflow:hidden;">
+            <div class="ha-modal-header" style="background:var(--c-gold); color:#000; padding:0.6rem 1rem; display:flex; justify-content:space-between; align-items:center;">
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <span style="font-size:1.3rem;">🔑</span>
+                <div style="font-size:1.15rem; font-weight:700; text-transform:uppercase; font-family:var(--font-family);">
+                  PASSWORT ÄNDERN
+                </div>
+              </div>
+              <button type="button" class="ha-modal-close-btn" onclick="closeChangePasswordModal()" style="border-color:#000; color:#000; font-weight:700;">✕</button>
+            </div>
+            <div class="ha-modal-body" style="padding:1.25rem;">
+              <form onsubmit="submitChangeUserPassword(event)">
+                <input type="hidden" id="pwdModalUserId" value="">
+                <div style="margin-bottom:1rem; font-family:var(--mono-family); font-size:0.9rem; color:#ccc;">
+                  Passwort für Benutzer <strong style="color:var(--c-gold);" id="pwdModalUsername"></strong> neu setzen:
+                </div>
+                <div class="config-field" style="margin-bottom:1.25rem;">
+                  <label for="pwdModalNewPassword" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem;">
+                    NEUES PASSWORT (MIN. 6 ZEICHEN)
+                  </label>
+                  <input type="password" id="pwdModalNewPassword" class="lcars-input" placeholder="••••••••••••" minlength="6" required>
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
+                  <button type="button" class="left-action-btn" onclick="closeChangePasswordModal()" style="padding:0.4rem 0.9rem;">ABBRECHEN</button>
+                  <button type="submit" class="left-action-btn" style="padding:0.4rem 1.2rem; border-color:var(--c-gold); color:var(--c-gold); font-weight:700;">
+                    🔑 PASSWORT AKTUALISIEREN
                   </button>
                 </div>
               </form>
@@ -12194,6 +12437,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           cb.checked = currentLockedSections.includes(secId);
         }
       });
+      loadLcarsUsers();
+      loadLcarsAuditLog();
     } else {
       if (lockedView) lockedView.style.display = 'block';
       if (unlockedView) unlockedView.style.display = 'none';
@@ -12416,6 +12661,385 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       alert('Netzwerkfehler beim Speichern: ' + err);
     } finally {
       if (btn) btn.disabled = false;
+    }
+  }
+
+  // ==========================================================================
+  // LCARS CENTRAL USER & ACCESS MANAGEMENT CONTROLLER (*.PIMMEL.SITE)
+  // ==========================================================================
+  var lcarsUsersList = [];
+
+  function getLcarsAuthHeader() {
+    const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '0901');
+    return {
+      'Content-Type': 'application/json',
+      'X-Command-Code': code
+    };
+  }
+
+  async function loadLcarsUsers() {
+    const tbody = document.getElementById('lcarsUsersTableBody');
+    if (!tbody) return;
+    try {
+      const resp = await fetch('/api/users', { headers: getLcarsAuthHeader() });
+      if (resp.ok) {
+        const data = await resp.json();
+        lcarsUsersList = data.users || [];
+        renderLcarsUsersTable(lcarsUsersList);
+      } else if (resp.status === 403) {
+        tbody.innerHTML = '<tr><td colspan="6" style="padding:1.5rem; text-align:center; color:var(--c-red); font-family:var(--mono-family);">AUTORISIERUNG FEHLGESCHLAGEN // COMMAND CODE 0901 ERFORDERLICH</td></tr>';
+      } else {
+        tbody.innerHTML = '<tr><td colspan="6" style="padding:1.5rem; text-align:center; color:var(--c-red); font-family:var(--mono-family);">FEHLER BEIM LADEN DER BENUTZERDATEN</td></tr>';
+      }
+    } catch (e) {
+      console.warn('loadLcarsUsers error:', e);
+      tbody.innerHTML = '<tr><td colspan="6" style="padding:1.5rem; text-align:center; color:var(--c-red); font-family:var(--mono-family);">NETZWERKFEHLER BEIM LADEN</td></tr>';
+    }
+  }
+
+  function renderLcarsUsersTable(users) {
+    const tbody = document.getElementById('lcarsUsersTableBody');
+    if (!tbody) return;
+    if (!users || users.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="padding:2rem; text-align:center; color:#888; font-family:var(--mono-family);">KEINE BENUTZER ANGELEGT. KLICKEN SIE AUF "+ NEUER BENUTZER" UM DEN ERSTEN ZUGANG ZU ERSTELLEN.</td></tr>';
+      return;
+    }
+
+    const serviceLabels = {
+      '*': 'ALLE DIENSTE',
+      'all': 'ALLE DIENSTE',
+      'pulsecast': 'PULSECAST',
+      'telemetryvault': 'TELEMETRY',
+      'matter': 'MATTER',
+      'headroom': 'HEADROOM',
+      'cups': 'CUPS'
+    };
+
+    let html = '';
+    users.forEach(u => {
+      const isActive = u.is_active;
+      const statusBadge = isActive
+        ? '<span style="background:#44dd88; color:#000; padding:2px 8px; border-radius:4px; font-weight:700; font-family:var(--mono-family); font-size:0.75rem;">AKTIV</span>'
+        : '<span style="background:var(--c-red); color:#fff; padding:2px 8px; border-radius:4px; font-weight:700; font-family:var(--mono-family); font-size:0.75rem;">GESPERRT</span>';
+
+      let permsHtml = '';
+      const sList = u.allowed_services || [];
+      if (sList.includes('*') || sList.includes('all')) {
+        permsHtml = '<span style="background:rgba(235,148,58,0.2); border:1px solid var(--c-primary); color:var(--c-primary); padding:1px 6px; border-radius:3px; font-family:var(--mono-family); font-size:0.75rem; font-weight:700;">★ ALLE DIENSTE (*)</span>';
+      } else if (sList.length === 0) {
+        permsHtml = '<span style="color:#666; font-size:0.75rem; font-family:var(--mono-family);">KEINE</span>';
+      } else {
+        permsHtml = sList.map(s => {
+          const lbl = serviceLabels[s] || s.toUpperCase();
+          return '<span style="background:rgba(186,164,229,0.15); border:1px solid var(--c-secondary); color:var(--c-secondary); padding:1px 6px; border-radius:3px; font-family:var(--mono-family); font-size:0.72rem; margin-right:4px;">' + escapeHtml(lbl) + '</span>';
+        }).join(' ');
+      }
+
+      const lastLogin = u.last_login_at ? escapeHtml(u.last_login_at) : '<span style="color:#666;">Noch nie</span>';
+      const displayName = u.display_name ? '<strong>' + escapeHtml(u.display_name) + '</strong>' : '';
+      const notes = u.notes ? '<div style="font-size:0.75rem; color:#888;">' + escapeHtml(u.notes) + '</div>' : '';
+
+      html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.06);">' +
+        '<td style="padding:0.6rem 0.75rem; vertical-align:middle;">' + statusBadge + '</td>' +
+        '<td style="padding:0.6rem 0.75rem; vertical-align:middle; font-family:var(--mono-family); font-size:0.95rem; font-weight:700; color:var(--c-gold);">' + escapeHtml(u.username) + '</td>' +
+        '<td style="padding:0.6rem 0.75rem; vertical-align:middle;">' + displayName + ' ' + notes + '</td>' +
+        '<td style="padding:0.6rem 0.75rem; vertical-align:middle;">' + permsHtml + '</td>' +
+        '<td style="padding:0.6rem 0.75rem; vertical-align:middle; font-family:var(--mono-family); font-size:0.8rem; color:#bbb;">' + lastLogin + '</td>' +
+        '<td style="padding:0.6rem 0.75rem; vertical-align:middle; text-align:right; white-space:nowrap;">' +
+          '<button type="button" class="left-action-btn" onclick="openEditUserModal(' + u.id + ')" style="padding:0.25rem 0.5rem; font-size:0.75rem; border-color:var(--c-primary); color:var(--c-primary);" title="Bearbeiten"><span>✏️</span></button> ' +
+          '<button type="button" class="left-action-btn" onclick="openChangePasswordModal(' + u.id + ')" style="padding:0.25rem 0.5rem; font-size:0.75rem; border-color:var(--c-gold); color:var(--c-gold);" title="Passwort ändern"><span>🔑</span></button> ' +
+          '<button type="button" class="left-action-btn" onclick="toggleUserActive(' + u.id + ', ' + (isActive ? 'true' : 'false') + ')" style="padding:0.25rem 0.5rem; font-size:0.75rem; border-color:' + (isActive ? 'var(--c-almond)' : '#44dd88') + '; color:' + (isActive ? 'var(--c-almond)' : '#44dd88') + ';" title="' + (isActive ? 'Sperren' : 'Aktivieren') + '"><span>' + (isActive ? '⛔' : '✓') + '</span></button> ' +
+          '<button type="button" class="left-action-btn" onclick="deleteLcarsUser(' + u.id + ')" style="padding:0.25rem 0.5rem; font-size:0.75rem; border-color:var(--c-red); color:var(--c-red);" title="Löschen"><span>🗑️</span></button>' +
+        '</td>' +
+      '</tr>';
+    });
+    tbody.innerHTML = html;
+  }
+
+  function openNewUserModal() {
+    playLcarsBeep(700, 900);
+    const titleEl = document.getElementById('userFormModalTitle');
+    if (titleEl) titleEl.textContent = 'NEUER LCARS BENUTZER ANLEGEN';
+    document.getElementById('formUserId').value = '';
+    const uInput = document.getElementById('formUserUsername');
+    if (uInput) {
+      uInput.value = '';
+      uInput.disabled = false;
+    }
+    const pGroup = document.getElementById('formUserPasswordGroup');
+    if (pGroup) pGroup.style.display = 'block';
+    const pInput = document.getElementById('formUserPassword');
+    if (pInput) {
+      pInput.value = '';
+      pInput.required = true;
+    }
+    const dInput = document.getElementById('formUserDisplayName');
+    if (dInput) dInput.value = '';
+    const nInput = document.getElementById('formUserNotes');
+    if (nInput) nInput.value = '';
+    const aInput = document.getElementById('formUserIsActive');
+    if (aInput) aInput.checked = true;
+
+    document.querySelectorAll('.user-svc-cb').forEach(cb => { cb.checked = false; });
+    const allCb = document.getElementById('userSvc_all');
+    if (allCb) allCb.checked = true;
+
+    const modal = document.getElementById('userFormModal');
+    if (modal) modal.style.display = 'flex';
+    if (uInput) uInput.focus();
+  }
+
+  function openEditUserModal(userId) {
+    const user = lcarsUsersList.find(u => u.id === userId);
+    if (!user) return;
+    playLcarsBeep(700, 900);
+    const titleEl = document.getElementById('userFormModalTitle');
+    if (titleEl) titleEl.textContent = 'BENUTZER BEARBEITEN: ' + user.username.toUpperCase();
+    document.getElementById('formUserId').value = user.id;
+    const uInput = document.getElementById('formUserUsername');
+    if (uInput) {
+      uInput.value = user.username;
+      uInput.disabled = true;
+    }
+
+    const pGroup = document.getElementById('formUserPasswordGroup');
+    if (pGroup) pGroup.style.display = 'none';
+    const pInput = document.getElementById('formUserPassword');
+    if (pInput) pInput.required = false;
+
+    const dInput = document.getElementById('formUserDisplayName');
+    if (dInput) dInput.value = user.display_name || '';
+    const nInput = document.getElementById('formUserNotes');
+    if (nInput) nInput.value = user.notes || '';
+    const aInput = document.getElementById('formUserIsActive');
+    if (aInput) aInput.checked = user.is_active;
+
+    const svcs = user.allowed_services || [];
+    const isAll = svcs.includes('*') || svcs.includes('all');
+    const allCb = document.getElementById('userSvc_all');
+    if (allCb) allCb.checked = isAll;
+    ['pulsecast', 'telemetryvault', 'matter', 'headroom', 'cups'].forEach(s => {
+      const cb = document.getElementById('userSvc_' + s);
+      if (cb) cb.checked = isAll || svcs.includes(s);
+    });
+
+    const modal = document.getElementById('userFormModal');
+    if (modal) modal.style.display = 'flex';
+  }
+
+  function closeUserFormModal() {
+    playLcarsBeep(440, 220);
+    const modal = document.getElementById('userFormModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function handleUserSvcAllToggle() {
+    const allCb = document.getElementById('userSvc_all');
+    if (allCb && allCb.checked) {
+      document.querySelectorAll('.user-svc-cb').forEach(cb => {
+        if (cb.id !== 'userSvc_all') cb.checked = true;
+      });
+    }
+  }
+
+  async function submitUserForm(event) {
+    if (event) event.preventDefault();
+    const userId = document.getElementById('formUserId').value;
+    const isEdit = Boolean(userId);
+
+    const username = document.getElementById('formUserUsername').value.trim();
+    const displayName = document.getElementById('formUserDisplayName').value.trim();
+    const notes = document.getElementById('formUserNotes').value.trim();
+    const isActive = document.getElementById('formUserIsActive').checked;
+
+    let services = [];
+    const allCb = document.getElementById('userSvc_all');
+    if (allCb && allCb.checked) {
+      services = ['*'];
+    } else {
+      ['pulsecast', 'telemetryvault', 'matter', 'headroom', 'cups'].forEach(s => {
+        const cb = document.getElementById('userSvc_' + s);
+        if (cb && cb.checked) services.push(s);
+      });
+    }
+
+    try {
+      if (isEdit) {
+        const resp = await fetch('/api/users/' + userId, {
+          method: 'PUT',
+          headers: getLcarsAuthHeader(),
+          body: JSON.stringify({
+            display_name: displayName,
+            is_active: isActive,
+            allowed_services: services,
+            notes: notes
+          })
+        });
+        const res = await resp.json();
+        if (resp.ok && res.success) {
+          playLcarsAcknowledge();
+          closeUserFormModal();
+          loadLcarsUsers();
+          loadLcarsAuditLog();
+        } else {
+          alert('Fehler beim Aktualisieren: ' + (res.error || 'Unbekannt'));
+        }
+      } else {
+        const password = document.getElementById('formUserPassword').value;
+        const resp = await fetch('/api/users', {
+          method: 'POST',
+          headers: getLcarsAuthHeader(),
+          body: JSON.stringify({
+            username: username,
+            password: password,
+            display_name: displayName,
+            allowed_services: services,
+            notes: notes
+          })
+        });
+        const res = await resp.json();
+        if (resp.ok && res.success) {
+          playLcarsAcknowledge();
+          closeUserFormModal();
+          loadLcarsUsers();
+          loadLcarsAuditLog();
+        } else {
+          alert('Fehler beim Erstellen: ' + (res.error || 'Unbekannt'));
+        }
+      }
+    } catch (err) {
+      alert('Netzwerkfehler: ' + err);
+    }
+  }
+
+  async function toggleUserActive(userId, currentActive) {
+    playLcarsBeep(600, 800);
+    try {
+      const resp = await fetch('/api/users/' + userId, {
+        method: 'PUT',
+        headers: getLcarsAuthHeader(),
+        body: JSON.stringify({ is_active: !currentActive })
+      });
+      const res = await resp.json();
+      if (resp.ok && res.success) {
+        playLcarsAcknowledge();
+        loadLcarsUsers();
+        loadLcarsAuditLog();
+      } else {
+        alert('Fehler beim Ändern des Status: ' + (res.error || 'Unbekannt'));
+      }
+    } catch (err) {
+      alert('Netzwerkfehler: ' + err);
+    }
+  }
+
+  function openChangePasswordModal(userId) {
+    const user = (typeof lcarsUsersList !== 'undefined' ? lcarsUsersList : []).find(u => u.id === userId);
+    const username = user ? user.username : ('ID ' + userId);
+    playLcarsBeep(700, 900);
+    document.getElementById('pwdModalUserId').value = userId;
+    const nameEl = document.getElementById('pwdModalUsername');
+    if (nameEl) nameEl.textContent = username;
+    const pInput = document.getElementById('pwdModalNewPassword');
+    if (pInput) pInput.value = '';
+    const modal = document.getElementById('userPasswordModal');
+    if (modal) modal.style.display = 'flex';
+    if (pInput) pInput.focus();
+  }
+
+  function closeChangePasswordModal() {
+    playLcarsBeep(440, 220);
+    const modal = document.getElementById('userPasswordModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  async function submitChangeUserPassword(event) {
+    if (event) event.preventDefault();
+    const userId = document.getElementById('pwdModalUserId').value;
+    const newPwd = document.getElementById('pwdModalNewPassword').value;
+    if (!newPwd || newPwd.length < 6) {
+      alert('Passwort muss mindestens 6 Zeichen lang sein.');
+      return;
+    }
+    try {
+      const resp = await fetch('/api/users/' + userId + '/password', {
+        method: 'POST',
+        headers: getLcarsAuthHeader(),
+        body: JSON.stringify({ new_password: newPwd })
+      });
+      const res = await resp.json();
+      if (resp.ok && res.success) {
+        playLcarsAcknowledge();
+        closeChangePasswordModal();
+        loadLcarsAuditLog();
+        alert('Passwort für Benutzer erfolgreich aktualisiert!');
+      } else {
+        alert('Fehler beim Ändern des Passworts: ' + (res.error || 'Unbekannt'));
+      }
+    } catch (err) {
+      alert('Netzwerkfehler: ' + err);
+    }
+  }
+
+  async function deleteLcarsUser(userId) {
+    const user = (typeof lcarsUsersList !== 'undefined' ? lcarsUsersList : []).find(u => u.id === userId);
+    const username = user ? user.username : ('ID ' + userId);
+    playLcarsBeep(300, 150);
+    if (!confirm('LCARS SICHERHEITSABFRAGE:\\n\\nSoll der Benutzer "' + username + '" wirklich gelöscht werden?')) {
+      return;
+    }
+    try {
+      const resp = await fetch('/api/users/' + userId, {
+        method: 'DELETE',
+        headers: getLcarsAuthHeader()
+      });
+      const res = await resp.json();
+      if (resp.ok && res.success) {
+        playLcarsAcknowledge();
+        loadLcarsUsers();
+        loadLcarsAuditLog();
+      } else {
+        alert('Fehler beim Löschen: ' + (res.error || 'Unbekannt'));
+      }
+    } catch (err) {
+      alert('Netzwerkfehler: ' + err);
+    }
+  }
+
+  async function loadLcarsAuditLog() {
+    const box = document.getElementById('lcarsAuditLogList');
+    if (!box) return;
+    try {
+      const resp = await fetch('/api/users/audit-log?limit=25', { headers: getLcarsAuthHeader() });
+      if (resp.ok) {
+        const data = await resp.json();
+        const logs = data.audit_log || [];
+        if (logs.length === 0) {
+          box.innerHTML = '<div style="color:#666;">Keine Authentifizierungsereignisse protokolliert.</div>';
+          return;
+        }
+        let html = '';
+        logs.forEach(l => {
+          let color = '#aaa';
+          if (l.event.includes('SUCCESS') || l.event.includes('CREATED')) color = '#44dd88';
+          else if (l.event.includes('FAILED') || l.event.includes('DENIED')) color = 'var(--c-red)';
+          else if (l.event.includes('DELETED') || l.event.includes('UPDATED')) color = 'var(--c-primary)';
+
+          const ipStr = l.ip ? ' [' + escapeHtml(l.ip) + ']' : '';
+          const svcStr = l.target_service ? ' (' + escapeHtml(l.target_service) + ')' : '';
+          const detailsStr = l.details ? ' - ' + escapeHtml(l.details) : '';
+
+          html += '<div style="margin-bottom:2px;">' +
+            '<span style="color:#666;">' + escapeHtml(l.timestamp) + '</span> ' +
+            '<span style="color:' + color + '; font-weight:700;">' + escapeHtml(l.event) + '</span> ' +
+            '<span style="color:var(--c-gold);">' + escapeHtml(l.username) + '</span>' + svcStr + ipStr +
+            '<span style="color:#888;">' + detailsStr + '</span>' +
+          '</div>';
+        });
+        box.innerHTML = html;
+      }
+    } catch (e) {
+      console.warn('loadLcarsAuditLog error:', e);
     }
   }
 
@@ -14867,6 +15491,221 @@ if USE_FLASK:
         except Exception as e:
             return jsonify({"success": False, "error": f"PulseCast Stream Proxy Fehler: {e}"}), 500
 
+    # ---------------------------------------------------------------------------
+    # LCARS Authentication & User Management Routes
+    # ---------------------------------------------------------------------------
+    if auth_proxy and not getattr(auth_proxy, "_running", False):
+        try:
+            auth_proxy.start_background()
+        except Exception as _ap_err:
+            print(f"[WARN] auth_proxy start_background Fehler: {_ap_err}", file=sys.stderr)
+
+    def _get_lcars_cookie_domain():
+        host = request.host.split(":")[0].lower()
+        if host.endswith("pimmel.site"):
+            return ".pimmel.site"
+        return None
+
+    def _is_lcars_user_management_authorized():
+        # 1. Header or Query Code check (e.g. 0901)
+        code = (
+            request.headers.get("X-Command-Code")
+            or request.headers.get("X-Auth-Code")
+            or request.args.get("code")
+        )
+        if not code and request.is_json:
+            b = request.get_json(silent=True) or {}
+            code = b.get("code")
+        if not code:
+            auth_hdr = request.headers.get("Authorization", "")
+            if auth_hdr.startswith("Bearer "):
+                code = auth_hdr.split(" ", 1)[1].strip()
+        if code:
+            if permissions_service and permissions_service.verify_code(code):
+                return True
+            if code == "0901":
+                return True
+
+        # 2. Session check (User with all / * permissions)
+        session_id = request.cookies.get("lcars_session")
+        if session_id and user_service:
+            s = user_service.validate_session(session_id)
+            if s:
+                svcs = s.get("allowed_services", [])
+                if "*" in svcs or "all" in svcs:
+                    return True
+        return False
+
+    @app.route("/login", methods=["GET"])
+    def lcars_login():
+        session_id = request.cookies.get("lcars_session")
+        return_to = request.args.get("return_to", "/")
+        if session_id and user_service:
+            s = user_service.validate_session(session_id)
+            if s:
+                return redirect(return_to)
+        if LOGIN_HTML:
+            return Response(LOGIN_HTML, mimetype="text/html")
+        return "LCARS Login nicht verfügbar", 500
+
+    @app.route("/api/auth/login", methods=["POST"])
+    def api_auth_login():
+        if not user_service:
+            return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
+
+        data = request.get_json(silent=True) or {}
+        username = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+        remember = bool(data.get("remember", False))
+        return_to = data.get("return_to") or "/"
+
+        ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.remote_addr or ""
+        ua = request.headers.get("User-Agent", "")
+
+        auth_res = user_service.authenticate(username, password, ip=ip, user_agent=ua)
+        if not auth_res.get("success"):
+            return jsonify({"success": False, "error": auth_res.get("error", "Zugriff verweigert")}), 401
+
+        user_info = auth_res["user"]
+        duration = getattr(user_service, "REMEMBER_SESSION_DURATION", 2592000) if remember else getattr(user_service, "DEFAULT_SESSION_DURATION", 86400)
+        session_id = user_service.create_session(user_info["id"], duration_seconds=duration, ip=ip, user_agent=ua)
+
+        resp = jsonify({
+            "success": True,
+            "redirect_url": return_to,
+            "user": user_info
+        })
+
+        cookie_domain = _get_lcars_cookie_domain()
+        is_secure = cookie_domain is not None
+        resp.set_cookie(
+            "lcars_session",
+            session_id,
+            max_age=duration,
+            domain=cookie_domain,
+            secure=is_secure,
+            httponly=True,
+            samesite="Lax",
+            path="/"
+        )
+        return resp
+
+    @app.route("/api/auth/logout", methods=["POST"])
+    def api_auth_logout():
+        session_id = request.cookies.get("lcars_session")
+        if session_id and user_service:
+            user_service.delete_session(session_id)
+
+        resp = jsonify({"success": True})
+        resp.delete_cookie("lcars_session", path="/")
+        cookie_domain = _get_lcars_cookie_domain()
+        if cookie_domain:
+            resp.delete_cookie("lcars_session", domain=cookie_domain, path="/")
+        return resp
+
+    @app.route("/api/auth/me", methods=["GET"])
+    def api_auth_me():
+        session_id = request.cookies.get("lcars_session")
+        if not session_id or not user_service:
+            return jsonify({"authenticated": False, "user": None})
+        session_data = user_service.validate_session(session_id)
+        if not session_data:
+            return jsonify({"authenticated": False, "user": None})
+        return jsonify({"authenticated": True, "user": session_data})
+
+    @app.route("/api/users", methods=["GET", "POST"])
+    def api_users():
+        if not user_service:
+            return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
+        if not _is_lcars_user_management_authorized():
+            return jsonify({"success": False, "error": "LCARS Autorisierung erforderlich (Command Code 0901)"}), 403
+
+        if request.method == "GET":
+            users = user_service.list_users()
+            return jsonify({"success": True, "users": users})
+
+        # POST: Neuer Benutzer anlegen
+        data = request.get_json(silent=True) or {}
+        username = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+        display_name = (data.get("display_name") or "").strip()
+        allowed_services = data.get("allowed_services", [])
+        notes = (data.get("notes") or "").strip()
+
+        res = user_service.create_user(
+            username=username,
+            password=password,
+            display_name=display_name,
+            allowed_services=allowed_services,
+            notes=notes
+        )
+        if res.get("success"):
+            return jsonify(res), 201
+        return jsonify(res), 400
+
+    @app.route("/api/users/<int:user_id>", methods=["PUT", "DELETE"])
+    def api_user_detail(user_id):
+        if not user_service:
+            return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
+        if not _is_lcars_user_management_authorized():
+            return jsonify({"success": False, "error": "LCARS Autorisierung erforderlich (Command Code 0901)"}), 403
+
+        if request.method == "DELETE":
+            res = user_service.delete_user(user_id)
+            if res.get("success"):
+                return jsonify(res)
+            return jsonify(res), 400
+
+        # PUT: Benutzer aktualisieren
+        data = request.get_json(silent=True) or {}
+        display_name = data.get("display_name")
+        is_active = data.get("is_active")
+        allowed_services = data.get("allowed_services")
+        notes = data.get("notes")
+
+        res = user_service.update_user(
+            user_id=user_id,
+            display_name=display_name,
+            is_active=is_active,
+            allowed_services=allowed_services,
+            notes=notes
+        )
+        if res.get("success"):
+            return jsonify(res)
+        return jsonify(res), 400
+
+    @app.route("/api/users/<int:user_id>/password", methods=["POST"])
+    def api_user_password(user_id):
+        if not user_service:
+            return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
+        if not _is_lcars_user_management_authorized():
+            return jsonify({"success": False, "error": "LCARS Autorisierung erforderlich (Command Code 0901)"}), 403
+
+        data = request.get_json(silent=True) or {}
+        new_password = data.get("new_password") or ""
+        if not new_password or len(new_password) < 6:
+            return jsonify({"success": False, "error": "Passwort muss mindestens 6 Zeichen lang sein"}), 400
+
+        res = user_service.update_password(user_id, new_password)
+        if res.get("success"):
+            return jsonify(res)
+        return jsonify(res), 400
+
+    @app.route("/api/users/audit-log", methods=["GET"])
+    def api_users_audit_log():
+        if not user_service:
+            return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
+        if not _is_lcars_user_management_authorized():
+            return jsonify({"success": False, "error": "LCARS Autorisierung erforderlich (Command Code 0901)"}), 403
+
+        limit = request.args.get("limit", 50)
+        try:
+            limit = int(limit)
+        except (ValueError, TypeError):
+            limit = 50
+
+        logs = user_service.get_audit_log(limit=limit)
+        return jsonify({"success": True, "audit_log": logs})
 
     def run_server():
         print("[START] Starte System Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
