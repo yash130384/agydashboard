@@ -13104,7 +13104,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function escapeJsString(str) {
     if (!str) return '';
-    return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+    return JSON.stringify(String(str)).slice(1, -1).replace(/'/g, "\\\\'");
   }
 
   function getPulsecastHeaders() {
@@ -13902,20 +13902,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (inp) inp.value = q;
     pulsecastXdccSearch();
   }
-
-  async function pulsecastXdccSearch() {
-    const inp = document.getElementById('pulsecastXdccInput');
-    const query = inp ? inp.value.trim() : '';
-    if (!query) {
-      alert('Bitte geben Sie einen Suchbegriff ein.');
-      return;
-    }
-
-    playLcarsBeep(1200, 1500);
-    const statusEl = document.getElementById('pulsecastXdccStatus');
-    const tableEl = document.getElementById('pulsecastXdccTable');
-    const emptyEl = document.getElementById('pulsecastXdccEmpty');
-    const tbody = document.getElementById('pulsecastXdccTbody');
 
   function setPulsecastXdccSource(source) {
     playLcarsBeep(1000, 1300);
