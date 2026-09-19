@@ -130,8 +130,8 @@ class UserService:
 
     def create_user(self, username: str, password: str, display_name: str = "", allowed_services: list = None, notes: str = "") -> dict:
         username = (username or "").strip().lower()
-        if not username or len(username) < 3:
-            return {"success": False, "error": "Benutzername muss mindestens 3 Zeichen lang sein."}
+        if not username or len(username) < 2:
+            return {"success": False, "error": "Benutzername muss mindestens 2 Zeichen lang sein."}
         if not password or len(password) < 6:
             return {"success": False, "error": "Passwort muss mindestens 6 Zeichen lang sein."}
 

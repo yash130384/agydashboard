@@ -104,6 +104,8 @@ except Exception as _cycle_err:
 # LCARS Central User & Session Service Import
 try:
     from user_service import user_service
+    if user_service and not user_service.get_user_by_username("admin"):
+        user_service.create_user("admin", "09010901", display_name="Master Administrator", allowed_services=["*"], notes="Master Admin")
 except Exception as _user_err:
     user_service = None
     print(f"[WARN] user_service konnte nicht importiert werden: {_user_err}", file=sys.stderr)
@@ -7576,6 +7578,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </form>
             </div>
           </div>
+        </div>
+
         <!-- LCARS USER FORM MODAL (ANLEGEN / BEARBEITEN) -->
         <div id="userFormModal" class="ha-modal-overlay" style="display:none;" onclick="if(event.target===this) closeUserFormModal()">
           <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:540px; width:95%; background:#08080d; border:2px solid var(--c-primary); border-radius:8px; overflow:hidden;">
