@@ -245,3 +245,40 @@ python3 -m http.server 8899 &
 ### Schritt 6: Dashboard-UI Verifikation
 Aufruf des Dashboards unter `http://localhost:5000` bzw. `https://dash.pimmel.site`:
 - Überprüfung der Chips in der LCARS Webserver-Liste: Jeder Server zeigt einen `☁️ CF: https://<subdomain>.pimmel.site` Chip, der per Klick die Seite öffnet.
+
+---
+
+# PulseCast Media & XDCC Erweiterungen
+
+## 1. Direkte Wiedergabe im lokalen Media Player (HTTP Range Streaming)
+- **Streaming-Proxy-Endpunkt**:
+  `GET /api/pulsecast/media/stream/<path:filename>` (sowie `HEAD`)
+  Leitet native HTTP Range Requests transparent an `http://127.0.0.1:3000/api/media/stream/<filename>` weiter.
+  - Transparente Weiterleitung von Request-Headern (`Range`, `If-Range`).
+  - Durchreichen relevanter Response-Header (`206 Partial Content`, `Content-Range`, `Accept-Ranges: bytes`, `Content-Type`, `Content-Length`, `Cache-Control`, `ETag`, `Last-Modified`).
+  - Flüssiges Seeken und latenzfreies Streaming ohne `.m3u` Playlist-Download.
+- **LCARS Media Player Modal (`#pulsecastPlayerModal`)**:
+  - **VLC Media Player**: Ruft `vlc://<stream_url>` auf.
+  - **PotPlayer (Windows)**: Ruft `potplayer://<stream_url>` auf.
+  - **IINA (macOS)**: Ruft `iina://weblink?url=<encoded_url>` auf.
+  - **nPlayer (Mobile)**: Ruft `nplayer-<stream_url>` auf.
+  - **Web-Player (Browser)**: Integriertes LCARS HTML5 `<video controls autoplay playsinline>` Player-Modal direkt im Dashboard.
+  - **Im neuen Tab öffnen**: Direkte Wiedergabe via `window.open(streamUrl, '_blank')`.
+  - **Stream-URL kopieren**: Kopiert direkte HTTP Range Stream-URL in die Zwischenablage inkl. optischer Erfolgsanzeige.
+- **UI-Aktion `▶ IN PLAYER ÖFFNEN`**:
+  - In der Download-Warteschlange bei Status `completed` (FERTIG).
+  - Im Katalog-Browser bei lokalen Mediendateien (`isXtream === false`).
+  - Im Episoden-Modal bei lokal verfügbaren Serien-Episoden.
+
+## 2. XDCC-Suche: Quellenauswahl & Movie Gods Top-Downloads
+- **Quellenauswahl**:
+  - LCARS-Pills in der XDCC-Suchmaske: `XDCC.EU Relay` (Standard) und `Movie Gods (IRC)`.
+- **Movie Gods Top-Downloads / Favoriten**:
+  - Bei aktiver Movie Gods Quelle wird der Bereich `⭐ MOVIE GODS TOP-DOWNLOADS / FAVORITEN` eingeblendet.
+  - Button `⭐ TOP-DOWNLOADS / FAVORITEN LADEN` ruft `/api/pulsecast/search?q=!topdl&source=moviegods` ab.
+  - LCARS-Tabelle mit Spalten: `GETS` (z.B. 265x), `DATEINAME`, `GRÖSSE`, `AKTION` (`🔍 SUCHEN`).
+  - Klick auf einen Top-Download übernimmt den Dateinamen sofort in das Suchfeld, setzt die Quelle auf Movie Gods und führt die Suche nach Bots & Packs sofort aus.
+- **Parametrisierung & Download**:
+  - Übergabe von `source=moviegods` an `/api/pulsecast/search`.
+  - Beim Download via `/api/pulsecast/download/xdcc` wird automatisch der Channel `#moviegods` gesetzt.
+

@@ -66,7 +66,7 @@ if psutil:
 
 # Flask Import mit Fallback zu http.server
 try:
-    from flask import Flask, jsonify, render_template_string, request, send_from_directory
+    from flask import Flask, jsonify, render_template_string, request, send_from_directory, Response, stream_with_context
     USE_FLASK = True
 except ImportError:
     print("[INFO] Flask nicht installiert, verwende Python Standardbibliothek (http.server).")
@@ -7138,14 +7138,56 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <!-- SUBVIEW 3: XDCC-SUCHE -->
             <div id="pulsecast-subview-xdcc" class="pulsecast-subview" style="display:none;">
               <div class="lcars-card" style="margin-bottom:1.25rem; padding:1.15rem; border-top:3px solid var(--c-blue);">
-                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
                   <div style="display:flex; align-items:center; gap:0.6rem;">
-                    <span style="color:var(--c-blue); font-size:1.2rem; font-weight:700; letter-spacing:0.05em;">
+                    <span id="pulsecastXdccHeaderTitle" style="color:var(--c-blue); font-size:1.2rem; font-weight:700; letter-spacing:0.05em;">
                       KLASSISCHE IRC &amp; XDCC PAKET-SUCHE
                     </span>
                     <span style="font-size:1.1rem;">📡</span>
                   </div>
-                  <span class="lcars-pill-tag" style="background:var(--c-blue); color:#000;">XDCC.EU RELAY</span>
+                  <!-- Quellenauswahl: XDCC.EU Relay vs Movie Gods -->
+                  <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                    <span style="font-size:0.78rem; color:var(--c-gold); font-family:var(--font-family); font-weight:700;">QUELLE:</span>
+                    <button type="button" class="lcars-pill-btn active" id="pulsecast-source-pill-xdcc" onclick="setPulsecastXdccSource('xdcc')" style="height:32px; padding:0 0.9rem; font-size:0.8rem; background:var(--c-blue); color:#000; font-weight:700;">
+                      XDCC.EU RELAY
+                    </button>
+                    <button type="button" class="lcars-pill-btn" id="pulsecast-source-pill-moviegods" onclick="setPulsecastXdccSource('moviegods')" style="height:32px; padding:0 0.9rem; font-size:0.8rem; background:rgba(0,0,0,0.5); color:var(--c-secondary); border:1px solid var(--c-secondary); font-weight:700;">
+                      MOVIE GODS (IRC)
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Movie Gods Top-Downloads Box (nur aktiv wenn Quelle == moviegods) -->
+                <div id="pulsecastMoviegodsTopDlContainer" style="display:none; background:rgba(180,100,255,0.06); border:1px solid var(--c-secondary); border-radius:6px; padding:0.9rem; margin-bottom:1rem;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.6rem; margin-bottom:0.6rem;">
+                    <div style="display:flex; align-items:center; gap:0.5rem;">
+                      <span style="color:var(--c-secondary); font-weight:700; font-family:var(--font-family); font-size:0.95rem;">
+                        ⭐ MOVIE GODS TOP-DOWNLOADS / FAVORITEN
+                      </span>
+                    </div>
+                    <button type="button" class="left-action-btn" id="pulsecastLoadTopDlBtn" onclick="loadPulsecastMoviegodsTopDl()" style="padding:0.35rem 1rem; font-size:0.82rem; border-color:var(--c-gold); color:var(--c-gold); font-weight:700;">
+                      ⭐ TOP-DOWNLOADS / FAVORITEN LADEN
+                    </button>
+                  </div>
+
+                  <!-- TopDL Status & Loading -->
+                  <div id="pulsecastTopDlStatus" style="font-family:var(--mono-family); font-size:0.82rem; color:var(--c-gold); display:none; margin-bottom:0.5rem;"></div>
+
+                  <!-- TopDL Results List/Table -->
+                  <div id="pulsecastTopDlTableContainer" style="display:none; max-height:280px; overflow-y:auto; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+                    <table class="services-table" style="width:100%; margin:0;">
+                      <thead>
+                        <tr style="position:sticky; top:0; background:#111; z-index:2;">
+                          <th style="width:85px; color:var(--c-gold);">GETS</th>
+                          <th>DATEINAME</th>
+                          <th style="width:90px; color:#44dd88;">GRÖSSE</th>
+                          <th style="width:130px; text-align:right;">AKTION</th>
+                        </tr>
+                      </thead>
+                      <tbody id="pulsecastTopDlTbody">
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
 
                 <!-- Search Input Bar -->
@@ -7237,6 +7279,118 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <div id="pulsecastEpisodesList" style="display:flex; flex-direction:column; gap:0.5rem;">
                 <!-- Dynamically populated episode items -->
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- LCARS PULSECAST MEDIA PLAYER MODAL -->
+        <div id="pulsecastPlayerModal" class="ha-modal-overlay" style="display:none;" onclick="handlePulsecastPlayerModalBackdropClick(event)">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:860px; width:95%; max-height:92vh; display:flex; flex-direction:column; background:#000; border:2px solid var(--c-butterscotch); border-radius:8px; overflow:hidden; box-shadow:0 0 25px rgba(255,153,0,0.35);">
+            <!-- Header -->
+            <div class="ha-modal-header" style="background:var(--c-butterscotch); color:#000; padding:0.6rem 1rem; display:flex; justify-content:space-between; align-items:center;">
+              <div style="display:flex; align-items:center; gap:0.6rem; min-width:0;">
+                <span style="font-size:1.3rem; flex-shrink:0;">▶</span>
+                <div style="min-width:0;">
+                  <div id="pulsecastPlayerModalTitle" style="font-family:var(--font-family); font-size:1.1rem; font-weight:700; color:#000; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    MEDIENDATEI WIEDERGABE
+                  </div>
+                  <div id="pulsecastPlayerModalMeta" style="font-size:0.72rem; color:#222; font-family:var(--mono-family); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    LCARS DIRECT HTTP RANGE STREAM
+                  </div>
+                </div>
+              </div>
+              <button type="button" class="ha-modal-close-btn" onclick="closePulsecastPlayerModal()" style="border-color:#000; color:#000; font-weight:700;">✕</button>
+            </div>
+
+            <!-- Modal Body -->
+            <div style="padding:1.2rem; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:1.2rem;">
+              
+              <!-- Stream URL Box & Copy / Open Tab -->
+              <div style="background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:0.75rem 1rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem; flex-wrap:wrap; gap:0.4rem;">
+                  <span style="font-size:0.75rem; color:var(--c-gold); font-family:var(--font-family); font-weight:700; letter-spacing:0.06em;">DIREKTE HTTP RANGE STREAM-URL (NATIVE STREAMING)</span>
+                  <span id="pulsecastCopySuccessBadge" style="display:none; color:#44dd88; font-family:var(--mono-family); font-size:0.75rem; font-weight:700;">✓ IN DIE ZWISCHENABLAGE KOPIERT!</span>
+                </div>
+                <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                  <input type="text" id="pulsecastPlayerStreamUrlInput" readonly style="flex:1; min-width:240px; background:rgba(0,0,0,0.6); color:#fff; border:1px solid rgba(255,255,255,0.2); border-radius:4px; padding:0.45rem 0.7rem; font-family:var(--mono-family); font-size:0.8rem;" onclick="this.select();">
+                  <button type="button" class="left-action-btn" onclick="copyPulsecastStreamUrl()" style="padding:0.45rem 0.9rem; font-size:0.8rem; border-color:var(--c-gold); color:var(--c-gold); font-weight:700; white-space:nowrap;">
+                    📋 STREAM-URL KOPIEREN
+                  </button>
+                  <button type="button" class="left-action-btn" onclick="openPulsecastStreamInTab()" style="padding:0.45rem 0.9rem; font-size:0.8rem; border-color:var(--c-blue); color:var(--c-blue); font-weight:700; white-space:nowrap;">
+                    ↗ IM NEUEN TAB ÖFFNEN
+                  </button>
+                </div>
+              </div>
+
+              <!-- Player Selection Grid -->
+              <div>
+                <div style="font-family:var(--font-family); font-size:0.85rem; color:var(--c-butterscotch); font-weight:700; letter-spacing:0.06em; margin-bottom:0.6rem;">
+                  IN LOKALEM MEDIA PLAYER ÖFFNEN:
+                </div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.6rem;">
+                  <!-- VLC Media Player -->
+                  <a id="playerBtnVlc" href="#" class="lcars-card" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid var(--c-primary); border-left:4px solid var(--c-primary); cursor:pointer; background:rgba(255,153,0,0.06);">
+                    <span style="font-size:1.6rem;">🟠</span>
+                    <div>
+                      <div style="color:var(--c-primary); font-weight:700; font-size:0.85rem; font-family:var(--font-family);">VLC MEDIA PLAYER</div>
+                      <div style="color:#888; font-size:0.7rem; font-family:var(--mono-family);">vlc:// URL-Schema</div>
+                    </div>
+                  </a>
+
+                  <!-- PotPlayer (Windows) -->
+                  <a id="playerBtnPotPlayer" href="#" class="lcars-card" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid var(--c-blue); border-left:4px solid var(--c-blue); cursor:pointer; background:rgba(0,170,255,0.06);">
+                    <span style="font-size:1.6rem;">🟡</span>
+                    <div>
+                      <div style="color:var(--c-blue); font-weight:700; font-size:0.85rem; font-family:var(--font-family);">POTPLAYER (WIN)</div>
+                      <div style="color:#888; font-size:0.7rem; font-family:var(--mono-family);">potplayer:// URL-Schema</div>
+                    </div>
+                  </a>
+
+                  <!-- IINA (macOS) -->
+                  <a id="playerBtnIina" href="#" class="lcars-card" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid var(--c-secondary); border-left:4px solid var(--c-secondary); cursor:pointer; background:rgba(180,100,255,0.06);">
+                    <span style="font-size:1.6rem;">🟣</span>
+                    <div>
+                      <div style="color:var(--c-secondary); font-weight:700; font-size:0.85rem; font-family:var(--font-family);">IINA (macOS)</div>
+                      <div style="color:#888; font-size:0.7rem; font-family:var(--mono-family);">iina://weblink?url=</div>
+                    </div>
+                  </a>
+
+                  <!-- nPlayer (Mobile) -->
+                  <a id="playerBtnNplayer" href="#" class="lcars-card" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; text-decoration:none; border:1px solid #44dd88; border-left:4px solid #44dd88; cursor:pointer; background:rgba(68,221,136,0.06);">
+                    <span style="font-size:1.6rem;">📱</span>
+                    <div>
+                      <div style="color:#44dd88; font-weight:700; font-size:0.85rem; font-family:var(--font-family);">nPLAYER (MOBILE)</div>
+                      <div style="color:#888; font-size:0.7rem; font-family:var(--mono-family);">nplayer- URL-Schema</div>
+                    </div>
+                  </a>
+
+                  <!-- Web-Player (Browser) Button -->
+                  <button type="button" class="lcars-card" onclick="togglePulsecastWebPlayer(true)" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem; border:1px solid var(--c-gold); border-left:4px solid var(--c-gold); cursor:pointer; background:rgba(255,204,0,0.06); text-align:left;">
+                    <span style="font-size:1.6rem;">🌐</span>
+                    <div>
+                      <div style="color:var(--c-gold); font-weight:700; font-size:0.85rem; font-family:var(--font-family);">WEB-PLAYER (BROWSER)</div>
+                      <div style="color:#888; font-size:0.7rem; font-family:var(--mono-family);">LCARS HTML5 Player</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Integrated HTML5 Video Player Container -->
+              <div id="pulsecastWebPlayerContainer" style="display:none; background:#000; border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:0.75rem; flex-direction:column; gap:0.5rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <span style="font-family:var(--font-family); font-size:0.85rem; color:var(--c-gold); font-weight:700;">
+                    LCARS HTML5 BROWSER-STREAM (VIDEO CONTROLS AUTOPLAY)
+                  </span>
+                  <button type="button" class="left-action-btn" onclick="togglePulsecastWebPlayer(false)" style="border-color:#888; color:#888; padding:0.2rem 0.5rem; font-size:0.72rem;">
+                    PLAYER SCHLIESSEN
+                  </button>
+                </div>
+                <video id="pulsecastWebPlayerVideo" controls autoplay playsinline style="width:100%; max-height:55vh; background:#000; border-radius:4px; outline:none;"></video>
+                <div style="font-size:0.72rem; color:#888; font-family:var(--mono-family); text-align:right;">
+                  Tipp: Für MKV oder Multikanal-Audio wird die Wiedergabe in VLC, PotPlayer oder IINA empfohlen.
+                </div>
+              </div>
+
             </div>
           </div>
         </div>
@@ -12945,6 +13099,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let pulsecastCurrentSeriesEpisodes = [];
   let pulsecastActiveSeries = null;
   let pulsecastDownloadsCache = [];
+  let pulsecastXdccSource = 'xdcc';
+  let currentPulsecastStreamUrl = '';
+
+  function escapeJsString(str) {
+    if (!str) return '';
+    return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+  }
 
   function getPulsecastHeaders() {
     const code = sessionStorage.getItem('lcars_auth_code') || currentAuthCode || '0901';
@@ -13186,6 +13347,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       } else if (status === 'completed') {
         statusBadge = '<span class="badge-status" style="background:var(--c-secondary); color:#000;">FERTIG</span>';
         actionButtons = `
+          <button type="button" class="left-action-btn" onclick="openPulsecastPlayerModal('${escapeJsString(filename)}', '${escapeJsString(filename)}')" style="padding:0.3rem 0.75rem; font-size:0.78rem; border-color:var(--c-butterscotch); color:var(--c-butterscotch); font-weight:700;" title="Im lokalen Media Player öffnen">
+            ▶ IN PLAYER ÖFFNEN
+          </button>
           <button type="button" class="left-action-btn" onclick="deletePulsecastDownload('${encodeURIComponent(id)}')" style="padding:0.3rem 0.75rem; font-size:0.78rem; border-color:#888; color:#aaa;" title="Aus Liste entfernen">
             🗑 ENTFERNEN
           </button>
@@ -13455,6 +13619,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const poster = item.posterUrl || item.coverUrl || item.metadata?.posterUrl || item.metadata?.coverUrl || '';
       const subcat = item.subcategory || item.metadata?.subcategory || item.category || '';
       const seriesId = item.xtreamSeriesId || item.id || '';
+      const isLocal = (item.isXtream === false || item.category === 'Lokal' || item.metadata?.category === 'Lokal') && !!item.filename;
 
       const safeTitle = escapeHtml(title);
       const safePoster = poster ? escapeHtml(poster) : '';
@@ -13483,11 +13648,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <button type="button" class="left-action-btn" onclick="openPulsecastSeriesEpisodes('${escapeHtml(String(seriesId))}', '${safeTitle.replace(/'/g, "\\'")}', '${safePoster}')" style="width:100%; justify-content:center; padding:0.35rem 0.6rem; font-size:0.8rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
                   <span>📋</span> <span>EPISODEN</span>
                 </button>
+              ` : (isLocal ? `
+                <button type="button" class="left-action-btn" onclick="openPulsecastPlayerModal('${escapeJsString(item.filename)}', '${safeTitle.replace(/'/g, "\\'")}')" style="width:100%; justify-content:center; padding:0.35rem 0.6rem; font-size:0.8rem; border-color:var(--c-butterscotch); color:var(--c-butterscotch); font-weight:700;">
+                  <span>▶</span> <span>IN PLAYER ÖFFNEN</span>
+                </button>
               ` : `
                 <button type="button" class="left-action-btn" onclick="triggerPulsecastMovieDownload('${escapeHtml(String(item.streamUrl || item.filename))}', '${safeTitle.replace(/'/g, "\\'")}')" style="width:100%; justify-content:center; padding:0.35rem 0.6rem; font-size:0.8rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
                   <span>⬇️</span> <span>DOWNLOAD</span>
                 </button>
-              `}
+              `)}
             </div>
           </div>
         </div>
@@ -13621,8 +13790,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const rating = ep.metadata?.cast?.rating ? `★ ${ep.metadata.cast.rating.toFixed(1)}` : '';
       const streamUrl = ep.filename || '';
 
-      const safeTitle = escapeHtml(title);
-      const safeUrl = escapeHtml(streamUrl);
+      const isLocalEp = (ep.isXtream === false || (ep.filename && !ep.filename.startsWith('http://') && !ep.filename.startsWith('https://')));
 
       html += `
         <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.08); border-radius:4px; padding:0.6rem 0.8rem; gap:0.5rem; flex-wrap:wrap;">
@@ -13638,9 +13806,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
             </div>
           </div>
-          <button type="button" class="left-action-btn" onclick="downloadSingleEpisode('${safeUrl}', '${safeTitle.replace(/'/g, "\\'")}', '${seasonEpisode}')" style="padding:0.3rem 0.8rem; font-size:0.78rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
-            <span>⬇️</span> <span>DOWNLOAD</span>
-          </button>
+          <div style="display:flex; gap:0.4rem; align-items:center;">
+            ${isLocalEp ? `
+              <button type="button" class="left-action-btn" onclick="openPulsecastPlayerModal('${escapeJsString(ep.filename)}', '${safeTitle.replace(/'/g, "\\'")}')" style="padding:0.3rem 0.6rem; font-size:0.78rem; border-color:var(--c-butterscotch); color:var(--c-butterscotch); font-weight:700;" title="Im lokalen Media Player öffnen">
+                ▶ PLAYER
+              </button>
+            ` : ''}
+            <button type="button" class="left-action-btn" onclick="downloadSingleEpisode('${safeUrl}', '${safeTitle.replace(/'/g, "\\'")}', '${seasonEpisode}')" style="padding:0.3rem 0.8rem; font-size:0.78rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+              <span>⬇️</span> <span>DOWNLOAD</span>
+            </button>
+          </div>
         </div>
       `;
     });
@@ -13742,16 +13917,171 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const emptyEl = document.getElementById('pulsecastXdccEmpty');
     const tbody = document.getElementById('pulsecastXdccTbody');
 
+  function setPulsecastXdccSource(source) {
+    playLcarsBeep(1000, 1300);
+    pulsecastXdccSource = source;
+    const btnXdcc = document.getElementById('pulsecast-source-pill-xdcc');
+    const btnMg = document.getElementById('pulsecast-source-pill-moviegods');
+    const topDlBox = document.getElementById('pulsecastMoviegodsTopDlContainer');
+    const headerTitle = document.getElementById('pulsecastXdccHeaderTitle');
+
+    if (source === 'moviegods') {
+      if (btnXdcc) {
+        btnXdcc.classList.remove('active');
+        btnXdcc.style.background = 'rgba(0,0,0,0.5)';
+        btnXdcc.style.color = 'var(--c-blue)';
+        btnXdcc.style.border = '1px solid var(--c-blue)';
+      }
+      if (btnMg) {
+        btnMg.classList.add('active');
+        btnMg.style.background = 'var(--c-secondary)';
+        btnMg.style.color = '#000';
+        btnMg.style.border = 'none';
+      }
+      if (topDlBox) topDlBox.style.display = 'block';
+      if (headerTitle) {
+        headerTitle.textContent = 'MOVIE GODS IRC SCANNER & PACKS';
+        headerTitle.style.color = 'var(--c-secondary)';
+      }
+    } else {
+      if (btnXdcc) {
+        btnXdcc.classList.add('active');
+        btnXdcc.style.background = 'var(--c-blue)';
+        btnXdcc.style.color = '#000';
+        btnXdcc.style.border = 'none';
+      }
+      if (btnMg) {
+        btnMg.classList.remove('active');
+        btnMg.style.background = 'rgba(0,0,0,0.5)';
+        btnMg.style.color = 'var(--c-secondary)';
+        btnMg.style.border = '1px solid var(--c-secondary)';
+      }
+      if (topDlBox) topDlBox.style.display = 'none';
+      if (headerTitle) {
+        headerTitle.textContent = 'KLASSISCHE IRC & XDCC PAKET-SUCHE';
+        headerTitle.style.color = 'var(--c-blue)';
+      }
+    }
+  }
+
+  async function loadPulsecastMoviegodsTopDl() {
+    playLcarsBeep(1200, 1600);
+    const statusEl = document.getElementById('pulsecastTopDlStatus');
+    const tableContainer = document.getElementById('pulsecastTopDlTableContainer');
+    const tbody = document.getElementById('pulsecastTopDlTbody');
+    const btn = document.getElementById('pulsecastLoadTopDlBtn');
+
+    if (btn) btn.disabled = true;
     if (statusEl) {
       statusEl.style.display = 'block';
-      statusEl.textContent = `SCANNE IRC-NETZWERKE NACH "${query.toUpperCase()}"...`;
-      statusEl.style.color = 'var(--c-blue)';
+      statusEl.textContent = 'FRAGE MOVIEGODS TOP-DOWNLOADS AB (!topdl auf #mg-chat)...';
+      statusEl.style.color = 'var(--c-gold)';
+    }
+    if (tableContainer) tableContainer.style.display = 'none';
+
+    try {
+      const resp = await fetch('/api/pulsecast/search?q=!topdl&source=moviegods', {
+        headers: getPulsecastHeaders()
+      });
+
+      if (btn) btn.disabled = false;
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        if (statusEl) {
+          statusEl.textContent = `FEHLER BEIM LADEN DER TOP-DOWNLOADS: ${err.error || 'Serverfehler'}`;
+          statusEl.style.color = 'var(--c-red)';
+        }
+        return;
+      }
+
+      const data = await resp.json();
+      const results = data.results || (Array.isArray(data) ? data : []);
+
+      if (results.length === 0) {
+        if (statusEl) {
+          statusEl.textContent = 'KEINE TOP-DOWNLOADS EMPFANGEN (IRC TIMEOUT ODER KEINE DATEN)';
+          statusEl.style.color = 'var(--c-gold)';
+        }
+        return;
+      }
+
+      if (statusEl) {
+        statusEl.textContent = `${results.length} TOP-DOWNLOADS EMPFANGEN // KLICK AUF EINTRAG STARTET PACK-SCAN:`;
+        statusEl.style.color = '#44dd88';
+      }
+
+      let html = '';
+      results.forEach(item => {
+        const gets = item.gets || '';
+        const filename = item.filename || '';
+        const sizeStr = item.sizeStr || '';
+        const safeFilename = escapeHtml(filename);
+
+        html += `
+          <tr style="cursor:pointer;" onclick="selectMoviegodsTopDl('${escapeJsString(filename)}')" title="Diesen Release sofort suchen">
+            <td style="font-family:var(--mono-family); font-weight:700; color:var(--c-gold);">${escapeHtml(gets)}</td>
+            <td style="font-family:var(--mono-family); font-size:0.82rem; word-break:break-all; color:#fff;">
+              ${safeFilename}
+            </td>
+            <td style="font-family:var(--mono-family); color:#44dd88; white-space:nowrap;">${escapeHtml(sizeStr)}</td>
+            <td style="text-align:right;">
+              <button type="button" class="left-action-btn" onclick="event.stopPropagation(); selectMoviegodsTopDl('${escapeJsString(filename)}')" style="padding:0.25rem 0.6rem; font-size:0.75rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
+                <span>🔍</span> <span>SUCHEN</span>
+              </button>
+            </td>
+          </tr>
+        `;
+      });
+
+      if (tbody) tbody.innerHTML = html;
+      if (tableContainer) tableContainer.style.display = 'block';
+
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      if (statusEl) {
+        statusEl.textContent = `VERBINDUNGSFEHLER: ${e}`;
+        statusEl.style.color = 'var(--c-red)';
+      }
+    }
+  }
+
+  function selectMoviegodsTopDl(filename) {
+    if (!filename) return;
+    playLcarsBeep(1400, 1800);
+    const inp = document.getElementById('pulsecastXdccInput');
+    if (inp) inp.value = filename;
+    setPulsecastXdccSource('moviegods');
+    pulsecastXdccSearch();
+  }
+
+  async function pulsecastXdccSearch() {
+    const inp = document.getElementById('pulsecastXdccInput');
+    const query = inp ? inp.value.trim() : '';
+    if (!query) {
+      alert('Bitte geben Sie einen Suchbegriff ein.');
+      return;
+    }
+
+    playLcarsBeep(1200, 1500);
+    const statusEl = document.getElementById('pulsecastXdccStatus');
+    const tableEl = document.getElementById('pulsecastXdccTable');
+    const emptyEl = document.getElementById('pulsecastXdccEmpty');
+    const tbody = document.getElementById('pulsecastXdccTbody');
+
+    const isMg = (pulsecastXdccSource === 'moviegods');
+    const sourceLabel = isMg ? 'MOVIE GODS IRC (#mg-chat)' : 'XDCC-NETZWERKE';
+
+    if (statusEl) {
+      statusEl.style.display = 'block';
+      statusEl.textContent = `SCANNE ${sourceLabel} NACH "${query.toUpperCase()}"...`;
+      statusEl.style.color = isMg ? 'var(--c-secondary)' : 'var(--c-blue)';
     }
     if (tableEl) tableEl.style.display = 'none';
     if (emptyEl) emptyEl.style.display = 'none';
 
     try {
-      const resp = await fetch(`/api/pulsecast/search?q=${encodeURIComponent(query)}`, {
+      const resp = await fetch(`/api/pulsecast/search?q=${encodeURIComponent(query)}&source=${encodeURIComponent(pulsecastXdccSource)}`, {
         headers: getPulsecastHeaders()
       });
 
@@ -13761,9 +14091,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
 
       if (!resp.ok) {
-        const err = await resp.json();
+        const err = await resp.json().catch(() => ({}));
         if (statusEl) {
-          statusEl.textContent = `SUCHFEHLER: ${err.error || 'Fehler bei der XDCC-Suche'}`;
+          statusEl.textContent = `SUCHFEHLER: ${err.error || 'Fehler bei der Suche'}`;
           statusEl.style.color = 'var(--c-red)';
         }
         return;
@@ -13773,7 +14103,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const results = data.results || (Array.isArray(data) ? data : []);
 
       if (statusEl) {
-        statusEl.textContent = `${results.length} PAKET(E) GEFUNDEN // FILTER: "${query.toUpperCase()}"`;
+        statusEl.textContent = `${results.length} PAKET(E) GEFUNDEN [QUELLE: ${isMg ? 'MOVIE GODS' : 'XDCC.EU'}] // FILTER: "${query.toUpperCase()}"`;
         statusEl.style.color = 'var(--c-gold)';
       }
 
@@ -13781,7 +14111,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (tableEl) tableEl.style.display = 'none';
         if (emptyEl) {
           emptyEl.style.display = 'block';
-          emptyEl.textContent = `KEINE XDCC-PAKETE FÜR "${query.toUpperCase()}" GEFUNDEN`;
+          emptyEl.textContent = `KEINE PAKETE FÜR "${query.toUpperCase()}" AUF ${isMg ? 'MOVIE GODS' : 'XDCC.EU'} GEFUNDEN`;
         }
         return;
       }
@@ -13795,8 +14125,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const pack = res.packNumber || '';
         const file = res.filename || '';
         const sizeStr = res.sizeStr || (res.sizeBytes ? formatBytes(res.sizeBytes) : '--');
-        const server = res.server || '';
-        const channel = res.channel || '';
+        const server = res.server || (isMg ? 'irc.abjects.net' : '');
+        const channel = res.channel || (isMg ? '#moviegods' : '');
         const sizeBytes = res.sizeBytes || 0;
 
         const safeBot = escapeHtml(bot);
@@ -13805,9 +14135,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const safeServer = escapeHtml(server);
         const safeChannel = escapeHtml(channel);
 
+        const accentColor = isMg ? 'var(--c-secondary)' : 'var(--c-blue)';
+
         html += `
           <tr>
-            <td style="font-family:var(--font-family); font-weight:700; color:var(--c-blue);">${safeBot}</td>
+            <td style="font-family:var(--font-family); font-weight:700; color:${accentColor};">${safeBot}</td>
             <td style="font-family:var(--mono-family); font-weight:700; color:var(--c-gold);">#${safePack}</td>
             <td style="font-family:var(--mono-family); font-size:0.85rem; word-break:break-all; color:#fff;" title="${safeFile}">
               ${safeFile}
@@ -13815,10 +14147,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <td style="font-family:var(--mono-family); color:#44dd88; white-space:nowrap;">${escapeHtml(sizeStr)}</td>
             <td style="font-family:var(--mono-family); font-size:0.75rem; color:#888;">
               ${safeServer ? `<div>${safeServer}</div>` : ''}
-              ${safeChannel ? `<div style="color:var(--c-secondary);">${safeChannel}</div>` : ''}
+              ${safeChannel ? `<div style="color:var(--c-secondary); font-weight:700;">${safeChannel}</div>` : ''}
             </td>
             <td style="text-align:right;">
-              <button type="button" class="left-action-btn" onclick="triggerPulsecastXdccDownload('${safeServer}', '${safeChannel}', '${safeBot.replace(/'/g, "\\'")}', '${safePack}', '${safeFile.replace(/'/g, "\\'")}', ${sizeBytes})" style="padding:0.3rem 0.8rem; font-size:0.8rem; border-color:var(--c-blue); color:var(--c-blue); font-weight:700;">
+              <button type="button" class="left-action-btn" onclick="triggerPulsecastXdccDownload('${safeServer}', '${safeChannel}', '${safeBot.replace(/'/g, "\\'")}', '${safePack}', '${safeFile.replace(/'/g, "\\'")}', ${sizeBytes})" style="padding:0.3rem 0.8rem; font-size:0.8rem; border-color:${accentColor}; color:${accentColor}; font-weight:700;">
                 <span>⬇️</span> <span>LADEN</span>
               </button>
             </td>
@@ -13837,13 +14169,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   async function triggerPulsecastXdccDownload(server, channel, botName, packNumber, filename, expectedSize) {
     playLcarsBeep(1200, 1600);
+    const targetChannel = channel || (pulsecastXdccSource === 'moviegods' ? '#moviegods' : '');
+    const targetServer = server || (pulsecastXdccSource === 'moviegods' ? 'irc.abjects.net' : '');
+
     try {
       const resp = await fetch('/api/pulsecast/download/xdcc', {
         method: 'POST',
         headers: getPulsecastHeaders(),
         body: JSON.stringify({
-          server: server,
-          channel: channel,
+          server: targetServer,
+          channel: targetChannel,
           botName: botName,
           packNumber: packNumber,
           filename: filename,
@@ -13853,13 +14188,123 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const data = await resp.json();
       if (resp.ok && data.success) {
         playLcarsAcknowledge();
-        alert(`XDCC Download angefordert:\nBot: ${botName}\nPack: #${packNumber}\nDatei: ${filename}`);
+        alert(`XDCC Download angefordert:\nBot: ${botName}\nPack: #${packNumber}\nChannel: ${targetChannel}\nDatei: ${filename}`);
         switchPulsecastSubtab('downloads');
       } else {
         alert(`XDCC Fehler: ${data.error || 'Fehlgeschlagen'}`);
       }
     } catch (e) {
       alert(`XDCC Fehler: ${e}`);
+    }
+  }
+
+  // LCARS PLAYER MODAL CONTROLLER
+  function openPulsecastPlayerModal(filename, displayTitle) {
+    if (!filename) return;
+    playLcarsBeep(1200, 1600);
+    const modal = document.getElementById('pulsecastPlayerModal');
+    const titleEl = document.getElementById('pulsecastPlayerModalTitle');
+    const metaEl = document.getElementById('pulsecastPlayerModalMeta');
+    const inputEl = document.getElementById('pulsecastPlayerStreamUrlInput');
+    const webPlayerContainer = document.getElementById('pulsecastWebPlayerContainer');
+    const videoEl = document.getElementById('pulsecastWebPlayerVideo');
+
+    const cleanTitle = displayTitle || filename;
+    if (titleEl) titleEl.textContent = cleanTitle;
+    if (metaEl) metaEl.textContent = `DATEI: ${filename} // HTTP RANGE NATIVE STREAM`;
+
+    const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '0901');
+    const cleanFn = (filename || '').replace(/^[/]+/, '');
+    const streamUrl = `${window.location.origin}/api/pulsecast/media/stream/${encodeURI(cleanFn)}${code ? `?code=${encodeURIComponent(code)}` : ''}`;
+    currentPulsecastStreamUrl = streamUrl;
+
+    if (inputEl) inputEl.value = streamUrl;
+
+    // Direct app protocol schemes
+    const vlcBtn = document.getElementById('playerBtnVlc');
+    if (vlcBtn) vlcBtn.href = `vlc://${streamUrl}`;
+
+    const potBtn = document.getElementById('playerBtnPotPlayer');
+    if (potBtn) potBtn.href = `potplayer://${streamUrl}`;
+
+    const iinaBtn = document.getElementById('playerBtnIina');
+    if (iinaBtn) iinaBtn.href = `iina://weblink?url=${encodeURIComponent(streamUrl)}`;
+
+    const nplayerBtn = document.getElementById('playerBtnNplayer');
+    if (nplayerBtn) nplayerBtn.href = `nplayer-${streamUrl}`;
+
+    // Reset web player container
+    if (webPlayerContainer) webPlayerContainer.style.display = 'none';
+    if (videoEl) {
+      videoEl.pause();
+      videoEl.removeAttribute('src');
+      videoEl.load();
+    }
+
+    if (modal) modal.style.display = 'flex';
+  }
+
+  function closePulsecastPlayerModal() {
+    playLcarsBeep(500, 300);
+    const modal = document.getElementById('pulsecastPlayerModal');
+    const videoEl = document.getElementById('pulsecastWebPlayerVideo');
+    if (videoEl) {
+      videoEl.pause();
+      videoEl.removeAttribute('src');
+      videoEl.load();
+    }
+    if (modal) modal.style.display = 'none';
+  }
+
+  function handlePulsecastPlayerModalBackdropClick(e) {
+    if (e.target && e.target.id === 'pulsecastPlayerModal') {
+      closePulsecastPlayerModal();
+    }
+  }
+
+  function togglePulsecastWebPlayer(show) {
+    const container = document.getElementById('pulsecastWebPlayerContainer');
+    const videoEl = document.getElementById('pulsecastWebPlayerVideo');
+    if (!container || !videoEl) return;
+    if (show) {
+      playLcarsBeep(1100, 1400);
+      container.style.display = 'flex';
+      videoEl.src = currentPulsecastStreamUrl;
+      videoEl.play().catch(e => console.log('Autoplay info:', e));
+    } else {
+      playLcarsBeep(700, 400);
+      videoEl.pause();
+      container.style.display = 'none';
+    }
+  }
+
+  function copyPulsecastStreamUrl() {
+    playLcarsBeep(1300, 1700);
+    if (!currentPulsecastStreamUrl) return;
+    navigator.clipboard.writeText(currentPulsecastStreamUrl).then(() => {
+      const badge = document.getElementById('pulsecastCopySuccessBadge');
+      if (badge) {
+        badge.style.display = 'inline';
+        setTimeout(() => { badge.style.display = 'none'; }, 3000);
+      }
+    }).catch(err => {
+      const inp = document.getElementById('pulsecastPlayerStreamUrlInput');
+      if (inp) {
+        inp.select();
+        document.execCommand('copy');
+        const badge = document.getElementById('pulsecastCopySuccessBadge');
+        if (badge) {
+          badge.style.display = 'inline';
+          setTimeout(() => { badge.style.display = 'none'; }, 3000);
+        }
+      }
+    });
+  }
+
+  function openPulsecastStreamInTab() {
+    playLcarsBeep(1200, 1500);
+    if (currentPulsecastStreamUrl) {
+      window.open(currentPulsecastStreamUrl, '_blank');
     }
   }
 
@@ -14365,7 +14810,7 @@ if USE_FLASK:
         if not query:
             return jsonify({"success": False, "error": "Suchbegriff (Parameter q) erforderlich"}), 400
         source = request.args.get("source", "xdcc")
-        return _pulsecast_proxy("GET", "/api/search", params={"q": query, "source": source}, timeout=30)
+        return _pulsecast_proxy("GET", "/api/search", params={"q": query, "source": source}, timeout=35)
 
     @app.route("/api/pulsecast/download/xdcc", methods=["POST"])
     def api_pulsecast_download_xdcc():
@@ -14374,6 +14819,67 @@ if USE_FLASK:
             if not data.get(req_field):
                 return jsonify({"success": False, "error": f"Fehlender Parameter: {req_field}"}), 400
         return _pulsecast_proxy("POST", "/api/download", json_data=data)
+
+    @app.route("/api/pulsecast/media/stream/<path:filename>", methods=["GET", "HEAD"])
+    def api_pulsecast_media_stream(filename):
+        if not _pulsecast_authorized():
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Command Code Autorisierung erforderlich", "locked": True}), 403
+
+        safe_filename = urllib.parse.quote(filename, safe="/")
+        target_url = f"{PULSECAST_BASE_URL}/api/media/stream/{safe_filename}"
+
+        req_headers = {}
+        if "Range" in request.headers:
+            req_headers["Range"] = request.headers["Range"]
+        if "If-Range" in request.headers:
+            req_headers["If-Range"] = request.headers["If-Range"]
+
+        try:
+            r = requests.request(
+                method=request.method,
+                url=target_url,
+                headers=req_headers,
+                stream=True,
+                timeout=30
+            )
+
+            forward_headers = {}
+            for h in [
+                "Content-Type",
+                "Content-Length",
+                "Content-Range",
+                "Accept-Ranges",
+                "Content-Disposition",
+                "Cache-Control",
+                "ETag",
+                "Last-Modified",
+            ]:
+                if h in r.headers:
+                    forward_headers[h] = r.headers[h]
+
+            if "Accept-Ranges" not in forward_headers:
+                forward_headers["Accept-Ranges"] = "bytes"
+
+            if request.method == "HEAD":
+                r.close()
+                return Response(status=r.status_code, headers=forward_headers)
+
+            def generate():
+                try:
+                    for chunk in r.iter_content(chunk_size=65536):
+                        if chunk:
+                            yield chunk
+                finally:
+                    r.close()
+
+            return Response(stream_with_context(generate()), status=r.status_code, headers=forward_headers)
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout):
+            return jsonify({"success": False, "error": "Subraum-Relay zu PulseCast offline (Port 3000)", "offline": True}), 503
+        except requests.exceptions.Timeout:
+            return jsonify({"success": False, "error": "PulseCast Subraum-Relay Zeitüberschreitung (Timeout)", "offline": False}), 504
+        except Exception as e:
+            return jsonify({"success": False, "error": f"PulseCast Stream Proxy Fehler: {e}"}), 500
 
 
     def run_server():
@@ -14523,6 +15029,37 @@ else:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
+                elif parsed.path.startswith("/api/pulsecast/media/stream/"):
+                    subpath = parsed.path.replace("/api/pulsecast/media/stream/", "", 1)
+                    safe_fn = urllib.parse.quote(urllib.parse.unquote(subpath), safe="/")
+                    target_url = f"http://127.0.0.1:3000/api/media/stream/{safe_fn}"
+                    req_headers = {}
+                    if "Range" in self.headers:
+                        req_headers["Range"] = self.headers["Range"]
+                    if "If-Range" in self.headers:
+                        req_headers["If-Range"] = self.headers["If-Range"]
+                    try:
+                        r = requests.get(target_url, headers=req_headers, stream=True, timeout=35)
+                        self.send_response(r.status_code)
+                        for h in ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition", "Cache-Control", "ETag", "Last-Modified"]:
+                            if h in r.headers:
+                                self.send_header(h, r.headers[h])
+                        if "Accept-Ranges" not in r.headers:
+                            self.send_header("Accept-Ranges", "bytes")
+                        self.end_headers()
+                        try:
+                            for chunk in r.iter_content(chunk_size=65536):
+                                if chunk:
+                                    self.wfile.write(chunk)
+                        finally:
+                            r.close()
+                    except Exception as e:
+                        err = json.dumps({"success": False, "error": str(e), "offline": True}).encode("utf-8")
+                        self.send_response(503)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(err)))
+                        self.end_headers()
+                        self.wfile.write(err)
                 else:
                     subpath = parsed.path.replace("/api/pulsecast", "/api", 1)
                     if parsed.path == "/api/pulsecast/series-episodes":
@@ -14531,7 +15068,7 @@ else:
                     if parsed.query:
                         target_url += f"?{parsed.query}"
                     try:
-                        r = requests.get(target_url, timeout=15)
+                        r = requests.get(target_url, timeout=35)
                         self.send_response(r.status_code)
                         self.send_header("Content-Type", r.headers.get("Content-Type", "application/json"))
                         self.send_header("Content-Length", str(len(r.content)))
