@@ -109,6 +109,7 @@ class HomeAssistantService:
         self._solar_data_cache_time = 0
         self._solar_data_lock = threading.Lock()
         self._last_known_solar = {}
+        self._flash_lock = threading.Lock()
 
     def _load_config(self):
         with getattr(self, "_config_lock", threading.Lock()):
@@ -869,10 +870,98 @@ class HomeAssistantService:
             err = res.get("error", str(res)) if isinstance(res, dict) else str(res)
             return {"success": False, "error": err, "code": code}
 
+    def get_entity_state(self, entity_id):
+        """Holt den aktuellen Zustand eines einzelnen Entities direkt über /api/states/<entity_id>."""
+        cfg = self.get_config()
+        if not cfg.get("configured"):
+            return None
+        res, code = self._make_request(f"/api/states/{entity_id}")
+        if code == 200 and isinstance(res, dict):
+            return res
+        return None
+
+    def flash_light(self, entity_id="light.esstisch", duration=1.2, brightness=255, async_run=True):
+        """
+        Führt ein kurzes Flash-Signal auf einer Lampe in Home Assistant aus:
+        1. Fragt aktuellen Zustand (state: on/off, brightness) ab.
+        2. Schaltet Lampe mit 100% Helligkeit (brightness: 255) ein.
+        3. Wartet duration Sekunden (z.B. 1.2s).
+        4. Stellt den vorherigen Zustand wieder her (off -> turn_off, on -> turn_on mit vorheriger brightness).
+        Läuft standardmäßig in einem separaten Daemon-Thread, um den Aufrufer nicht zu blockieren.
+        """
+        if async_run:
+            t = threading.Thread(
+                target=self._flash_light_worker,
+                args=(entity_id, duration, brightness),
+                name=f"HA-Flash-{entity_id}",
+                daemon=True
+            )
+            t.start()
+            return {"success": True, "async": True, "entity_id": entity_id}
+        else:
+            return self._flash_light_worker(entity_id, duration, brightness)
+
+    def _flash_light_worker(self, entity_id, duration, brightness):
+        with self._flash_lock:
+            try:
+                print(f"[INFO] HomeAssistantService: Starte Flash-Signal auf {entity_id} (Dauer: {duration}s, Helligkeit: {brightness})...", flush=True)
+                st = self.get_entity_state(entity_id)
+                if not st or not isinstance(st, dict):
+                    print(f"[WARN] HomeAssistantService: Konnte aktuellen Zustand von {entity_id} nicht abfragen.", file=sys.stderr, flush=True)
+                    return {"success": False, "error": f"Konnte Zustand von {entity_id} nicht abfragen"}
+
+                prev_state = st.get("state", "off")
+                if prev_state in ("unavailable", "unknown"):
+                    print(f"[WARN] HomeAssistantService: {entity_id} ist im Status '{prev_state}', Flash wird übersprungen.", file=sys.stderr, flush=True)
+                    return {"success": False, "error": f"Entity im Status '{prev_state}'"}
+
+                attrs = st.get("attributes", {}) or {}
+                prev_brightness = attrs.get("brightness")
+
+                # 1. Einschalten auf 100% (255)
+                on_res = self.call_service("light", "turn_on", {
+                    "entity_id": entity_id,
+                    "brightness": brightness
+                })
+                if not on_res.get("success"):
+                    print(f"[WARN] HomeAssistantService: Fehler beim Einschalten von {entity_id}: {on_res.get('error')}", file=sys.stderr, flush=True)
+
+                # 2. Flash-Dauer warten
+                time.sleep(max(0.1, float(duration)))
+
+                # 3. Ursprünglichen Zustand wiederherstellen
+                if prev_state == "on":
+                    restore_data = {"entity_id": entity_id}
+                    if prev_brightness is not None:
+                        restore_data["brightness"] = prev_brightness
+                    restore_res = self.call_service("light", "turn_on", restore_data)
+                else:
+                    restore_res = self.call_service("light", "turn_off", {"entity_id": entity_id})
+
+                if not restore_res.get("success"):
+                    print(f"[WARN] HomeAssistantService: Fehler beim Wiederherstellen von {entity_id}: {restore_res.get('error')}", file=sys.stderr, flush=True)
+                    return {"success": False, "error": restore_res.get("error")}
+
+                print(f"[INFO] HomeAssistantService: Flash-Signal auf {entity_id} erfolgreich abgeschlossen ({prev_state}, brightness={prev_brightness}).", flush=True)
+                return {
+                    "success": True,
+                    "entity_id": entity_id,
+                    "restored_state": prev_state,
+                    "restored_brightness": prev_brightness
+                }
+            except Exception as e:
+                print(f"[ERROR] HomeAssistantService: Unerwarteter Fehler beim Flash auf {entity_id}: {e}", file=sys.stderr, flush=True)
+                return {"success": False, "error": str(e)}
+
 # Singleton Instance
 ha_service = HomeAssistantService()
 
 if __name__ == "__main__":
-    print("Testing HomeAssistantService with user/password...")
-    t = ha_service.test_connection(url="http://127.0.0.1:8123", username="cb", password="mymaajen")
-    print("Test result:", t)
+    if "--test-flash" in sys.argv:
+        print("Testing flash_light on light.esstisch...")
+        res = ha_service.flash_light(entity_id="light.esstisch", duration=1.2, async_run=False)
+        print("Flash result:", res)
+    else:
+        print("Testing HomeAssistantService with user/password...")
+        t = ha_service.test_connection(url="http://127.0.0.1:8123", username="cb", password="mymaajen")
+        print("Test result:", t)

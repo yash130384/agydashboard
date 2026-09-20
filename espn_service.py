@@ -7,6 +7,7 @@ Fetches league, team, live matchup, roster, and standings from ESPN Fantasy API.
 import json
 import os
 import sys
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -54,22 +55,29 @@ class EspnFantasyClient:
         self._cached_data = None
         self._cache_timestamp = 0
         self._cache_ttl = 30  # 30 Sekunden Cache für optimale Live-Aktualität
+        self._tracker_lock = threading.Lock()
+        self._poller_thread = None
+        self._poller_running = False
+        self._poller_lock = threading.Lock()
+        self._poll_interval = 35
 
     def _load_tracker(self):
-        try:
-            if os.path.exists(self.tracker_path):
-                with open(self.tracker_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-        except Exception:
-            pass
-        return {}
+        with self._tracker_lock:
+            try:
+                if os.path.exists(self.tracker_path):
+                    with open(self.tracker_path, "r", encoding="utf-8") as f:
+                        return json.load(f)
+            except Exception as e:
+                print(f"[WARN] EspnFantasyClient: Fehler beim Laden von espn_score_tracker.json: {e}", file=sys.stderr)
+            return {}
 
     def _save_tracker(self, tracker):
-        try:
-            with open(self.tracker_path, "w", encoding="utf-8") as f:
-                json.dump(tracker, f, indent=2)
-        except Exception:
-            pass
+        with self._tracker_lock:
+            try:
+                with open(self.tracker_path, "w", encoding="utf-8") as f:
+                    json.dump(tracker, f, indent=2)
+            except Exception as e:
+                print(f"[WARN] EspnFantasyClient: Fehler beim Speichern von espn_score_tracker.json: {e}", file=sys.stderr)
 
     def _load_config(self):
         try:
@@ -80,6 +88,11 @@ class EspnFantasyClient:
                     if "cache_ttl" in cfg:
                         try:
                             self._cache_ttl = max(15, int(cfg["cache_ttl"]))
+                        except (ValueError, TypeError):
+                            pass
+                    if "poll_interval" in cfg:
+                        try:
+                            self._poll_interval = max(15, int(cfg["poll_interval"]))
                         except (ValueError, TypeError):
                             pass
                     return cfg
@@ -204,6 +217,12 @@ class EspnFantasyClient:
         my_entries = my_team_raw.get("roster", {}).get("entries", [])
         my_roster = self._parse_roster(my_entries, current_week)
 
+        # Team Score Tracker & Flash Trigger Auswertung
+        tracked_team_score = None
+        if matchup_info and "my_team" in matchup_info:
+            current_team_score = matchup_info["my_team"].get("score")
+            tracked_team_score = self._evaluate_team_score(current_team_score, current_week, my_team_id)
+
         # Standings Resolution
         standings = []
         for t in data.get("teams", []):
@@ -242,6 +261,7 @@ class EspnFantasyClient:
             "roster": my_roster,
             "opponent_roster": opponent_roster,
             "standings": standings,
+            "team_score_tracker": tracked_team_score,
             "updated_at": datetime.now().strftime("%d.%m.%Y %H:%M:%S")
         }
 
@@ -334,9 +354,167 @@ class EspnFantasyClient:
         roster.sort(key=lambda x: (0 if x['is_starter'] else 1, slot_order.get(x['slot'], 50)))
         return roster
 
+    def _evaluate_team_score(self, current_score, current_week, my_team_id):
+        """
+        Prüft, ob für das eigene Team Punkte erzielt wurden.
+        Bei Punkterhöhung wird asynchron das Home Assistant Lichtsignal ausgelöst.
+        """
+        if current_score is None:
+            return None
+
+        try:
+            current_score = round(float(current_score), 2)
+        except (ValueError, TypeError):
+            return None
+
+        now_ts = time.time()
+        tracker = self._load_tracker()
+        score_info = tracker.get("my_team_score")
+
+        cfg = self._load_config()
+        flash_enabled = cfg.get("flash_enabled", True)
+        flash_entity = cfg.get("flash_light") or cfg.get("flash_entity", "light.esstisch")
+        try:
+            flash_duration = float(cfg.get("flash_duration", 1.2))
+        except (ValueError, TypeError):
+            flash_duration = 1.2
+
+        # Fall 1: Kaltstart / Noch kein Eintrag oder neue Spielwoche
+        if not isinstance(score_info, dict) or score_info.get("week") != current_week or not score_info.get("initialized", True):
+            print(f"[INFO] EspnFantasyClient: Initialisiere Score-Tracker für Team {my_team_id} (Woche {current_week}): {current_score} Pkt (kein Kaltstart-Flash).", flush=True)
+            new_info = {
+                "team_id": my_team_id,
+                "week": current_week,
+                "score": current_score,
+                "initialized": True,
+                "last_gain": 0.0,
+                "last_gain_ts": 0.0,
+                "last_updated": now_ts
+            }
+            tracker["my_team_score"] = new_info
+            self._save_tracker(tracker)
+            return new_info
+
+        # Fall 2: Score vergleichen
+        prev_score = round(float(score_info.get("score", 0.0)), 2)
+
+        if current_score > prev_score:
+            gain = round(current_score - prev_score, 2)
+            print(f"[INFO] EspnFantasyClient: 🏈 PUNKTGEWINN für Team {my_team_id}! Alter Score: {prev_score}, Neuer Score: {current_score} (+{gain} Pkt). Triggere Flash auf {flash_entity}...", flush=True)
+            score_info["score"] = current_score
+            score_info["last_gain"] = gain
+            score_info["last_gain_ts"] = now_ts
+            score_info["last_updated"] = now_ts
+            tracker["my_team_score"] = score_info
+            self._save_tracker(tracker)
+
+            if flash_enabled:
+                self.trigger_flash(entity_id=flash_entity, duration=flash_duration)
+            else:
+                print(f"[INFO] EspnFantasyClient: Flash-Signal übersprungen (flash_enabled=false).", flush=True)
+
+        elif current_score < prev_score:
+            # Score-Korrektur nach unten
+            print(f"[INFO] EspnFantasyClient: Score-Korrektur für Team {my_team_id}: {prev_score} -> {current_score}.", flush=True)
+            score_info["score"] = current_score
+            score_info["last_updated"] = now_ts
+            tracker["my_team_score"] = score_info
+            self._save_tracker(tracker)
+        else:
+            # Score unverändert
+            score_info["last_updated"] = now_ts
+            tracker["my_team_score"] = score_info
+            self._save_tracker(tracker)
+
+        return score_info
+
+    def trigger_flash(self, entity_id=None, duration=None):
+        """Triggert das Home Assistant Flash-Signal asynchron in einem separaten Thread."""
+        cfg = self._load_config()
+        if not entity_id:
+            entity_id = cfg.get("flash_light") or cfg.get("flash_entity", "light.esstisch")
+        if duration is None:
+            try:
+                duration = float(cfg.get("flash_duration", 1.2))
+            except (ValueError, TypeError):
+                duration = 1.2
+
+        try:
+            from ha_service import ha_service
+            if ha_service:
+                ha_service.flash_light(entity_id=entity_id, duration=duration, async_run=True)
+                return True
+            else:
+                print("[WARN] EspnFantasyClient: ha_service steht nicht zur Verfügung.", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[ERROR] EspnFantasyClient: Fehler beim Aufrufen von ha_service.flash_light: {e}", file=sys.stderr, flush=True)
+        return False
+
+    def start_poller(self, interval=None):
+        """Startet den periodischen Hintergrund-Poller-Thread, falls nicht bereits aktiv."""
+        with self._poller_lock:
+            if self._poller_running:
+                return
+            self._poller_running = True
+            if interval:
+                try:
+                    self._poll_interval = max(15, int(interval))
+                except (ValueError, TypeError):
+                    pass
+            self._poller_thread = threading.Thread(
+                target=self._poller_worker,
+                name="EspnScorePoller",
+                daemon=True
+            )
+            self._poller_thread.start()
+            print(f"[START] EspnScorePoller gestartet (Intervall: {self._poll_interval}s).", flush=True)
+
+    def stop_poller(self):
+        """Stoppt den periodischen Hintergrund-Poller-Thread."""
+        with self._poller_lock:
+            self._poller_running = False
+
+    def _poller_worker(self):
+        # 3 Sekunden Startverzögerung
+        time.sleep(3)
+        while self._poller_running:
+            try:
+                cfg = self._load_config()
+                if cfg.get("enabled", True):
+                    self.fetch(force=True)
+            except Exception as e:
+                print(f"[WARN] EspnScorePoller: Fehler beim periodischen Abrufen: {e}", file=sys.stderr, flush=True)
+
+            cfg = self._load_config()
+            interval = cfg.get("poll_interval", getattr(self, "_poll_interval", 35))
+            try:
+                interval = max(15, int(interval))
+            except (ValueError, TypeError):
+                interval = 35
+
+            for _ in range(interval):
+                if not self._poller_running:
+                    break
+                time.sleep(1)
+
 # Singleton instance
 espn_client = EspnFantasyClient()
 
 if __name__ == "__main__":
-    result = espn_client.fetch(force=True)
-    print(json.dumps(result, indent=2))
+    if "--test-flash" in sys.argv:
+        print("Triggere Test-Flash auf Home Assistant (light.esstisch)...")
+        res = espn_client.trigger_flash()
+        print("Test-Flash initiiert:", res)
+        time.sleep(2.0)
+    elif "--poll" in sys.argv:
+        print("Starte ESPN Poller im Vordergrund (Strg+C zum Beenden)...")
+        espn_client.start_poller()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            espn_client.stop_poller()
+            print("Poller beendet.")
+    else:
+        result = espn_client.fetch(force=True)
+        print(json.dumps(result, indent=2))

@@ -2319,6 +2319,12 @@ class AlertMonitor:
 alert_monitor = AlertMonitor()
 alert_monitor.start()
 
+if espn_client:
+    try:
+        espn_client.start_poller()
+    except Exception as _espn_poller_err:
+        print(f"[WARN] EspnScorePoller konnte nicht gestartet werden: {_espn_poller_err}", file=sys.stderr)
+
 
 # ---------------------------------------------------------------------------
 # Hermes Agent Helper Functions
@@ -6397,7 +6403,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="lcars-header-bar">
             <span class="lcars-pill-tag">ESPN // LIVE METRIKEN</span>
             <h2 id="fantasySectionTitle">LCARS SUBRAUM RELAY // INCOMPLETE PASS LIGA</h2>
-            <div style="margin-left:auto; display:flex; align-items:center;">
+            <div style="margin-left:auto; display:flex; align-items:center; gap:0.6rem;">
+              <button id="fantasyTestFlashBtn" onclick="testFantasyFlash(event)" style="font-size:0.75rem; color:var(--c-primary); background:rgba(235,148,58,0.15); border:1px solid rgba(235,148,58,0.4); padding:0.25rem 0.65rem; border-radius:12px; font-family:var(--mono-family); cursor:pointer; letter-spacing:0.04em; transition:all 0.2s ease;" title="Flash-Signal auf light.esstisch testen">
+                ⚡ TEST FLASH
+              </button>
               <span id="fantasyCountdownBadge" style="font-size:0.8rem; color:#44dd88; background:rgba(68,221,136,0.15); border:1px solid rgba(68,221,136,0.4); padding:0.25rem 0.75rem; border-radius:12px; font-family:var(--mono-family); letter-spacing:0.04em;">
                 ● REFRESH IN 30S
               </span>
@@ -8263,6 +8272,40 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       badge.style.background = 'rgba(68, 221, 136, 0.15)';
     }
   }
+
+  window.testFantasyFlash = async function(e) {
+    if (e) e.preventDefault();
+    const btn = document.getElementById('fantasyTestFlashBtn');
+    if (!btn) return;
+    const origText = btn.textContent;
+    btn.textContent = '⚡ FLASHING...';
+    btn.style.color = 'var(--c-gold)';
+    btn.style.borderColor = 'var(--c-gold)';
+    btn.disabled = true;
+    try {
+      const resp = await fetch('/api/fantasy/test-flash');
+      const data = await resp.json();
+      if (data.success) {
+        btn.textContent = '✓ FLASH OK';
+        btn.style.color = '#44dd88';
+        btn.style.borderColor = '#44dd88';
+      } else {
+        btn.textContent = '✗ FEHLER';
+        btn.style.color = 'var(--c-red)';
+        btn.style.borderColor = 'var(--c-red)';
+      }
+    } catch (err) {
+      btn.textContent = '✗ NETZWERK';
+      btn.style.color = 'var(--c-red)';
+      btn.style.borderColor = 'var(--c-red)';
+    }
+    setTimeout(() => {
+      btn.textContent = origText;
+      btn.style.color = 'var(--c-primary)';
+      btn.style.borderColor = 'rgba(235,148,58,0.4)';
+      btn.disabled = false;
+    }, 2200);
+  };
 
   async function loadFantasyData(force = false) {
     if (isFantasyLoading) return;
@@ -15805,6 +15848,36 @@ if USE_FLASK:
             return jsonify(espn_client.fetch(force=True))
         return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
 
+    @app.route("/api/fantasy/test-flash", methods=["GET", "POST"])
+    def api_fantasy_test_flash():
+        data = request.get_json(silent=True) if request.method == "POST" else {}
+        if not data:
+            data = {}
+        entity_id = request.args.get("entity_id") or data.get("entity_id") or "light.esstisch"
+        duration_raw = request.args.get("duration") or data.get("duration") or 1.2
+        try:
+            duration = float(duration_raw)
+        except (ValueError, TypeError):
+            duration = 1.2
+
+        if espn_client:
+            res = espn_client.trigger_flash(entity_id=entity_id, duration=duration)
+            return jsonify({
+                "success": bool(res),
+                "message": f"Flash-Signal für {entity_id} ({duration}s) ausgelöst",
+                "entity_id": entity_id,
+                "duration": duration
+            })
+        elif ha_service:
+            ha_service.flash_light(entity_id=entity_id, duration=duration, async_run=True)
+            return jsonify({
+                "success": True,
+                "message": f"Flash-Signal für {entity_id} ({duration}s) ausgelöst",
+                "entity_id": entity_id,
+                "duration": duration
+            })
+        return jsonify({"success": False, "error": "Weder espn_client noch ha_service verfügbar"}), 503
+
     @app.route("/api/homeassistant/config", methods=["GET"])
     def api_ha_config():
         if ha_service:
@@ -16493,6 +16566,26 @@ else:
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+            elif parsed.path == "/api/fantasy/test-flash":
+                query = urllib.parse.parse_qs(parsed.query)
+                entity_id = query.get("entity_id", ["light.esstisch"])[0]
+                try:
+                    duration = float(query.get("duration", [1.2])[0])
+                except (ValueError, TypeError):
+                    duration = 1.2
+                if espn_client:
+                    res = espn_client.trigger_flash(entity_id=entity_id, duration=duration)
+                    data = json.dumps({"success": bool(res), "message": f"Flash-Signal für {entity_id} ausgelöst", "entity_id": entity_id, "duration": duration}).encode("utf-8")
+                elif ha_service:
+                    ha_service.flash_light(entity_id=entity_id, duration=duration, async_run=True)
+                    data = json.dumps({"success": True, "message": f"Flash-Signal für {entity_id} ausgelöst", "entity_id": entity_id, "duration": duration}).encode("utf-8")
+                else:
+                    data = json.dumps({"success": False, "error": "Dienst nicht verfügbar"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
             elif parsed.path == "/api/homeassistant/config":
                 cfg = ha_service.get_config(safe=True) if ha_service else {"configured": False}
                 data = json.dumps(cfg).encode("utf-8")
@@ -16775,6 +16868,31 @@ else:
                     data = {}
                 res = ha_service.save_config(data) if ha_service else {"success": False}
                 resp = json.dumps(res).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/fantasy/test-flash":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                entity_id = data.get("entity_id", "light.esstisch")
+                try:
+                    duration = float(data.get("duration", 1.2))
+                except (ValueError, TypeError):
+                    duration = 1.2
+                if espn_client:
+                    res = espn_client.trigger_flash(entity_id=entity_id, duration=duration)
+                    resp = json.dumps({"success": bool(res), "message": f"Flash-Signal für {entity_id} ausgelöst", "entity_id": entity_id, "duration": duration}).encode("utf-8")
+                elif ha_service:
+                    ha_service.flash_light(entity_id=entity_id, duration=duration, async_run=True)
+                    resp = json.dumps({"success": True, "message": f"Flash-Signal für {entity_id} ausgelöst", "entity_id": entity_id, "duration": duration}).encode("utf-8")
+                else:
+                    resp = json.dumps({"success": False, "error": "Dienst nicht verfügbar"}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(resp)))
