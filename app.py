@@ -7142,6 +7142,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <span>⬇️</span> <span>DOWNLOADS</span>
                 <span id="pulsecastDownloadsCountBadge" style="background:rgba(0,0,0,0.5); padding:2px 8px; border-radius:12px; font-size:0.75rem; margin-left:4px;">0</span>
               </button>
+              <button type="button" class="lcars-subnav-pill" id="pulsecast-tab-btn-local" onclick="switchPulsecastSubtab('local')">
+                <span>📁</span> <span>LOKAL</span>
+                <span id="pulsecastLocalCountBadge" style="background:rgba(0,0,0,0.5); padding:2px 8px; border-radius:12px; font-size:0.75rem; margin-left:4px;">0</span>
+              </button>
               <button type="button" class="lcars-subnav-pill" id="pulsecast-tab-btn-catalog" onclick="switchPulsecastSubtab('catalog')">
                 <span>📺</span> <span>KATALOG-BROWSER</span>
               </button>
@@ -7175,6 +7179,100 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <!-- Empty state for downloads -->
                 <div id="pulsecastDownloadsEmpty" style="text-align:center; padding:2.5rem 1rem; color:#888; font-family:var(--mono-family); font-size:0.9rem; display:none;">
                   KEINE AKTIVEN ODER GESPEICHERTEN DOWNLOADS VORHANDEN
+                </div>
+              </div>
+            </div>
+
+            <!-- SUBVIEW 1b: LOKALE MEDIEN -->
+            <div id="pulsecast-subview-local" class="pulsecast-subview" style="display:none;">
+              <div class="lcars-card" style="margin-bottom:1.25rem; padding:1rem; border-top:3px solid var(--c-butterscotch);">
+                <!-- Filter Bar -->
+                <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:0.75rem; margin-bottom:1rem; background:rgba(0,0,0,0.3); padding:0.75rem; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+                  <!-- Type Filter (Alle / Filme / Serien) -->
+                  <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                    <button type="button" class="lcars-pill-btn active" id="local-pill-all" onclick="setPulsecastLocalCategory('Lokal')" style="height:38px; padding:0 1.2rem; font-size:0.85rem; background:var(--c-butterscotch); color:#000; font-weight:700;">
+                      📁 ALLE <span id="pulsecastLocalCountAll" style="margin-left:4px; font-size:0.75rem; opacity:0.85;"></span>
+                    </button>
+                    <button type="button" class="lcars-pill-btn" id="local-pill-Filme" onclick="setPulsecastLocalCategory('Lokal_Filme')" style="height:38px; padding:0 1.2rem; font-size:0.85rem; background:rgba(0,0,0,0.5); color:var(--c-primary); border:1px solid var(--c-primary);">
+                      🎬 FILME <span id="pulsecastLocalCountFilme" style="margin-left:4px; font-size:0.75rem; opacity:0.85;"></span>
+                    </button>
+                    <button type="button" class="lcars-pill-btn" id="local-pill-Serien" onclick="setPulsecastLocalCategory('Lokal_Serien')" style="height:38px; padding:0 1.2rem; font-size:0.85rem; background:rgba(0,0,0,0.5); color:var(--c-secondary); border:1px solid var(--c-secondary);">
+                      📺 SERIEN <span id="pulsecastLocalCountSerien" style="margin-left:4px; font-size:0.75rem; opacity:0.85;"></span>
+                    </button>
+                  </div>
+
+                  <!-- Ansichts-Umschalter: Raster vs Liste -->
+                  <div style="display:flex; gap:0.4rem; align-items:center;">
+                    <button type="button" class="lcars-pill-btn active" id="pulsecastLocalViewGridBtn" onclick="setPulsecastLocalViewMode('grid')" style="height:38px; padding:0 0.9rem; font-size:0.82rem; background:var(--c-gold); color:#000; font-weight:700;" title="Kachel-Rasteransicht">
+                      <span>⊞</span> <span>RASTER</span>
+                    </button>
+                    <button type="button" class="lcars-pill-btn" id="pulsecastLocalViewListBtn" onclick="setPulsecastLocalViewMode('list')" style="height:38px; padding:0 0.9rem; font-size:0.82rem; background:rgba(0,0,0,0.5); color:#aaa; border:1px solid rgba(255,255,255,0.2);" title="Kompakte Tabellen-/Listenansicht">
+                      <span>☰</span> <span>LISTE</span>
+                    </button>
+                  </div>
+
+                  <!-- Schnellsuche -->
+                  <div style="display:flex; align-items:center; gap:0.4rem; min-width:240px; flex:1; max-width:380px;">
+                    <input type="text" id="pulsecastLocalSearchInput" placeholder="Lokale Medien suchen..." class="lcars-input" style="height:38px; font-size:0.85rem; flex:1;" onkeydown="if(event.key==='Enter') pulsecastLocalSearchTrigger();">
+                    <button type="button" class="left-action-btn" onclick="pulsecastLocalSearchTrigger()" style="height:38px; padding:0 0.9rem; font-size:0.82rem; border-color:var(--c-butterscotch); color:var(--c-butterscotch);" title="Suche ausführen">
+                      <span>🔍</span>
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="pulsecastLocalSearchClear()" style="height:38px; padding:0 0.6rem; font-size:0.82rem; border-color:#888; color:#888;" title="Filter zurücksetzen">
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Ladeanzeige -->
+                <div id="pulsecastLocalLoading" style="text-align:center; padding:3rem 1rem; display:none;">
+                  <div style="font-family:var(--font-family); font-size:1.1rem; color:var(--c-butterscotch); letter-spacing:0.06em; margin-bottom:0.5rem;">
+                    DATENKASKADE WIRD GELADEN...
+                  </div>
+                  <div style="font-family:var(--mono-family); font-size:0.85rem; color:#888;">
+                    Lokales Medienarchiv wird synchronisiert
+                  </div>
+                </div>
+
+                <!-- Ansicht 1: Kachel-Raster -->
+                <div id="pulsecastLocalGrid" class="pulsecast-catalog-grid" style="min-height:280px; display:grid;">
+                  <!-- Dynamisch befüllte Kacheln -->
+                </div>
+
+                <!-- Ansicht 2: Kompakte Listenansicht (Tabelle) -->
+                <div id="pulsecastLocalListContainer" style="overflow-x:auto; display:none;">
+                  <table class="services-table" id="pulsecastLocalTable" style="width:100%;">
+                    <thead>
+                      <tr style="position:sticky; top:0; background:#111; z-index:2;">
+                        <th style="width:55px; text-align:center;">TYP</th>
+                        <th>DATEINAME / TITEL</th>
+                        <th style="width:90px;">FORMAT</th>
+                        <th style="width:110px; color:#44dd88;">GRÖSSE</th>
+                        <th style="width:145px; color:var(--c-gold);">ÄNDERUNG</th>
+                        <th style="width:140px; text-align:right;">AKTION</th>
+                      </tr>
+                    </thead>
+                    <tbody id="pulsecastLocalTableBody">
+                      <!-- Dynamisch befüllte Zeilen -->
+                    </tbody>
+                  </table>
+                </div>
+
+                <!-- Empty State -->
+                <div id="pulsecastLocalEmpty" style="text-align:center; padding:3rem 1rem; color:#888; font-family:var(--mono-family); display:none;">
+                  KEINE LOKALEN MEDIEN FÜR DIESE FILTERUNG VORHANDEN
+                </div>
+
+                <!-- Paginierungs-Leiste -->
+                <div id="pulsecastLocalPaginationBar" style="display:flex; justify-content:center; align-items:center; gap:0.75rem; margin-top:1.5rem; flex-wrap:wrap;">
+                  <button type="button" class="left-action-btn" id="pulsecastLocalPrevPageBtn" onclick="pulsecastLocalChangePage(-1)" style="padding:0.4rem 1.1rem; font-size:0.85rem;">
+                    ◀ VORHERIGE
+                  </button>
+                  <span id="pulsecastLocalPageIndicator" style="font-family:var(--mono-family); font-size:0.9rem; color:var(--c-gold); padding:0 0.5rem;">
+                    SEITE 1 VON 1 (0 EINTRÄGE)
+                  </span>
+                  <button type="button" class="left-action-btn" id="pulsecastLocalNextPageBtn" onclick="pulsecastLocalChangePage(1)" style="padding:0.4rem 1.1rem; font-size:0.85rem;">
+                    NÄCHSTE ▶
+                  </button>
                 </div>
               </div>
             </div>
@@ -13828,6 +13926,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (offlineNotice) offlineNotice.style.display = 'none';
     if (activeContent) activeContent.style.display = 'block';
 
+    loadPulsecastLocalCounts();
     switchPulsecastSubtab(pulsecastActiveSubtab || 'downloads');
   }
 
@@ -13853,6 +13952,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       startPulsecastPolling();
     } else {
       stopPulsecastPolling();
+    }
+
+    if (subtab === 'local') {
+      loadPulsecastLocal(pulsecastLocalPage);
     }
 
     if (subtab === 'catalog') {
@@ -14216,8 +14319,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (data.counts) {
         const cFilme = document.getElementById('pulsecastCountFilme');
         const cSerien = document.getElementById('pulsecastCountSerien');
+        const cLocal = document.getElementById('pulsecastLocalCountBadge');
         if (cFilme && data.counts.Filme !== undefined) cFilme.textContent = `(${data.counts.Filme})`;
         if (cSerien && data.counts.Serien !== undefined) cSerien.textContent = `(${data.counts.Serien})`;
+        if (cLocal && data.counts.Lokal !== undefined) cLocal.textContent = String(data.counts.Lokal);
       }
 
       // Update pagination UI
@@ -14342,6 +14447,389 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     } catch (e) {
       alert(`Download-Fehler: ${e}`);
     }
+  }
+
+  // ==========================================================================
+  // LCARS PULSECAST: LOKALE MEDIEN (CONTROLLER & RENDERER)
+  // ==========================================================================
+  let pulsecastLocalCategory = 'Lokal';
+  let pulsecastLocalViewMode = 'grid';
+  let pulsecastLocalSearchQuery = '';
+  let pulsecastLocalPage = 1;
+  let pulsecastLocalTotalPages = 1;
+  let pulsecastLocalItemsCache = [];
+
+  async function loadPulsecastLocalCounts() {
+    try {
+      const resp = await fetch('/api/pulsecast/media-library?category=Lokal&limit=1', {
+        headers: getPulsecastHeaders()
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.counts) {
+          updatePulsecastLocalCounts(data.counts);
+        }
+      }
+    } catch (_) {}
+  }
+
+  function setPulsecastLocalCategory(cat) {
+    playLcarsBeep(1000, 1300);
+    pulsecastLocalCategory = cat;
+
+    const pills = [
+      { id: 'local-pill-all', active: cat === 'Lokal', bg: 'var(--c-butterscotch)', color: '#000' },
+      { id: 'local-pill-Filme', active: cat === 'Lokal_Filme', bg: 'var(--c-primary)', color: '#000' },
+      { id: 'local-pill-Serien', active: cat === 'Lokal_Serien', bg: 'var(--c-secondary)', color: '#000' }
+    ];
+    pills.forEach(p => {
+      const el = document.getElementById(p.id);
+      if (el) {
+        if (p.active) {
+          el.classList.add('active');
+          el.style.background = p.bg;
+          el.style.color = p.color;
+          el.style.fontWeight = '700';
+        } else {
+          el.classList.remove('active');
+          el.style.background = 'rgba(0,0,0,0.5)';
+          el.style.color = (p.id === 'local-pill-Filme') ? 'var(--c-primary)' : (p.id === 'local-pill-Serien' ? 'var(--c-secondary)' : '#aaa');
+          el.style.fontWeight = 'normal';
+        }
+      }
+    });
+
+    pulsecastLocalPage = 1;
+    loadPulsecastLocal(1);
+  }
+
+  function setPulsecastLocalViewMode(mode) {
+    playLcarsBeep(1100, 1400);
+    pulsecastLocalViewMode = mode;
+
+    const gridBtn = document.getElementById('pulsecastLocalViewGridBtn');
+    const listBtn = document.getElementById('pulsecastLocalViewListBtn');
+    const gridContainer = document.getElementById('pulsecastLocalGrid');
+    const listContainer = document.getElementById('pulsecastLocalListContainer');
+
+    if (mode === 'grid') {
+      if (gridBtn) {
+        gridBtn.classList.add('active');
+        gridBtn.style.background = 'var(--c-gold)';
+        gridBtn.style.color = '#000';
+        gridBtn.style.border = 'none';
+      }
+      if (listBtn) {
+        listBtn.classList.remove('active');
+        listBtn.style.background = 'rgba(0,0,0,0.5)';
+        listBtn.style.color = '#aaa';
+        listBtn.style.border = '1px solid rgba(255,255,255,0.2)';
+      }
+      if (gridContainer) gridContainer.style.display = (pulsecastLocalItemsCache.length > 0) ? 'grid' : 'none';
+      if (listContainer) listContainer.style.display = 'none';
+      renderPulsecastLocalGrid(pulsecastLocalItemsCache);
+    } else {
+      if (listBtn) {
+        listBtn.classList.add('active');
+        listBtn.style.background = 'var(--c-gold)';
+        listBtn.style.color = '#000';
+        listBtn.style.border = 'none';
+      }
+      if (gridBtn) {
+        gridBtn.classList.remove('active');
+        gridBtn.style.background = 'rgba(0,0,0,0.5)';
+        gridBtn.style.color = '#aaa';
+        gridBtn.style.border = '1px solid rgba(255,255,255,0.2)';
+      }
+      if (gridContainer) gridContainer.style.display = 'none';
+      if (listContainer) listContainer.style.display = (pulsecastLocalItemsCache.length > 0) ? 'block' : 'none';
+      renderPulsecastLocalList(pulsecastLocalItemsCache);
+    }
+  }
+
+  function pulsecastLocalSearchTrigger() {
+    const inp = document.getElementById('pulsecastLocalSearchInput');
+    pulsecastLocalSearchQuery = inp ? inp.value.trim() : '';
+    pulsecastLocalPage = 1;
+    loadPulsecastLocal(1);
+  }
+
+  function pulsecastLocalSearchClear() {
+    const inp = document.getElementById('pulsecastLocalSearchInput');
+    if (inp) inp.value = '';
+    pulsecastLocalSearchQuery = '';
+    pulsecastLocalPage = 1;
+    loadPulsecastLocal(1);
+  }
+
+  function pulsecastLocalChangePage(delta) {
+    const target = pulsecastLocalPage + delta;
+    if (target >= 1 && target <= pulsecastLocalTotalPages) {
+      playLcarsBeep(1200, 1500);
+      loadPulsecastLocal(target);
+    }
+  }
+
+  async function loadPulsecastLocal(page = 1) {
+    pulsecastLocalPage = page;
+    const grid = document.getElementById('pulsecastLocalGrid');
+    const listContainer = document.getElementById('pulsecastLocalListContainer');
+    const loading = document.getElementById('pulsecastLocalLoading');
+    const emptyEl = document.getElementById('pulsecastLocalEmpty');
+
+    if (loading) loading.style.display = 'block';
+    if (grid) grid.style.display = 'none';
+    if (listContainer) listContainer.style.display = 'none';
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    try {
+      const params = new URLSearchParams({
+        category: pulsecastLocalCategory,
+        search: pulsecastLocalSearchQuery,
+        page: String(page),
+        limit: '40'
+      });
+
+      const resp = await fetch(`/api/pulsecast/media-library?${params.toString()}`, {
+        headers: getPulsecastHeaders()
+      });
+
+      if (loading) loading.style.display = 'none';
+
+      if (resp.status === 403) {
+        initPulsecastSection();
+        return;
+      }
+
+      if (!resp.ok) {
+        if (resp.status === 503) {
+          pulsecastIsOnline = false;
+          initPulsecastSection();
+        }
+        return;
+      }
+
+      const data = await resp.json();
+      const items = data.items || [];
+      pulsecastLocalItemsCache = items;
+      pulsecastLocalTotalPages = data.totalPages || 1;
+
+      // Update Counts
+      if (data.counts) {
+        updatePulsecastLocalCounts(data.counts);
+      }
+
+      // Update pagination UI
+      updatePulsecastLocalPaginationUI(data.currentPage || page, pulsecastLocalTotalPages, data.totalItems || 0);
+
+      if (items.length === 0) {
+        if (grid) grid.style.display = 'none';
+        if (listContainer) listContainer.style.display = 'none';
+        if (emptyEl) emptyEl.style.display = 'block';
+      } else {
+        if (pulsecastLocalViewMode === 'grid') {
+          if (grid) {
+            grid.style.display = 'grid';
+            renderPulsecastLocalGrid(items);
+          }
+        } else {
+          if (listContainer) {
+            listContainer.style.display = 'block';
+            renderPulsecastLocalList(items);
+          }
+        }
+      }
+    } catch (e) {
+      if (loading) loading.style.display = 'none';
+      console.warn('Fehler beim Laden der lokalen Medien:', e);
+    }
+  }
+
+  function updatePulsecastLocalCounts(counts) {
+    if (!counts) return;
+    const badge = document.getElementById('pulsecastLocalCountBadge');
+    const cAll = document.getElementById('pulsecastLocalCountAll');
+    const cFilme = document.getElementById('pulsecastLocalCountFilme');
+    const cSerien = document.getElementById('pulsecastLocalCountSerien');
+
+    if (badge && counts.Lokal !== undefined) badge.textContent = String(counts.Lokal);
+    if (cAll && counts.Lokal !== undefined) cAll.textContent = `(${counts.Lokal})`;
+    if (cFilme && counts.Lokal_Filme !== undefined) cFilme.textContent = `(${counts.Lokal_Filme})`;
+    if (cSerien && counts.Lokal_Serien !== undefined) cSerien.textContent = `(${counts.Lokal_Serien})`;
+  }
+
+  function updatePulsecastLocalPaginationUI(current, total, totalItems) {
+    const indicator = document.getElementById('pulsecastLocalPageIndicator');
+    const prevBtn = document.getElementById('pulsecastLocalPrevPageBtn');
+    const nextBtn = document.getElementById('pulsecastLocalNextPageBtn');
+
+    if (indicator) {
+      indicator.textContent = `SEITE ${current} VON ${total} (${totalItems} EINTRÄGE)`;
+    }
+    if (prevBtn) prevBtn.disabled = (current <= 1);
+    if (nextBtn) nextBtn.disabled = (current >= total);
+  }
+
+  function renderPulsecastLocalGrid(items) {
+    const grid = document.getElementById('pulsecastLocalGrid');
+    if (!grid) return;
+
+    let html = '';
+    items.forEach((item, idx) => {
+      const isSeries = !!item.isGroup || item.category === 'Lokal_Serien' || item.subcategory === 'Serien' || item.metadata?.isSeries;
+      const title = item.title || item.metadata?.title || item.filename || 'Ohne Titel';
+      const year = item.year || item.metadata?.year || '';
+      const poster = item.posterUrl || item.coverUrl || item.metadata?.posterUrl || item.metadata?.coverUrl || '';
+      const safeTitle = escapeHtml(title);
+      const safePoster = poster ? escapeHtml(poster) : '';
+
+      let sizeInfo = '';
+      if (item.sizeBytes) {
+        sizeInfo = formatBytes(item.sizeBytes);
+      } else if (item.files && item.files.length) {
+        const totalSize = item.files.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
+        sizeInfo = `${item.files.length} Folgen (${formatBytes(totalSize)})`;
+      }
+
+      html += `
+        <div class="pulsecast-card" style="border-color:rgba(235,148,58,0.45);">
+          <div style="position:relative; width:100%; aspect-ratio:2/3; background:#111; overflow:hidden;">
+            ${poster ? `<img src="${safePoster}" alt="${safeTitle}" class="pulsecast-card-poster" loading="lazy" onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+            <div style="position:absolute; inset:0; display:${poster ? 'none' : 'flex'}; align-items:center; justify-content:center; flex-direction:column; background:rgba(0,0,0,0.6); color:#777; font-size:2.5rem;">
+              ${isSeries ? '📺' : '🎬'}
+              <span style="font-size:0.75rem; font-family:var(--font-family); color:var(--c-butterscotch); margin-top:0.4rem; padding:0 0.5rem; text-align:center;">${isSeries ? 'LOKALE SERIE' : 'LOKALER FILM'}</span>
+            </div>
+            ${year ? `<span style="position:absolute; top:6px; right:6px; background:rgba(0,0,0,0.75); border:1px solid rgba(255,255,255,0.2); color:var(--c-gold); font-family:var(--mono-family); font-size:0.75rem; padding:2px 6px; border-radius:4px;">${escapeHtml(String(year))}</span>` : ''}
+          </div>
+          <div class="pulsecast-card-body">
+            <div>
+              <div style="font-family:var(--font-family); font-size:0.9rem; font-weight:700; color:#fff; line-height:1.25; margin-bottom:0.3rem; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;" title="${safeTitle}">
+                ${safeTitle}
+              </div>
+              <div style="font-size:0.72rem; color:var(--c-butterscotch); font-family:var(--mono-family); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:0.6rem;">
+                ${sizeInfo ? `📁 ${escapeHtml(sizeInfo)}` : '📁 LOKALE DATEI'}
+              </div>
+            </div>
+
+            <div style="margin-top:auto;">
+              ${(isSeries && item.files && item.files.length) ? `
+                <button type="button" class="left-action-btn" onclick="openPulsecastLocalGroupModal(${idx})" style="width:100%; justify-content:center; padding:0.35rem 0.6rem; font-size:0.8rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
+                  <span>📋</span> <span>EPISODEN (${item.files.length})</span>
+                </button>
+              ` : `
+                <button type="button" class="left-action-btn" onclick="openPulsecastPlayerModal('${escapeJsString(item.filename)}', '${safeTitle.replace(/'/g, "\\'")}')" style="width:100%; justify-content:center; padding:0.35rem 0.6rem; font-size:0.8rem; border-color:var(--c-butterscotch); color:var(--c-butterscotch); font-weight:700;">
+                  <span>▶</span> <span>IN PLAYER ÖFFNEN</span>
+                </button>
+              `}
+            </div>
+          </div>
+        </div>
+      `;
+    });
+
+    grid.innerHTML = html;
+  }
+
+  function renderPulsecastLocalList(items) {
+    const tbody = document.getElementById('pulsecastLocalTableBody');
+    if (!tbody) return;
+
+    let html = '';
+    items.forEach((item, idx) => {
+      const isSeries = !!item.isGroup || item.category === 'Lokal_Serien' || item.subcategory === 'Serien' || item.metadata?.isSeries;
+      const title = item.title || item.metadata?.title || item.filename || 'Ohne Titel';
+      const filename = item.filename || '';
+      const safeTitle = escapeHtml(title);
+      const safeFilename = escapeHtml(filename);
+
+      // Dateiendung / Format ermitteln
+      let format = '--';
+      if (filename) {
+        const extIdx = filename.lastIndexOf('.');
+        if (extIdx !== -1) format = filename.slice(extIdx + 1).toUpperCase();
+      } else if (isSeries) {
+        format = 'SERIE';
+      }
+
+      // Größe
+      let sizeStr = '--';
+      if (item.sizeBytes) {
+        sizeStr = formatBytes(item.sizeBytes);
+      } else if (item.files && item.files.length) {
+        const totalBytes = item.files.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
+        sizeStr = `${formatBytes(totalBytes)} (${item.files.length} F.)`;
+      }
+
+      // Datum
+      let mtimeStr = '--';
+      const mtime = item.mtime || (item.files && item.files[0] ? item.files[0].mtime : 0);
+      if (mtime) {
+        try {
+          const d = new Date(mtime);
+          mtimeStr = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' +
+                     d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+        } catch (_) {}
+      }
+
+      const typeIcon = isSeries ? '📺' : '🎬';
+      const typeColor = isSeries ? 'var(--c-secondary)' : 'var(--c-primary)';
+
+      html += `
+        <tr>
+          <td style="text-align:center; font-size:1.1rem;">${typeIcon}</td>
+          <td>
+            <div style="font-family:var(--font-family); font-weight:700; color:#fff; font-size:0.88rem; line-height:1.2;">
+              ${safeTitle}
+            </div>
+            ${filename ? `<div style="font-family:var(--mono-family); font-size:0.75rem; color:#888; word-break:break-all; margin-top:2px;">${safeFilename}</div>` : ''}
+          </td>
+          <td style="font-family:var(--mono-family); font-size:0.8rem; color:${typeColor}; font-weight:700;">
+            ${escapeHtml(format)}
+          </td>
+          <td style="font-family:var(--mono-family); font-size:0.82rem; color:#44dd88; white-space:nowrap;">
+            ${escapeHtml(sizeStr)}
+          </td>
+          <td style="font-family:var(--mono-family); font-size:0.78rem; color:var(--c-gold); white-space:nowrap;">
+            ${escapeHtml(mtimeStr)}
+          </td>
+          <td style="text-align:right; white-space:nowrap;">
+            ${(isSeries && item.files && item.files.length) ? `
+              <button type="button" class="left-action-btn" onclick="openPulsecastLocalGroupModal(${idx})" style="padding:0.3rem 0.7rem; font-size:0.78rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
+                <span>📋</span> <span>EPISODEN</span>
+              </button>
+            ` : `
+              <button type="button" class="left-action-btn" onclick="openPulsecastPlayerModal('${escapeJsString(item.filename)}', '${safeTitle.replace(/'/g, "\\'")}')" style="padding:0.3rem 0.7rem; font-size:0.78rem; border-color:var(--c-butterscotch); color:var(--c-butterscotch); font-weight:700;">
+                <span>▶</span> <span>ÖFFNEN</span>
+              </button>
+            `}
+          </td>
+        </tr>
+      `;
+    });
+
+    tbody.innerHTML = html;
+  }
+
+  function openPulsecastLocalGroupModal(idx) {
+    playLcarsBeep(980, 1300);
+    const item = pulsecastLocalItemsCache[idx];
+    if (!item || !item.files) return;
+
+    pulsecastActiveSeries = { id: item.id || '', title: item.title, poster: item.posterUrl };
+    const modal = document.getElementById('pulsecastSeriesModal');
+    const modalTitle = document.getElementById('pulsecastModalSeriesTitle');
+    const modalMeta = document.getElementById('pulsecastModalSeriesMeta');
+    const loadingEl = document.getElementById('pulsecastEpisodesLoading');
+
+    if (modalTitle) modalTitle.textContent = item.title;
+    if (loadingEl) loadingEl.style.display = 'none';
+    if (modalMeta) modalMeta.textContent = `LOKALES ARCHIV // ${item.files.length} EPISODEN VORHANDEN`;
+
+    pulsecastCurrentSeriesEpisodes = item.files;
+    populateSeasonFilter(item.files);
+    renderEpisodesList(item.files);
+
+    if (modal) modal.style.display = 'flex';
   }
 
   // SERIEN-EPISODEN MODAL

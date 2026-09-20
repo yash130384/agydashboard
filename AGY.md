@@ -715,3 +715,327 @@ ingress:
 - Validierung via `/usr/bin/cloudflared tunnel --config /home/cb/.cloudflared/config.yml ingress validate`.
 - Neustart via `systemctl --user restart cloudflared`.
 - End-to-End-Prüfung aller Subdomains im Browser.
+
+---
+
+# Architektur- & Implementierungsplan: PulseCast LCARS "LOKAL"-Medienarchiv (`app.py`)
+
+## 1. Zielsetzung & Kontext
+
+Erweiterung der **PulseCast**-Sektion im LCARS-Dashboard (`app.py`) um einen eigenständigen Reiter **"LOKAL"** (Icon 📁), in dem ausschließlich lokal im Filesystem vorhandene, heruntergeladene Mediendateien (Filme, Serienepisoden, Audio) übersichtlich und performant dargestellt werden.
+
+### Ausgangssituation
+- Das LCARS-Dashboard bietet derzeit in `#pulsecastActiveContent` drei Reiter:
+  1. `DOWNLOADS`: Aktive und abgeschlossene Transfers / Warteschlange.
+  2. `KATALOG-BROWSER`: Remote-Kataloge (Filme / Serien aus Subraum-Relays wie Xtream/PulseCast).
+  3. `XDCC-SUCHE`: IRC- und XDCC-Paketsuche.
+- Die PulseCast-Backend-API (`xdcc-load-cast` auf Port 3000) scannt und indiziert das lokale Download-Verzeichnis automatisch und stellt die lokalen Medien über `/api/media-library?category=Lokal` (sowie `Lokal_Filme` und `Lokal_Serien`) bereit.
+- Lokale Mediendateien können über den bestehenden nativen HTTP-Range-Stream-Endpunkt `/api/pulsecast/media/stream/<filename>` oder Transcode-Endpunkt `/api/pulsecast/media/transcode/<filename>` gestreamt werden.
+- Es fehlt im Frontend bisher ein dedizierter LCARS-Reiter zur Verwaltung, Durchsuchung, Filterung und Wiedergabe der lokal vorhandenen Dateien.
+
+---
+
+## 2. System- & Komponentenarchitektur
+
+```mermaid
+flowchart TD
+    User([LCARS Benutzer]) --> Subnav[PulseCast Subnav-Pills]
+    Subnav -->|Klick '📁 LOKAL'| SwitchTab[switchPulsecastSubtab('local')]
+    
+    SwitchTab --> LoadData[loadPulsecastLocal(page)]
+    LoadData --> API["GET /api/pulsecast/media-library\n?category=Lokal(_Filme|_Serien)&search=...&page=...&limit=40"]
+    
+    API --> BackendProxy["Flask / Python Handler (_pulsecast_proxy in app.py)"]
+    BackendProxy --> NodeService["xdcc-load-cast Service (Port 3000)"]
+    NodeService --> LocalFS["Lokales Dateisystem (/downloads/...)"]
+    
+    NodeService -->|JSON Payload mit items, counts, totalPages| LoadData
+    
+    LoadData --> UpdateBadges["Counts & Badges aktualisieren\n(Tab-Badge, Filter-Pills, Pagination)"]
+    LoadData --> ViewCheck{"pulsecastLocalViewMode?"}
+    
+    ViewCheck -->|'grid'| RenderGrid["renderPulsecastLocalGrid(items)\n(Poster, Titel, Jahr, Größe, ▶ PLAYER / 📋 EPISODEN)"]
+    ViewCheck -->|'list'| RenderList["renderPulsecastLocalList(items)\n(Tabelle: Typ, Dateiname, Format, Größe, Datum, ▶ ÖFFNEN)"]
+    
+    RenderGrid --> PlayerModal["openPulsecastPlayerModal(filename, title)"]
+    RenderList --> PlayerModal
+    RenderGrid --> SeriesModal["openPulsecastLocalSeriesModal(group)"]
+    SeriesModal --> PlayerModal
+```
+
+---
+
+## 3. DOM-Struktur in `DASHBOARD_HTML`
+
+### 3.1 Subnav-Button
+In `#pulsecastActiveContent` wird der Reiter-Button an zweiter Position (direkt nach `DOWNLOADS`) eingefügt:
+
+```html
+<button type="button" class="lcars-subnav-pill" id="pulsecast-tab-btn-local" onclick="switchPulsecastSubtab('local')">
+  <span>📁</span> <span>LOKAL</span>
+  <span id="pulsecastLocalCountBadge" style="background:rgba(0,0,0,0.5); padding:2px 8px; border-radius:12px; font-size:0.75rem; margin-left:4px;">0</span>
+</button>
+```
+
+### 3.2 Subview-Container `#pulsecast-subview-local`
+Wird als `<div id="pulsecast-subview-local" class="pulsecast-subview" style="display:none;">` zwischen Downloads und Katalog eingebettet:
+
+```html
+<!-- SUBVIEW 1b: LOKALE MEDIEN -->
+<div id="pulsecast-subview-local" class="pulsecast-subview" style="display:none;">
+  <div class="lcars-card" style="margin-bottom:1.25rem; padding:1rem; border-top:3px solid var(--c-butterscotch);">
+    
+    <!-- Filter & Toolbar -->
+    <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:0.75rem; margin-bottom:1rem; background:rgba(0,0,0,0.3); padding:0.75rem; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+      
+      <!-- Typ-Filter (ALLE / FILME / SERIEN) -->
+      <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+        <button type="button" class="lcars-pill-btn active" id="local-pill-all" onclick="setPulsecastLocalCategory('Lokal')" style="height:38px; padding:0 1.2rem; font-size:0.85rem; background:var(--c-butterscotch); color:#000; font-weight:700;">
+          📁 ALLE <span id="pulsecastLocalCountAll" style="margin-left:4px; font-size:0.75rem; opacity:0.85;"></span>
+        </button>
+        <button type="button" class="lcars-pill-btn" id="local-pill-Filme" onclick="setPulsecastLocalCategory('Lokal_Filme')" style="height:38px; padding:0 1.2rem; font-size:0.85rem; background:rgba(0,0,0,0.5); color:var(--c-primary); border:1px solid var(--c-primary);">
+          🎬 FILME <span id="pulsecastLocalCountFilme" style="margin-left:4px; font-size:0.75rem; opacity:0.85;"></span>
+        </button>
+        <button type="button" class="lcars-pill-btn" id="local-pill-Serien" onclick="setPulsecastLocalCategory('Lokal_Serien')" style="height:38px; padding:0 1.2rem; font-size:0.85rem; background:rgba(0,0,0,0.5); color:var(--c-secondary); border:1px solid var(--c-secondary);">
+          📺 SERIEN <span id="pulsecastLocalCountSerien" style="margin-left:4px; font-size:0.75rem; opacity:0.85;"></span>
+        </button>
+      </div>
+
+      <!-- Ansichts-Umschalter (Raster vs. Liste) -->
+      <div style="display:flex; gap:0.4rem; align-items:center;">
+        <button type="button" class="lcars-pill-btn active" id="pulsecastLocalViewGridBtn" onclick="setPulsecastLocalViewMode('grid')" style="height:38px; padding:0 0.9rem; font-size:0.82rem; background:var(--c-gold); color:#000; font-weight:700;" title="Kachel-Rasteransicht">
+          <span>⊞</span> <span>RASTER</span>
+        </button>
+        <button type="button" class="lcars-pill-btn" id="pulsecastLocalViewListBtn" onclick="setPulsecastLocalViewMode('list')" style="height:38px; padding:0 0.9rem; font-size:0.82rem; background:rgba(0,0,0,0.5); color:#aaa; border:1px solid rgba(255,255,255,0.2);" title="Kompakte Tabellen-/Listenansicht">
+          <span>☰</span> <span>LISTE</span>
+        </button>
+      </div>
+
+      <!-- Schnellsuche mit Enter & Reset -->
+      <div style="display:flex; align-items:center; gap:0.4rem; min-width:240px; flex:1; max-width:380px;">
+        <input type="text" id="pulsecastLocalSearchInput" placeholder="Lokale Medien suchen..." class="lcars-input" style="height:38px; font-size:0.85rem; flex:1;" onkeydown="if(event.key==='Enter') pulsecastLocalSearchTrigger();">
+        <button type="button" class="left-action-btn" onclick="pulsecastLocalSearchTrigger()" style="height:38px; padding:0 0.9rem; font-size:0.82rem; border-color:var(--c-butterscotch); color:var(--c-butterscotch);" title="Suche ausführen">
+          <span>🔍</span>
+        </button>
+        <button type="button" class="left-action-btn" onclick="pulsecastLocalSearchClear()" style="height:38px; padding:0 0.6rem; font-size:0.82rem; border-color:#888; color:#888;" title="Filter zurücksetzen">
+          ✕
+        </button>
+      </div>
+    </div>
+
+    <!-- LCARS Loading State -->
+    <div id="pulsecastLocalLoading" style="text-align:center; padding:3rem 1rem; display:none;">
+      <div style="font-family:var(--font-family); font-size:1.1rem; color:var(--c-butterscotch); letter-spacing:0.06em; margin-bottom:0.5rem;">
+        DATENKASKADE WIRD GELADEN...
+      </div>
+      <div style="font-family:var(--mono-family); font-size:0.85rem; color:#888;">
+        Lokales Medienarchiv wird synchronisiert
+      </div>
+    </div>
+
+    <!-- Ansicht 1: Kachel-Raster -->
+    <div id="pulsecastLocalGrid" class="pulsecast-catalog-grid" style="min-height:280px; display:grid;">
+      <!-- Dynamisch befüllte Kacheln -->
+    </div>
+
+    <!-- Ansicht 2: Kompakte Listenansicht (Tabelle) -->
+    <div id="pulsecastLocalListContainer" style="overflow-x:auto; display:none;">
+      <table class="services-table" id="pulsecastLocalTable" style="width:100%;">
+        <thead>
+          <tr style="position:sticky; top:0; background:#111; z-index:2;">
+            <th style="width:55px; text-align:center;">TYP</th>
+            <th>DATEINAME / TITEL</th>
+            <th style="width:90px;">FORMAT</th>
+            <th style="width:110px; color:#44dd88;">GRÖSSE</th>
+            <th style="width:145px; color:var(--c-gold);">ÄNDERUNG</th>
+            <th style="width:140px; text-align:right;">AKTION</th>
+          </tr>
+        </thead>
+        <tbody id="pulsecastLocalTableBody">
+          <!-- Dynamisch befüllte Zeilen -->
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Empty State -->
+    <div id="pulsecastLocalEmpty" style="text-align:center; padding:3rem 1rem; color:#888; font-family:var(--mono-family); display:none;">
+      KEINE LOKALEN MEDIEN FÜR DIESE FILTERUNG VORHANDEN
+    </div>
+
+    <!-- Paginierungs-Leiste -->
+    <div id="pulsecastLocalPaginationBar" style="display:flex; justify-content:center; align-items:center; gap:0.75rem; margin-top:1.5rem; flex-wrap:wrap;">
+      <button type="button" class="left-action-btn" id="pulsecastLocalPrevPageBtn" onclick="pulsecastLocalChangePage(-1)" style="padding:0.4rem 1.1rem; font-size:0.85rem;">
+        ◀ VORHERIGE
+      </button>
+      <span id="pulsecastLocalPageIndicator" style="font-family:var(--mono-family); font-size:0.9rem; color:var(--c-gold); padding:0 0.5rem;">
+        SEITE 1 VON 1 (0 EINTRÄGE)
+      </span>
+      <button type="button" class="left-action-btn" id="pulsecastLocalNextPageBtn" onclick="pulsecastLocalChangePage(1)" style="padding:0.4rem 1.1rem; font-size:0.85rem;">
+        NÄCHSTE ▶
+      </button>
+    </div>
+  </div>
+</div>
+```
+
+---
+
+## 4. Frontend State & JavaScript-Funktionen
+
+### 4.1 State-Variablen
+```javascript
+let pulsecastLocalCategory = 'Lokal';          // 'Lokal' (Alle) | 'Lokal_Filme' | 'Lokal_Serien'
+let pulsecastLocalViewMode = 'grid';           // 'grid' | 'list'
+let pulsecastLocalSearchQuery = '';
+let pulsecastLocalPage = 1;
+let pulsecastLocalTotalPages = 1;
+let pulsecastLocalItemsCache = [];
+```
+
+### 4.2 Funktionsspezifikation
+
+| Funktion | Parameter | Zweck |
+|---|---|---|
+| `switchPulsecastSubtab(subtab)` | `subtab: string` | Umschalten auf Subtab `'local'`. Ruft `loadPulsecastLocal(pulsecastLocalPage)` auf. |
+| `setPulsecastLocalCategory(cat)` | `cat: string` | Setzt Filter (`'Lokal'`, `'Lokal_Filme'`, `'Lokal_Serien'`). Passt Button-Styling an. Setzt `page = 1` und triggert Ladevorgang. |
+| `setPulsecastLocalViewMode(mode)` | `mode: 'grid' \| 'list'` | Schaltet zwischen Raster und Liste um, passt Styling der Umschaltbuttons an, blendet Container ein/aus und rendert den Cache neu. |
+| `pulsecastLocalSearchTrigger()` | – | Liest Wert aus `#pulsecastLocalSearchInput`, setzt `page = 1`, führt `loadPulsecastLocal(1)` aus. |
+| `pulsecastLocalSearchClear()` | – | Leert Input und Query, lädt Seite 1 neu. |
+| `pulsecastLocalChangePage(delta)` | `delta: number` | Paginierung mit Bounds-Prüfung (`target >= 1 && target <= totalPages`). |
+| `loadPulsecastLocal(page)` | `page: number` | Asynchroner Fetch gegen `/api/pulsecast/media-library` mit Fehlerbehandlung, Spinner-Steuerung, Badge-Update und Delegation ans Rendering. |
+| `renderPulsecastLocalGrid(items)` | `items: Array` | Kachel-Rendering: Cover/Poster, Fallback-Icons, Jahr, Titel, Dateigröße/Episoden-Anzahl, "▶ IN PLAYER ÖFFNEN" oder "📋 EPISODEN". |
+| `renderPulsecastLocalList(items)` | `items: Array` | Tabellen-Rendering: Typ-Icon, Dateiname / Pfad, Dateiendung/Format, lesbare Größe (`formatBytes`), formatiertes Datum, Aktions-Button. |
+| `openPulsecastLocalGroupModal(idx)` | `idx: number` | Öffnet das Episoden-Modal für lokale Serien-Gruppen (`isGroup: true`), in dem alle Folgen direkt mit "▶ IN PLAYER ÖFFNEN" abspielbar sind. |
+| `updatePulsecastLocalCounts(counts)` | `counts: Object` | Aktualisiert den Tab-Badge `#pulsecastLocalCountBadge` sowie die Filter-Zähler (`counts.Lokal`, `counts.Lokal_Filme`, `counts.Lokal_Serien`). |
+
+---
+
+## 5. Backend & API-Integration
+
+### 5.1 Endpunkt-Routing in `app.py`
+Die bestehende Flask-Route in Zeile 15528 leitet alle Parameter transparent an `xdcc-load-cast` weiter:
+```python
+@app.route("/api/pulsecast/media-library", methods=["GET"])
+def api_pulsecast_media_library():
+    params = {
+        "category": request.args.get("category", "Filme"),
+        "subcategory": request.args.get("subcategory", "all"),
+        "search": request.args.get("search", ""),
+        "page": request.args.get("page", 1),
+        "limit": request.args.get("limit", 40)
+    }
+    return _pulsecast_proxy("GET", "/api/media-library", params=params, timeout=20)
+```
+Ebenso unterstützt die Fallback-Route (`BaseHTTPRequestHandler` Zeile 16130) transparente GET-Weiterleitungen an `http://127.0.0.1:3000/api/media-library?...`.
+
+### 5.2 Datenstruktur der API-Antwort
+```json
+{
+  "items": [
+    {
+      "filename": "Filme/Mayday (2026) NEU.mkv",
+      "sizeBytes": 4294967295,
+      "mtime": 1789899068000,
+      "metadata": {
+        "title": "Mayday",
+        "category": "Lokal",
+        "year": 2026,
+        "isSeries": false,
+        "posterUrl": "https://...",
+        "subcategory": "Filme"
+      },
+      "isXtream": false
+    },
+    {
+      "isGroup": true,
+      "isXtream": false,
+      "title": "Stuart Fails to Save the Universe",
+      "posterUrl": "https://...",
+      "year": 2026,
+      "category": "Lokal",
+      "subcategory": "Serien",
+      "files": [
+        {
+          "filename": "Serien/Stuart Fails.../S01E06.mkv",
+          "sizeBytes": 1757902664,
+          "mtime": 1788459328000,
+          "metadata": {
+            "title": "Stuart Fails...",
+            "seasonEpisode": "S01E06"
+          }
+        }
+      ]
+    }
+  ],
+  "totalItems": 467,
+  "totalPages": 94,
+  "currentPage": 1,
+  "counts": {
+    "all": 46927,
+    "Lokal": 567,
+    "Lokal_Filme": 174,
+    "Lokal_Serien": 134,
+    "Filme": 37200,
+    "Serien": 5835
+  }
+}
+```
+
+---
+
+## 6. UI/UX-Konventionen & LCARS-Design
+
+1. **Farbschema**:
+   - Primäre Akzentfarbe für LOKAL: `var(--c-butterscotch)` (`#eb943a`) und `var(--c-gold)` (`#e8b030`).
+   - Filme-Akzent: `var(--c-primary)` (`#ff9900`).
+   - Serien-Akzent: `var(--c-secondary)` (`#b464ff`).
+   - Dateigrößen & Status: `#44dd88` (Grün) bzw. `var(--c-gold)`.
+2. **Audio-Feedback**:
+   - Aufruf von `playLcarsBeep(frequency, duration)` bei Interaktionen (Subtab-Wechsel, Filterwechsel, Paginierung).
+3. **Escaping-Regeln für Multiline-Strings (`DASHBOARD_HTML`)**:
+   - `DASHBOARD_HTML` ist in Python als `"""..."""` definiert.
+   - **Strikte Regel**: Keine unescaped `\/` in JavaScript RegExp oder Strings verwenden! Für Pfad-Ersetzungen `replace(/^[\\/]+/g, '')` oder `startsWith('/')` nutzen.
+   - Strings in HTML-Attributen und Onclick-Handlern mit `escapeHtml()` und `escapeJsString()` absichern.
+
+---
+
+## 7. Risiken, Edge-Cases & Absicherungen
+
+| Risiko / Randfall | Ursache | Vermeidungsstrategie |
+|---|---|---|
+| **Sonderzeichen / Quotes in Dateinamen** | Dateinamen mit einfachen/doppelten Anführungszeichen, Umlauten oder Klammern brechen JS-Funktionsaufrufe | Verwendung der bestehenden Hilfsfunktion `escapeJsString()` und `escapeHtml()` für alle HTML-Attribute und Onclick-Handler. |
+| **Python Multiline String Escaping** | `invalid escape sequence '\/'` Warnung/Syntaxfehler in Python 3.12+ | Absolute Vermeidung von `\/` in RegExp innerhalb von `DASHBOARD_HTML`. |
+| **Große Bibliotheken / Ladezeit** | Hunderte lokale Dateien führen bei fehlender Paginierung zu DOM-Überlastung | Feste Limitierung auf `limit=40` pro Seite mit Server-Paginierung über den existierenden Endpunkt. |
+| **Serien vs. Einzelfilme** | Serien liegen als Gruppen (`isGroup: true`) mit eingebetteten `files` vor | Kacheln zeigen für Serien "X Episoden" mit Button "📋 EPISODEN", der die Einzelfolgen mit separaten Player-Buttons öffnet. |
+| **Leere Treffermenge / Offline-Relay** | Suchbegriff liefert keine Treffer oder Backend nicht erreichbar | LCARS Empty-State `#pulsecastLocalEmpty` bzw. automatische Status-Prüfung via `checkPulsecastStatus()`. |
+
+---
+
+## 8. Verifikations- und Testplan
+
+### Phase 1: Statische Code- und Syntaxprüfung
+- Python-Syntaxprüfung: `python3 -m py_compile app.py` (muss fehlerfrei ohne Warnings kompilieren).
+- Regex-Escaping-Audit: Sicherstellen, dass kein `\/` in `app.py` neu eingeführt wurde.
+
+### Phase 2: Backend-Endpunktprüfung
+- Aufruf von `/api/pulsecast/media-library?category=Lokal&limit=5` via `curl`.
+- Aufruf von `/api/pulsecast/media-library?category=Lokal_Filme&limit=5`.
+- Aufruf von `/api/pulsecast/media-library?category=Lokal_Serien&limit=5`.
+- Verifikation von `data.counts.Lokal` und `data.items`.
+
+### Phase 3: Frontend- und Interaktionsprüfung
+1. Dashboard im Browser öffnen: Tab "📁 LOKAL" muss neben DOWNLOADS sichtbar sein und den Zähler `(567)` tragen.
+2. Klick auf "📁 LOKAL":
+   - Subview `#pulsecast-subview-local` öffnet sich.
+   - Filter "📁 ALLE (567)", "🎬 FILME (174)", "📺 SERIEN (134)" sind aktiv und klickbar.
+3. Kachelansicht:
+   - Cover, Titel, Jahr, Dateigröße werden gerendert.
+   - Klick auf "▶ IN PLAYER ÖFFNEN" öffnet das LCARS Player-Modal mit funktionierender M3U/Stream-URL.
+4. Listenansicht:
+   - Klick auf "☰ LISTE" wechselt unterbrechungsfrei in die tabellarische Übersicht mit Dateinamen, Format, Größe, Datum und Öffnen-Button.
+5. Suche & Filter:
+   - Eingabe eines Begriffs (z.B. "Mayday") filtert die lokalen Medien korrekt.
+   - Klick auf "✕" setzt Filter zurück.
+6. Paginierung:
+   - Seitenwechsel ◀ Vorherige / Nächste ▶ funktioniert mit korrekter Anzeige "SEITE X VON Y".
+
