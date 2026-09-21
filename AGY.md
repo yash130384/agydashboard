@@ -1549,3 +1549,54 @@ function stopAllGeminiAudio() {
    - Neustart von `agydashboard.service` via `systemctl --user restart agydashboard.service`.
    - Prüfung von `journalctl --user -u agydashboard.service -n 50` auf sauberen Start.
 
+---
+
+## 9. Gemini Live Turn-Management & VAD-Implementierung (Fix 2026-09-21)
+
+### 9.1 Problemursachen
+1. **Fehlendes TurnComplete-Signal**: Google Gemini 3.8 Live (BidiGenerateContent API) erfordert nach dem Senden von Audiochunks im `realtimeInput` ein explizites Abschluss-Signal (`clientContent: { turnComplete: true }`), um den User-Turn abzuschließen und die Modell-Antwort zu generieren. Sowohl im PTT- als auch im Dauerhaft-Live-Modus fehlte dieses Signal, wodurch Google unendlich auf weitere Audiodaten wartete.
+2. **WebSocket-Timeout-Abbruch**: Bei `flask-sock` / `simple-websocket` liefert `ws.receive(timeout=1.0)` bei Timeout `None` zurück, während die Verbindung noch offen ist. Ein fehlerhaftes `break` beendete die Session fälschlicherweise während des Wartens auf das Modell.
+
+### 9.2 Backend-Erweiterungen (`app.py` - `api_gemini_live_ws`)
+- **Weiterleitung von Turn-Events**: Beim Empfang von `{"type": "end_of_turn"}` oder `{"type": "turn_complete"}` vom Dashboard-Client wird sofort an Google Gemini weitergeleitet:
+  ```python
+  gemini_ws.send(json.dumps({
+      "clientContent": {
+          "turnComplete": True
+      }
+  }))
+  ```
+- **Strukturierte Protokollierung**:
+  - `[GEMINI LIVE] Session setup complete (model: gemini-3.8-live, voice: Puck)`
+  - `[GEMINI LIVE] User turn complete, waiting for model response`
+  - `[GEMINI LIVE] Model turn complete`
+  - `[GEMINI LIVE] Model output interrupted by user`
+- **Robuste Timeout-Behandlung**: Bei `client_raw is None` wird geprüft, ob `ws.connected` noch aktiv ist, bevor die Schleife verlassen wird.
+
+### 9.3 Frontend-Erweiterungen (`DASHBOARD_HTML`)
+- **Push-to-Talk (`stopPtt`)**:
+  - Tracking von gesendeten Audiodaten via `pttAudioSent`.
+  - Beim Loslassen der Taste / des Buttons: Sofortiges Absenden von `end_of_turn`, Wechsel der LCARS-Statusanzeige auf `"BORDCOMPUTER DENKT..."` und Statusbadge auf `"DENKT..."`.
+- **Dauerhaft-Live-Modus (Clientseitige VAD)**:
+  - RMS-Berechnung im `onaudioprocess`-Audio-Loop (`VAD_THRESHOLD = 0.018`).
+  - Wenn Sprachpegel die Schwelle überschreitet: `isSpeaking = true`, Anzeige `"COMMANDER SPRICHT..."`.
+  - Wenn danach für >= 750ms Stille herrscht: Automatisches Senden von `end_of_turn`, Status `"BORDCOMPUTER DENKT..."` und `isSpeaking = false`.
+  - Akustische Entkopplung: Während der Bordcomputer spricht (`isModelSpeaking`), wird die VAD pausiert, um Feedback-Schleifen von Lautsprechern zu verhindern.
+- **Audio Playback & TypedArray Alignment**:
+  - `base64ToInt16`: Exakte Ausrichtung via `new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2))`.
+  - Statusanzeigen:
+    - Bei Eintreffen von `model_audio`: Status `"BORDCOMPUTER SPRICHT..."` (Badge `"SPRICHT..."`).
+    - Bei `turn_complete`: Status zurück auf `"BEREIT // ZUHÖREN"` (Badge `"BEREIT // PUCK"`).
+- **Initialstatus & LCARS UI**:
+  - Initialer Indikator auf `"BEREIT // ZUHÖREN"`.
+
+### 9.4 Qualität & Verifikation
+- **Skript-Syntaxprüfung**: `node --check` auf allen aus dem gerenderten Dashboard-HTML extrahierten Skripten (8.452 Zeilen JavaScript fehlerfrei, 0 Syntaxfehler).
+- **End-to-End WebSocket Test**: Python-Integrationstest verifiziert:
+  1. Setup-Frame Empfang (`gemini-3.8-live`, `Puck`)
+  2. Audio-Übertragung (16 kHz PCM)
+  3. `end_of_turn` Signal
+  4. 25-27 Chunks 24 kHz PCM Audio erfolgreich empfangen (364+ kB)
+  5. `turn_complete` Signal erfolgreich empfangen
+- **Systemd Service**: `systemctl --user restart agydashboard.service` fehlerfrei aktiv.
+

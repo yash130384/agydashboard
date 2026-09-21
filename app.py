@@ -7612,7 +7612,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     NEURAL SUBRAUM LOGBUCH // TRANSKRIPT
                   </span>
                   <span id="geminiLiveTurnIndicator" style="font-size: 0.75rem; color: #888; font-family: var(--mono-family);">
-                    BEREIT
+                    BEREIT // ZUHÖREN
                   </span>
                 </div>
 
@@ -15781,6 +15781,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let geminiLiveMuted = false;
   let geminiLiveChannelOpen = false;
   let isPttActive = false;
+  let pttAudioSent = false;
+  let isSpeaking = false;
+  let lastSpeechTime = 0;
+  let isModelSpeaking = false;
   let geminiAudioStream = null;
   let geminiAudioSourceNode = null;
   let geminiScriptNode = null;
@@ -15851,6 +15855,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (geminiLiveMode === mode) return;
     playLcarsBeep(1200, 1600);
     geminiLiveMode = mode;
+    isSpeaking = false;
+    lastSpeechTime = 0;
+    isPttActive = false;
+    pttAudioSent = false;
+    const turnInd = document.getElementById('geminiLiveTurnIndicator');
+    if (turnInd && !isModelSpeaking) turnInd.textContent = 'BEREIT // ZUHÖREN';
+    if (geminiLiveChannelOpen && !isModelSpeaking) {
+      updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
+    }
     updateGeminiLiveModeUI();
   }
 
@@ -15958,6 +15971,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     geminiLiveWs.onclose = (event) => {
       geminiLiveChannelOpen = false;
+      isPttActive = false;
+      pttAudioSent = false;
+      isSpeaking = false;
+      lastSpeechTime = 0;
+      isModelSpeaking = false;
       updateGeminiConnBadge('GETRENNT', 'var(--c-red)', '#fff');
       updateGeminiToggleBtn(false);
       stopGeminiAudioCapture();
@@ -15973,6 +15991,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       geminiLiveWs = null;
     }
     geminiLiveChannelOpen = false;
+    isPttActive = false;
+    pttAudioSent = false;
+    isSpeaking = false;
+    lastSpeechTime = 0;
+    isModelSpeaking = false;
     updateGeminiConnBadge('GETRENNT', 'var(--c-red)', '#fff');
     updateGeminiToggleBtn(false);
     stopGeminiAudioCapture();
@@ -16013,6 +16036,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       appendGeminiLog('system', `Subraum-Verbindung zu Google Gemini 3.8 Live hergestellt (Modell: ${msg.model || 'gemini-3.8-live'}).`);
       playLcarsBeep(1400, 2100);
     } else if (type === 'model_audio') {
+      isModelSpeaking = true;
       updateGeminiConnBadge('SPRICHT...', 'var(--c-blue)', '#000');
       if (turnInd) turnInd.textContent = 'BORDCOMPUTER SPRICHT...';
       playGeminiAudioChunk(msg.audio, msg.rate || 24000);
@@ -16025,20 +16049,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     } else if (type === 'interrupted') {
       stopAllGeminiAudio();
       currentModelTurnEl = null;
+      isModelSpeaking = false;
+      isSpeaking = false;
       updateGeminiConnBadge('UNTERBROCHEN', 'var(--c-gold)', '#000');
       if (turnInd) turnInd.textContent = 'BARGE-IN // UNTERBROCHEN';
       appendGeminiLog('system', 'Signal: Modell-Sprachausgabe durch User-Sprache unterbrochen.');
       setTimeout(() => {
         if (geminiLiveChannelOpen) {
           updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
-          if (turnInd) turnInd.textContent = 'BEREIT';
+          if (turnInd) turnInd.textContent = 'BEREIT // ZUHÖREN';
         }
       }, 1000);
     } else if (type === 'turn_complete') {
       currentModelTurnEl = null;
       if (geminiLiveChannelOpen) {
         updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
-        if (turnInd) turnInd.textContent = 'BEREIT';
+        if (turnInd) turnInd.textContent = 'BEREIT // ZUHÖREN';
+      }
+      if (geminiActiveAudioSources.length === 0) {
+        isModelSpeaking = false;
       }
     } else if (type === 'error') {
       appendGeminiLog('error', msg.error || 'Unbekannter API-Fehler');
@@ -16096,6 +16125,41 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             type: 'audio',
             data: base64Audio
           }));
+          if (isPttActive) {
+            pttAudioSent = true;
+          }
+        }
+
+        // Im Dauerhaft-Live-Modus: Clientseitige Stille-Erkennung (VAD)
+        if (geminiLiveMode === 'live' && !isModelSpeaking) {
+          let sumSquares = 0;
+          for (let i = 0; i < inputChannelData.length; i++) {
+            sumSquares += inputChannelData[i] * inputChannelData[i];
+          }
+          const rms = Math.sqrt(sumSquares / inputChannelData.length);
+          const VAD_THRESHOLD = 0.018; // Audio-Pegel-Schwelle für erkannte Sprache
+          const now = performance.now();
+
+          if (rms >= VAD_THRESHOLD) {
+            if (!isSpeaking) {
+              isSpeaking = true;
+              const turnInd = document.getElementById('geminiLiveTurnIndicator');
+              if (turnInd) turnInd.textContent = 'COMMANDER SPRICHT...';
+              updateGeminiConnBadge('SPRECHEN...', 'var(--c-primary)', '#000');
+            }
+            lastSpeechTime = now;
+          } else if (isSpeaking) {
+            // Pegel unter Schwelle: wenn Stille >= 750ms erreicht wird -> Turn beenden
+            if (now - lastSpeechTime >= 750) {
+              if (geminiLiveWs && geminiLiveWs.readyState === WebSocket.OPEN) {
+                geminiLiveWs.send(JSON.stringify({ type: 'end_of_turn' }));
+                const turnInd = document.getElementById('geminiLiveTurnIndicator');
+                if (turnInd) turnInd.textContent = 'BORDCOMPUTER DENKT...';
+                updateGeminiConnBadge('DENKT...', 'var(--c-gold)', '#000');
+              }
+              isSpeaking = false;
+            }
+          }
         }
       };
 
@@ -16112,6 +16176,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function stopGeminiAudioCapture() {
+    isSpeaking = false;
+    lastSpeechTime = 0;
     if (geminiScriptNode) {
       try {
         geminiScriptNode.disconnect();
@@ -16173,7 +16239,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     for (let i = 0; i < len; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    return new Int16Array(bytes.buffer);
+    return new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
   }
 
   // 24kHz Audio Playback mit AudioBuffer Queueing
@@ -16184,6 +16250,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     try {
       const pcm16 = base64ToInt16(base64Audio);
+      if (!pcm16 || pcm16.length === 0) return;
       const float32 = new Float32Array(pcm16.length);
       for (let i = 0; i < pcm16.length; i++) {
         float32[i] = pcm16[i] / 32768.0;
@@ -16212,6 +16279,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       source.onended = () => {
         const idx = geminiActiveAudioSources.indexOf(source);
         if (idx !== -1) geminiActiveAudioSources.splice(idx, 1);
+        if (geminiActiveAudioSources.length === 0) {
+          isModelSpeaking = false;
+          if (geminiLiveChannelOpen && !isSpeaking && !isPttActive) {
+            updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
+            const turnInd = document.getElementById('geminiLiveTurnIndicator');
+            if (turnInd && turnInd.textContent === 'BORDCOMPUTER SPRICHT...') {
+              turnInd.textContent = 'BEREIT // ZUHÖREN';
+            }
+          }
+        }
       };
     } catch (e) {
       console.warn('Fehler beim Abspielen von Gemini Audio Chunk:', e);
@@ -16223,6 +16300,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try { src.stop(); } catch (e) {}
     });
     geminiActiveAudioSources = [];
+    isModelSpeaking = false;
     const audioCtx = getAudioCtx();
     if (audioCtx) geminiNextPlaybackTime = audioCtx.currentTime;
   }
@@ -16317,10 +16395,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (e) e.preventDefault();
       if (!geminiLiveChannelOpen || geminiLiveMode !== 'ptt' || isPttActive) return;
       isPttActive = true;
+      pttAudioSent = false;
       pttBtn.style.background = 'var(--c-primary)';
       pttBtn.style.color = '#000';
       pttBtn.style.borderColor = 'var(--c-primary)';
       pttBtn.textContent = '🔴 SPRECHEN... (AUFNAHME AKTIV)';
+      const turnInd = document.getElementById('geminiLiveTurnIndicator');
+      if (turnInd) turnInd.textContent = 'COMMANDER SPRICHT (PTT)...';
+      updateGeminiConnBadge('SPRECHEN...', 'var(--c-primary)', '#000');
       playLcarsBeep(880, 1760);
     };
 
@@ -16333,6 +16415,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       pttBtn.style.borderColor = 'var(--c-secondary)';
       pttBtn.textContent = '🎙️ SPRECHEN (GEDRÜCKT HALTEN / LEERTASTE)';
       playLcarsBeep(1200, 880);
+
+      if (pttAudioSent) {
+        if (geminiLiveWs && geminiLiveWs.readyState === WebSocket.OPEN) {
+          geminiLiveWs.send(JSON.stringify({ type: 'end_of_turn' }));
+          const turnInd = document.getElementById('geminiLiveTurnIndicator');
+          if (turnInd) turnInd.textContent = 'BORDCOMPUTER DENKT...';
+          updateGeminiConnBadge('DENKT...', 'var(--c-gold)', '#000');
+        }
+      } else {
+        const turnInd = document.getElementById('geminiLiveTurnIndicator');
+        if (turnInd && !isModelSpeaking) turnInd.textContent = 'BEREIT // ZUHÖREN';
+        if (geminiLiveChannelOpen && !isModelSpeaking) {
+          updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
+        }
+      }
+      pttAudioSent = false;
     };
 
     pttBtn.addEventListener('mousedown', startPtt);
@@ -17492,6 +17590,7 @@ if USE_FLASK:
                                     continue
 
                                 if "setupComplete" in data:
+                                    print(f"[GEMINI LIVE] Session setup complete (model: {model}, voice: {voice})", flush=True)
                                     try:
                                         ws.send(json.dumps({
                                             "type": "setup_complete",
@@ -17508,6 +17607,7 @@ if USE_FLASK:
                                     turn_complete = bool(sc.get("turnComplete"))
 
                                     if interrupted:
+                                        print("[GEMINI LIVE] Model output interrupted by user", flush=True)
                                         try:
                                             ws.send(json.dumps({"type": "interrupted"}))
                                         except Exception:
@@ -17550,22 +17650,25 @@ if USE_FLASK:
                                                     return
 
                                     if turn_complete:
+                                        print("[GEMINI LIVE] Model turn complete", flush=True)
                                         try:
                                             ws.send(json.dumps({"type": "turn_complete"}))
                                         except Exception:
                                             break
 
                                 elif "error" in data:
+                                    err_msg = data.get("error", "Unbekannter Fehler")
+                                    print(f"[GEMINI LIVE] Google Gemini API Fehler: {err_msg}", flush=True)
                                     try:
                                         ws.send(json.dumps({
                                             "type": "error",
-                                            "error": f"Google Gemini API Fehler: {data['error']}"
+                                            "error": f"Google Gemini API Fehler: {err_msg}"
                                         }))
                                     except Exception:
                                         pass
                                     break
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"[GEMINI LIVE] Ausnahme in gemini_to_client: {e}", flush=True)
                         finally:
                             stop_event.set()
 
@@ -17580,7 +17683,9 @@ if USE_FLASK:
                                 break
 
                             if client_raw is None:
-                                break
+                                if hasattr(ws, "connected") and not ws.connected:
+                                    break
+                                continue
 
                             try:
                                 client_data = json.loads(client_raw)
@@ -17607,9 +17712,23 @@ if USE_FLASK:
                                     except Exception:
                                         break
 
+                            elif msg_type in ("end_of_turn", "turn_complete"):
+                                print("[GEMINI LIVE] User turn complete, waiting for model response", flush=True)
+                                turn_payload = {
+                                    "clientContent": {
+                                        "turnComplete": True
+                                    }
+                                }
+                                try:
+                                    gemini_ws.send(json.dumps(turn_payload))
+                                except Exception as e:
+                                    print(f"[GEMINI LIVE] Fehler beim Weiterleiten von turnComplete: {e}", flush=True)
+                                    break
+
                             elif msg_type == "text":
                                 text_input = client_data.get("text", "").strip()
                                 if text_input:
+                                    print(f"[GEMINI LIVE] User text input: {text_input[:60]}", flush=True)
                                     client_content_payload = {
                                         "clientContent": {
                                             "turns": [
@@ -17636,7 +17755,8 @@ if USE_FLASK:
                                     ws.send(json.dumps({"type": "pong"}))
                                 except Exception:
                                     break
-                    except Exception:
+                    except Exception as e:
+                        print(f"[GEMINI LIVE] Ausnahme in client_to_gemini: {e}", flush=True)
                         pass
                     finally:
                         stop_event.set()
