@@ -15773,20 +15773,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  // Initialer Boot-Ablauf
-  function bootDashboard() {
-    renderStats(initialStats);
-    if (initialStats?.nine_router) {
-      renderNineRouterStats(initialStats.nine_router);
-    }
-    const initialTimeEl = document.getElementById('chatInitialTime');
-    if (initialTimeEl) initialTimeEl.textContent = formatTimeNow();
-    loadChatModels();
-    ensureChart(() => {
-      initHistoryChart();
-      initNineRouterCharts();
-      initHermesChart();
-    });
   // ==========================================================================
   // GOOGLE GEMINI 3.8 LIVE // SUBRAUM COMM SST CONTROLLER
   // ==========================================================================
@@ -16438,16 +16424,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     currentModelTurnEl = null;
   }
 
+  // Initialer Boot-Ablauf
   function bootDashboard() {
-    initLcarsAudio();
-    updateThemeUI(currentTheme);
-    fetchLiveStats(true);
-    startAutoRefresh();
-    setInterval(updateStardate, 1000);
-    updateStardate();
-    setInterval(updateClock, 1000);
-    updateClock();
-    updateSensorRanges();
+    renderStats(initialStats);
     if (initialStats?.nine_router) {
       renderNineRouterStats(initialStats.nine_router);
     }
