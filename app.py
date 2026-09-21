@@ -6457,12 +6457,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 </button>
               </div>
 
+              <!-- 5-STUFEN-RISIKOREGLER -->
+              <div class="fantasy-risk-selector" style="display:inline-flex; align-items:center; background:rgba(0,0,0,0.6); border:1px solid rgba(255,255,255,0.18); border-radius:14px; padding:2px; gap:2px;">
+                <span style="font-size:0.68rem; color:var(--c-gold); font-family:var(--font-family); font-weight:700; padding:0 0.35rem; letter-spacing:0.04em;">RISIKO:</span>
+                <button type="button" id="btn-fantasy-risk-1" onclick="setFantasyRiskLevel(1)" class="fantasy-risk-btn" style="font-size:0.7rem; padding:0.22rem 0.45rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:transparent; color:#888; transition:all 0.2s ease;" title="1: Ultra-Konservativ (High Floor, minimales Risiko)">1: FLOOR</button>
+                <button type="button" id="btn-fantasy-risk-2" onclick="setFantasyRiskLevel(2)" class="fantasy-risk-btn" style="font-size:0.7rem; padding:0.22rem 0.45rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:transparent; color:#888; transition:all 0.2s ease;" title="2: Konservativ">2: KONS</button>
+                <button type="button" id="btn-fantasy-risk-3" onclick="setFantasyRiskLevel(3)" class="fantasy-risk-btn active" style="font-size:0.7rem; padding:0.22rem 0.45rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:var(--c-butterscotch); color:#000; transition:all 0.2s ease;" title="3: Ausgewogen (Standard)">3: AUSG</button>
+                <button type="button" id="btn-fantasy-risk-4" onclick="setFantasyRiskLevel(4)" class="fantasy-risk-btn" style="font-size:0.7rem; padding:0.22rem 0.45rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:transparent; color:#888; transition:all 0.2s ease;" title="4: Offensiv (Ceiling / Matchup-Upside)">4: OFF</button>
+                <button type="button" id="btn-fantasy-risk-5" onclick="setFantasyRiskLevel(5)" class="fantasy-risk-btn" style="font-size:0.7rem; padding:0.22rem 0.45rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:transparent; color:#888; transition:all 0.2s ease;" title="5: Boom-or-Bust (Maximales Upside)">5: BOOM</button>
+              </div>
+
+              <!-- FLASH TOGGLE BUTTON -->
+              <button type="button" id="fantasyFlashToggleBtn" onclick="toggleFantasyFlash(event)" style="font-size:0.75rem; color:#44dd88; background:rgba(68,221,136,0.15); border:1px solid rgba(68,221,136,0.4); padding:0.25rem 0.65rem; border-radius:12px; font-family:var(--mono-family); cursor:pointer; letter-spacing:0.04em; transition:all 0.2s ease;" title="Lichtsignal bei Score aktivieren / deaktivieren">
+                ⚡ FLASH: AN
+              </button>
+
               <button id="fantasyTestFlashBtn" onclick="testFantasyFlash(event)" style="font-size:0.75rem; color:var(--c-primary); background:rgba(235,148,58,0.15); border:1px solid rgba(235,148,58,0.4); padding:0.25rem 0.65rem; border-radius:12px; font-family:var(--mono-family); cursor:pointer; letter-spacing:0.04em; transition:all 0.2s ease;" title="Flash-Signal auf light.esstisch testen">
                 ⚡ TEST FLASH
               </button>
               <span id="fantasyCountdownBadge" style="font-size:0.8rem; color:#44dd88; background:rgba(68,221,136,0.15); border:1px solid rgba(68,221,136,0.4); padding:0.25rem 0.75rem; border-radius:12px; font-family:var(--mono-family); letter-spacing:0.04em;">
                 ● REFRESH IN 30S
               </span>
+            </div>
+          </div>
+
+          <!-- KI TOKEN & MODELL STATUSZEILE -->
+          <div id="fantasyAiStatsStrip" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem; margin-top:0.6rem; padding:0.35rem 0.85rem; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.08); border-radius:8px; font-size:0.75rem; font-family:var(--mono-family); color:#aaa;">
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <span style="color:var(--c-blue); font-weight:700;">KI:</span>
+              <span id="fantasyAiModelText">Gemini 3.8 Flash | ~1.2k Tokens / Run (&lt;0,03ct)</span>
+            </div>
+            <div id="fantasyAiRiskStatus" style="color:var(--c-gold); font-weight:700;">
+              STRATEGIE: 3: AUSGEWOGEN (STANDARD)
             </div>
           </div>
 
@@ -8859,8 +8885,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }, 2200);
   };
 
-  // ESPN KI-MANAGER STEUERUNG
+  // ESPN KI-MANAGER STEUERUNG & SETTINGS
   let currentFantasyMode = 'manual';
+  let currentFantasyRiskLevel = 3;
+  let currentFlashEnabled = true;
+
+  const FANTASY_RISK_LABELS = {
+    1: '1: ULTRA-KONSERVATIV (FLOOR)',
+    2: '2: KONSERVATIV',
+    3: '3: AUSGEWOGEN (STANDARD)',
+    4: '4: OFFENSIV (CEILING)',
+    5: '5: BOOM-OR-BUST (MAX UPSIDE)'
+  };
 
   function updateFantasyModeButtons(mode) {
     const modes = ['manual', 'semi', 'full'];
@@ -8889,6 +8925,111 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         btn.style.boxShadow = 'none';
       }
     });
+  }
+
+  function updateFantasyRiskButtons(level) {
+    const lvl = parseInt(level, 10) || 3;
+    currentFantasyRiskLevel = lvl;
+    for (let i = 1; i <= 5; i++) {
+      const btn = document.getElementById(`btn-fantasy-risk-${i}`);
+      if (!btn) continue;
+      if (i === lvl) {
+        btn.classList.add('active');
+        if (i === 1 || i === 2) {
+          btn.style.background = 'var(--c-blue, #6688cc)';
+          btn.style.color = '#000';
+          btn.style.boxShadow = '0 0 10px rgba(102,136,204,0.6)';
+        } else if (i === 3) {
+          btn.style.background = 'var(--c-butterscotch, #cc9933)';
+          btn.style.color = '#000';
+          btn.style.boxShadow = '0 0 10px rgba(218,165,32,0.4)';
+        } else if (i === 4) {
+          btn.style.background = 'var(--c-primary, #eb943a)';
+          btn.style.color = '#000';
+          btn.style.boxShadow = '0 0 10px rgba(235,148,58,0.6)';
+        } else if (i === 5) {
+          btn.style.background = 'var(--c-red, #eb4444)';
+          btn.style.color = '#fff';
+          btn.style.boxShadow = '0 0 12px rgba(235,68,68,0.7)';
+        }
+      } else {
+        btn.classList.remove('active');
+        btn.style.background = 'transparent';
+        btn.style.color = '#888';
+        btn.style.boxShadow = 'none';
+      }
+    }
+    const statusEl = document.getElementById('fantasyAiRiskStatus');
+    if (statusEl) {
+      statusEl.textContent = `STRATEGIE: ${FANTASY_RISK_LABELS[lvl] || ('STUFE ' + lvl)}`;
+    }
+  }
+
+  window.setFantasyRiskLevel = async function(level) {
+    const lvl = parseInt(level, 10);
+    if (!lvl || lvl < 1 || lvl > 5) return;
+    updateFantasyRiskButtons(lvl);
+    try {
+      const resp = await fetch('/api/espn/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ risk_level: lvl })
+      });
+      const res = await resp.json();
+      if (res.status === 'ok' || res.risk_level) {
+        updateFantasyRiskButtons(res.risk_level || lvl);
+      }
+    } catch (e) {
+      console.error('Fehler beim Setzen des Risk-Levels:', e);
+    }
+  };
+
+  function updateFantasyFlashToggle(enabled) {
+    currentFlashEnabled = Boolean(enabled);
+    const btn = document.getElementById('fantasyFlashToggleBtn');
+    if (!btn) return;
+    if (currentFlashEnabled) {
+      btn.textContent = '⚡ FLASH: AN';
+      btn.style.color = '#44dd88';
+      btn.style.background = 'rgba(68,221,136,0.15)';
+      btn.style.borderColor = 'rgba(68,221,136,0.5)';
+      btn.title = 'Flash-Lichtsignal bei Score aktiviert (Klicken zum Ausschalten)';
+    } else {
+      btn.textContent = '⚡ FLASH: AUS';
+      btn.style.color = '#888';
+      btn.style.background = 'rgba(255,255,255,0.05)';
+      btn.style.borderColor = 'rgba(255,255,255,0.15)';
+      btn.title = 'Flash-Lichtsignal deaktiviert (Klicken zum Einschalten)';
+    }
+  }
+
+  window.toggleFantasyFlash = async function(event) {
+    if (event) event.stopPropagation();
+    const nextState = !currentFlashEnabled;
+    updateFantasyFlashToggle(nextState);
+    try {
+      const resp = await fetch('/api/espn/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flash_enabled: nextState })
+      });
+      const res = await resp.json();
+      if (res.status === 'ok' || res.flash_enabled !== undefined) {
+        updateFantasyFlashToggle(res.flash_enabled !== undefined ? res.flash_enabled : nextState);
+      }
+    } catch (e) {
+      console.error('Fehler beim Umschalten des Flash-Signals:', e);
+    }
+  };
+
+  function updateFantasyAiStats(stats) {
+    const modelEl = document.getElementById('fantasyAiModelText');
+    if (!modelEl || !stats) return;
+    const tokens = (stats.last_token_usage && stats.last_token_usage.total_tokens) ? stats.last_token_usage.total_tokens : 1200;
+    const tokenStr = tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'k' : tokens;
+    const cost = stats.estimated_cost_usd || 0.0002;
+    const costCt = (cost * 100).toFixed(2).replace('.', ',');
+    modelEl.textContent = `Gemini 3.8 Flash | ~${tokenStr} Tokens / Run (<${costCt}ct)`;
   }
 
   window.setFantasyMode = async function(mode) {
@@ -9002,6 +9143,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (data.mode) {
         currentFantasyMode = data.mode;
         updateFantasyModeButtons(data.mode);
+      }
+      if (data.risk_level !== undefined) {
+        updateFantasyRiskButtons(data.risk_level);
+      }
+      if (data.flash_enabled !== undefined) {
+        updateFantasyFlashToggle(data.flash_enabled);
+      }
+      if (data.ai_stats) {
+        updateFantasyAiStats(data.ai_stats);
       }
 
       // Aktiven Vorschlag rendern
@@ -18179,6 +18329,32 @@ if USE_FLASK:
         mode = espn_client.get_mode()
         return jsonify({"status": "ok", "mode": mode})
 
+    @app.route("/api/espn/settings", methods=["GET", "POST"])
+    def api_espn_settings():
+        if not espn_client:
+            return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            mode = data.get("mode")
+            risk_level = data.get("risk_level")
+            flash_enabled = data.get("flash_enabled")
+            try:
+                res = espn_client.update_settings(mode=mode, risk_level=risk_level, flash_enabled=flash_enabled)
+                return jsonify(res)
+            except ValueError as ve:
+                return jsonify({"status": "error", "message": str(ve)}), 400
+            except Exception as e:
+                return jsonify({"status": "error", "message": str(e)}), 500
+        settings = espn_client.get_settings()
+        return jsonify(settings)
+
+    @app.route("/api/espn/ai-stats", methods=["GET"])
+    def api_espn_ai_stats():
+        if not espn_client:
+            return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
+        stats = espn_client.get_ai_stats()
+        return jsonify(stats)
+
     @app.route("/api/espn/proposals", methods=["GET"])
     def api_espn_proposals():
         if not espn_client:
@@ -19446,6 +19622,27 @@ else:
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+            elif parsed.path == "/api/espn/settings":
+                settings = espn_client.get_settings() if espn_client else {"status": "ok", "mode": "manual", "risk_level": 3, "flash_enabled": True}
+                data = json.dumps(settings).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/espn/ai-stats":
+                stats = espn_client.get_ai_stats() if espn_client else {
+                    "status": "ok",
+                    "model": "ag/gemini-3.8-flash-high via 9Router",
+                    "estimated_cost_usd": 0.0002,
+                    "last_token_usage": {"prompt_tokens": 950, "completion_tokens": 250, "total_tokens": 1200}
+                }
+                data = json.dumps(stats).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
             elif parsed.path == "/api/espn/proposals":
                 query = urllib.parse.parse_qs(parsed.query)
                 only_pending = query.get("pending", ["false"])[0].lower() in ("true", "1")
@@ -19818,6 +20015,36 @@ else:
                 else:
                     resp = json.dumps({"status": "error", "message": "Feld 'mode' erforderlich"}).encode("utf-8")
                     code = 400
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/espn/settings":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                if espn_client:
+                    try:
+                        res = espn_client.update_settings(
+                            mode=data.get("mode"),
+                            risk_level=data.get("risk_level"),
+                            flash_enabled=data.get("flash_enabled")
+                        )
+                        resp = json.dumps(res).encode("utf-8")
+                        code = 200
+                    except ValueError as ve:
+                        resp = json.dumps({"status": "error", "message": str(ve)}).encode("utf-8")
+                        code = 400
+                    except Exception as e:
+                        resp = json.dumps({"status": "error", "message": str(e)}).encode("utf-8")
+                        code = 500
+                else:
+                    resp = json.dumps({"status": "error", "message": "ESPN Service nicht verfügbar"}).encode("utf-8")
+                    code = 503
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(resp)))

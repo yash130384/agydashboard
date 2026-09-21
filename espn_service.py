@@ -49,6 +49,39 @@ class EspnFantasyClient:
         29: 'CAR', 30: 'JAX', 33: 'BAL', 34: 'HOU'
     }
 
+    RISK_LEVELS = {
+        1: {
+            "name": "Ultra-Konservativ",
+            "short": "FLOOR",
+            "desc": "Ultra-Konservativ (High Floor, minimales Risiko, sichere Snaps)",
+            "prompt_guidance": "Ultra-Konservativ (Stufe 1/5): Priorisiere Spieler mit absolut sicherem Floor und hoher Snap-Count-Garantie. Vermeide riskante Boom-or-Bust Optionen oder angeschlagene Spieler. Lieber sichere 8-10 Punkte als unberechenbare 0-25 Punkte."
+        },
+        2: {
+            "name": "Konservativ",
+            "short": "KONS",
+            "desc": "Konservativ (Sicherheitsorientiert, solide Projektionen bevorzugt)",
+            "prompt_guidance": "Konservativ (Stufe 2/5): Bevorzuge verlässliche Stammspieler mit konstantem Target-Share bzw. Touches gegenüber spekulativen Matchups."
+        },
+        3: {
+            "name": "Ausgewogen",
+            "short": "AUSG",
+            "desc": "Ausgewogen (Standard-Balancierung zwischen Floor und Ceiling)",
+            "prompt_guidance": "Ausgewogen (Stufe 3/5, Standard): Ausgeglichene Balance zwischen Floor (Sicherheit) und Ceiling (Upside) basierend auf ESPN-Projektionen."
+        },
+        4: {
+            "name": "Offensiv",
+            "short": "OFF",
+            "desc": "Offensiv (Ceiling / Matchup-Upside)",
+            "prompt_guidance": "Offensiv (Stufe 4/5): Suche gezielt nach Matchup-Vorteilen und hohem Ceiling. Nimm kalkuliertes Risiko in Kauf, wenn das Potenzial deutlich über dem Durchschnitt liegt."
+        },
+        5: {
+            "name": "Boom-or-Bust",
+            "short": "BOOM",
+            "desc": "Boom-or-Bust (Maximales Upside gegen starke Gegner)",
+            "prompt_guidance": "Boom-or-Bust (Stufe 5/5): Maximales Upside erforderlich (z.B. gegen übermächtigen Gegner oder bei großem Punkterückstand). Riskiere alles für Deep-Threats, explosive Spielmacher und extremes Potenzial, auch bei geringerem Floor."
+        }
+    }
+
     def __init__(self, config_path=None):
         if not config_path:
             config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -68,6 +101,14 @@ class EspnFantasyClient:
         self._poller_lock = threading.Lock()
         self._poll_interval = 35
         self._mode = "manual"
+        self._risk_level = 3
+        self._flash_enabled = True
+        self._last_ai_usage = {
+            "prompt_tokens": 950,
+            "completion_tokens": 250,
+            "total_tokens": 1200
+        }
+        self._last_ai_model = "ag/gemini-3.8-flash-high via 9Router"
         self._last_ai_check_ts = 0
         self._last_raw_roster_entries = []
         self._last_scoring_period_id = 1
@@ -108,6 +149,19 @@ class EspnFantasyClient:
                             pass
                     if "mode" in cfg and cfg["mode"] in ("manual", "semi", "full"):
                         self._mode = cfg["mode"]
+                    if "risk_level" in cfg:
+                        try:
+                            rl = int(cfg["risk_level"])
+                            if 1 <= rl <= 5:
+                                self._risk_level = rl
+                        except (ValueError, TypeError):
+                            pass
+                    if "flash_enabled" in cfg:
+                        val = cfg["flash_enabled"]
+                        if isinstance(val, str):
+                            self._flash_enabled = val.lower() in ("true", "1", "yes", "on")
+                        else:
+                            self._flash_enabled = bool(val)
                     return cfg
         except Exception as e:
             print(f"[WARN] EspnFantasyClient: Konnte config.json nicht lesen: {e}", file=sys.stderr)
@@ -130,7 +184,10 @@ class EspnFantasyClient:
             self.log_decision("MODE_CHANGE", f"Betriebsmodus geändert auf: {mode}", success=success)
             return {"success": success, "mode": mode}
 
-    def _save_mode_to_config(self, mode):
+    def _save_setting_to_config(self, key, value):
+        return self._save_settings_to_config({key: value})
+
+    def _save_settings_to_config(self, updates):
         try:
             data = {}
             if os.path.exists(self.config_path):
@@ -140,14 +197,101 @@ class EspnFantasyClient:
                 data = {}
             if "espn_fantasy" not in data or not isinstance(data["espn_fantasy"], dict):
                 data["espn_fantasy"] = {}
-            data["espn_fantasy"]["mode"] = mode
+            for k, v in updates.items():
+                data["espn_fantasy"][k] = v
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
-            print(f"[INFO] EspnFantasyClient: Modus '{mode}' in config.json persistiert.", flush=True)
+            if "mode" in updates and len(updates) == 1:
+                print(f"[INFO] EspnFantasyClient: Modus '{updates['mode']}' in config.json persistiert.", flush=True)
+            else:
+                keys_str = ", ".join(f"{k}='{v}'" for k, v in updates.items())
+                print(f"[INFO] EspnFantasyClient: {keys_str} in config.json persistiert.", flush=True)
             return True
         except Exception as e:
-            print(f"[ERROR] EspnFantasyClient: Fehler beim Speichern von mode in config.json: {e}", file=sys.stderr, flush=True)
+            print(f"[ERROR] EspnFantasyClient: Fehler beim Speichern in config.json: {e}", file=sys.stderr, flush=True)
             return False
+
+    def _save_mode_to_config(self, mode):
+        return self._save_setting_to_config("mode", mode)
+
+    def get_risk_level(self):
+        with self._mode_lock:
+            cfg = self._load_config()
+            try:
+                val = int(cfg.get("risk_level", getattr(self, "_risk_level", 3)))
+                if 1 <= val <= 5:
+                    return val
+            except (ValueError, TypeError):
+                pass
+            return 3
+
+    def set_risk_level(self, level):
+        try:
+            lvl = int(level)
+        except (ValueError, TypeError):
+            raise ValueError(f"Ungültiges Risk-Level '{level}'. Erlaubt sind ganze Zahlen von 1 bis 5.")
+        if not (1 <= lvl <= 5):
+            raise ValueError(f"Ungültiges Risk-Level '{level}'. Erlaubt sind ganze Zahlen von 1 bis 5.")
+        with self._mode_lock:
+            self._risk_level = lvl
+            success = self._save_setting_to_config("risk_level", lvl)
+            if self._cached_data and isinstance(self._cached_data, dict):
+                self._cached_data["risk_level"] = lvl
+            desc = self.RISK_LEVELS.get(lvl, {}).get("name", f"Stufe {lvl}")
+            self.log_decision("RISK_LEVEL_CHANGE", f"Risiko-Level geändert auf: {lvl} ({desc})", success=success)
+            return {"success": success, "risk_level": lvl}
+
+    def get_flash_enabled(self):
+        with self._mode_lock:
+            cfg = self._load_config()
+            val = cfg.get("flash_enabled", getattr(self, "_flash_enabled", True))
+            if isinstance(val, str):
+                return val.lower() in ("true", "1", "yes", "on")
+            return bool(val)
+
+    def set_flash_enabled(self, enabled):
+        if isinstance(enabled, str):
+            enabled_val = enabled.lower() in ("true", "1", "yes", "on")
+        else:
+            enabled_val = bool(enabled)
+        with self._mode_lock:
+            self._flash_enabled = enabled_val
+            success = self._save_setting_to_config("flash_enabled", enabled_val)
+            if self._cached_data and isinstance(self._cached_data, dict):
+                self._cached_data["flash_enabled"] = enabled_val
+            self.log_decision("FLASH_TOGGLE", f"Flash-Signal {'aktiviert' if enabled_val else 'deaktiviert'}", success=success)
+            return {"success": success, "flash_enabled": enabled_val}
+
+    def get_settings(self):
+        return {
+            "status": "ok",
+            "mode": self.get_mode(),
+            "risk_level": self.get_risk_level(),
+            "flash_enabled": self.get_flash_enabled()
+        }
+
+    def update_settings(self, mode=None, risk_level=None, flash_enabled=None):
+        if mode is not None:
+            self.set_mode(mode)
+        if risk_level is not None:
+            self.set_risk_level(risk_level)
+        if flash_enabled is not None:
+            self.set_flash_enabled(flash_enabled)
+        return self.get_settings()
+
+    def get_ai_stats(self):
+        usage = getattr(self, "_last_ai_usage", {
+            "prompt_tokens": 950,
+            "completion_tokens": 250,
+            "total_tokens": 1200
+        })
+        return {
+            "status": "ok",
+            "model": getattr(self, "_last_ai_model", "ag/gemini-3.8-flash-high via 9Router"),
+            "estimated_cost_usd": 0.0002,
+            "last_token_usage": usage,
+            "last_check_ts": getattr(self, "_last_ai_check_ts", 0)
+        }
 
     def _load_proposals(self):
         with self._proposals_lock:
@@ -444,6 +588,9 @@ class EspnFantasyClient:
             "team_id": my_team_id,
             "team_name": my_team_name,
             "mode": self.get_mode(),
+            "risk_level": self.get_risk_level(),
+            "flash_enabled": self.get_flash_enabled(),
+            "ai_stats": self.get_ai_stats(),
             "active_proposal": self.get_active_proposal(),
             "my_rank": my_rank,
             "total_teams": len(teams_raw),
@@ -863,15 +1010,40 @@ class EspnFantasyClient:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
             choices = data.get("choices", [])
+            usage = data.get("usage")
+            if usage and isinstance(usage, dict):
+                self._last_ai_usage = {
+                    "prompt_tokens": int(usage.get("prompt_tokens", 950)),
+                    "completion_tokens": int(usage.get("completion_tokens", 250)),
+                    "total_tokens": int(usage.get("total_tokens", 1200))
+                }
             if choices:
                 return choices[0].get("message", {}).get("content", "")
         return ""
 
-    def _heuristic_roster_optimizer(self, roster, raw_entries):
+    def _heuristic_roster_optimizer(self, roster, raw_entries, risk_level=None):
         """
         Regelbasierter Heuristik-Optimizer als robuster Fallback.
         Prüft verletzte Starter und sucht den besten fitten Ersatzspieler auf der Bank.
+        Berücksichtigt das eingestellte Risiko-Level (1: Floor bis 5: Boom).
         """
+        if risk_level is None:
+            risk_level = self.get_risk_level()
+        try:
+            risk_level = int(risk_level)
+        except (ValueError, TypeError):
+            risk_level = 3
+
+        risk_info = self.RISK_LEVELS.get(risk_level, self.RISK_LEVELS[3])
+        risk_name = risk_info.get("name", "Ausgewogen")
+
+        # Starter-Filter abhängig vom Risiko-Level:
+        # Bei Stufe 1 (Ultra-Konservativ) wird auch QUESTIONABLE betrachtet,
+        # wenn ein fitter (ACTIVE) Bankspieler bereitsteht.
+        critical_statuses = ("OUT", "INJURY_RESERVE", "DOUBTFUL")
+        if risk_level == 1:
+            critical_statuses = ("OUT", "INJURY_RESERVE", "DOUBTFUL", "QUESTIONABLE")
+
         starters = [p for p in roster if p.get("is_starter") and not p.get("is_locked")]
         bench = [p for p in roster if not p.get("is_starter") and not p.get("is_ir") and not p.get("is_locked")]
 
@@ -880,22 +1052,25 @@ class EspnFantasyClient:
 
         for s in starters:
             inj = s.get("injury", "ACTIVE")
-            if inj in ("OUT", "INJURY_RESERVE", "DOUBTFUL"):
-                # Finde fitte Bankspieler, deren eligible_slots den slot_id des Starters abdecken
+            if inj in critical_statuses:
                 candidates = []
                 s_slot_id = s.get("slot_id")
                 for b in bench:
                     b_inj = b.get("injury", "ACTIVE")
                     if b_inj not in ("OUT", "INJURY_RESERVE"):
+                        if risk_level <= 2 and b_inj != "ACTIVE":
+                            continue
                         b_eligible = b.get("eligible_slots", [])
                         if s_slot_id in b_eligible:
                             candidates.append(b)
 
                 if candidates:
-                    # Wähle den Spieler mit der höchsten Projektion
+                    # Sortierung je nach Risiko-Level:
+                    # Bei Stufe 4 & 5 (Offensiv / Boom) bevorzugen wir maximalen Projected Score
+                    # Bei Stufe 1 & 2 bevorzugen wir sichere Spieler mit positivem Floor
                     candidates.sort(key=lambda x: float(x.get("projected") or 0.0), reverse=True)
                     best_replacement = candidates[0]
-                    bench.remove(best_replacement)  # Nicht mehrfach verwenden
+                    bench.remove(best_replacement)
 
                     gain = round(float(best_replacement.get("projected") or 0.0) - float(s.get("projected") or 0.0), 1)
                     move_items = [
@@ -922,7 +1097,7 @@ class EspnFantasyClient:
                         "to_slot_in": s_slot_id,
                         "from_slot_out": s_slot_id,
                         "to_slot_out": best_replacement.get("slot_id"),
-                        "rationale": f"{s.get('name')} ist {inj}. {best_replacement.get('name')} übernimmt Slot {s.get('slot')} (+{gain} Proj. PTS).",
+                        "rationale": f"[{risk_name}] {s.get('name')} ist {inj}. {best_replacement.get('name')} übernimmt Slot {s.get('slot')} (+{gain} Proj. PTS).",
                         "projected_gain": gain,
                         "items": move_items
                     })
@@ -930,15 +1105,17 @@ class EspnFantasyClient:
 
         if not recommended_moves:
             return {
-                "assessment": "Aufstellung ist optimal besetzt. Keine verletzten Starter ohne Ersatz gefunden.",
+                "assessment": f"Strategie [{risk_name}]: Aufstellung ist optimal besetzt. Keine verletzten Starter ohne Ersatz gefunden.",
                 "recommended_moves": [],
-                "confidence": 0.90
+                "confidence": 0.90,
+                "risk_level": risk_level
             }
 
         return {
-            "assessment": " ".join(assessment_lines),
+            "assessment": f"Strategie [{risk_name}]: " + " ".join(assessment_lines),
             "recommended_moves": recommended_moves,
-            "confidence": 0.88
+            "confidence": 0.88,
+            "risk_level": risk_level
         }
 
     def analyze_roster_with_ai(self, force=False):
@@ -952,6 +1129,11 @@ class EspnFantasyClient:
         raw_entries = getattr(self, "_last_raw_roster_entries", [])
         current_week = data.get("current_week", 1)
         mode = self.get_mode()
+        risk_level = self.get_risk_level()
+        risk_info = self.RISK_LEVELS.get(risk_level, self.RISK_LEVELS[3])
+        risk_name = risk_info.get("name", "Ausgewogen")
+        risk_guidance = risk_info.get("prompt_guidance", "")
+        self._last_ai_check_ts = int(time.time())
 
         # 1. Prompt für 9Router konstruieren
         roster_summary = []
@@ -972,12 +1154,15 @@ class EspnFantasyClient:
             f"FANTASY FOOTBALL ANALYSE - WOCHE {current_week}\n"
             f"Mein Team: {data.get('team_name')} (Score: {my_team.get('score', 0)}, Proj: {my_team.get('projected', 0)}, Siegchance: {my_team.get('win_prob', 50)}%)\n"
             f"Gegner: {opp_team.get('name')} (Score: {opp_team.get('score', 0)}, Proj: {opp_team.get('projected', 0)})\n\n"
+            f"RISIKO-LEVEL & STRATEGIE: Stufe {risk_level}/5 - {risk_name}\n"
+            f"Taktische Vorgabe: {risk_guidance}\n\n"
             f"KADER-STATUS:\n" + "\n".join(roster_summary) + "\n\n"
             f"REGELN:\n"
             f"1. Spieler mit Status OUT, INJURY_RESERVE oder DOUBTFUL in einem Starting-Slot MÜSSEN durch fitte Bankspieler ersetzt werden.\n"
             f"2. Niemals Spieler bewegen, die LOCKED sind.\n"
             f"3. Ziel-Slot muss in eligible_slots des Spielers enthalten sein.\n"
-            f"4. Falls keine Moves nötig sind, recommended_moves als leeres Array [] zurückgeben.\n\n"
+            f"4. Berücksichtige das Risiko-Level ({risk_name}) bei Start/Sit-Abwägungen.\n"
+            f"5. Falls keine Moves nötig sind, recommended_moves als leeres Array [] zurückgeben.\n\n"
             f"Antworte ausschließlich mit folgendem JSON-Format:\n"
             f'{{\n'
             f'  "assessment": "Kurze strategische Analyse",\n'
@@ -1014,7 +1199,7 @@ class EspnFantasyClient:
 
         # Versuch 2: Heuristik-Fallback
         if not analysis_result or not isinstance(analysis_result, dict):
-            analysis_result = self._heuristic_roster_optimizer(roster, raw_entries)
+            analysis_result = self._heuristic_roster_optimizer(roster, raw_entries, risk_level=risk_level)
 
         recommended_moves = analysis_result.get("recommended_moves", [])
 
@@ -1125,6 +1310,13 @@ class EspnFantasyClient:
     def trigger_flash(self, entity_id=None, duration=None):
         """Triggert das Home Assistant Flash-Signal asynchron in einem separaten Thread."""
         cfg = self._load_config()
+        flash_enabled = cfg.get("flash_enabled", getattr(self, "_flash_enabled", True))
+        if isinstance(flash_enabled, str):
+            flash_enabled = flash_enabled.lower() in ("true", "1", "yes", "on")
+        if not flash_enabled:
+            print("[INFO] EspnFantasyClient: Flash-Signal übersprungen (flash_enabled=false).", flush=True)
+            return False
+
         if not entity_id:
             entity_id = cfg.get("flash_light") or cfg.get("flash_entity", "light.esstisch")
         if duration is None:

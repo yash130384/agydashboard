@@ -157,7 +157,125 @@ class TestEspnAiManager(unittest.TestCase):
         self.assertEqual(self.client.get_mode(), "manual")
 
     # =========================================================================
-    # 2. TEST SAFEGUARDS: validate_roster_move
+    # 2. TEST RISK LEVEL (1-5 Validierung & Persistenz)
+    # =========================================================================
+    def test_get_risk_level_default(self):
+        """Prüft, dass der Standard-Risikolevel 3 (Ausgewogen) ist."""
+        self.assertEqual(self.client.get_risk_level(), 3)
+
+    def test_set_risk_level_valid(self):
+        """Prüft das Setzen aller gültigen Risiko-Stufen (1 bis 5) inkl. Persistenz in config.json."""
+        for lvl in (1, 2, 3, 4, 5):
+            res = self.client.set_risk_level(lvl)
+            self.assertTrue(res.get("success"))
+            self.assertEqual(res.get("risk_level"), lvl)
+            self.assertEqual(self.client.get_risk_level(), lvl)
+
+            # Physische Prüfung in config.json
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                saved_cfg = json.load(f)
+            self.assertEqual(saved_cfg.get("espn_fantasy", {}).get("risk_level"), lvl)
+
+        # Auch numerische Strings wie "4" müssen akzeptiert und als int konvertiert werden
+        res_str = self.client.set_risk_level("4")
+        self.assertTrue(res_str.get("success"))
+        self.assertEqual(res_str.get("risk_level"), 4)
+        self.assertEqual(self.client.get_risk_level(), 4)
+
+    def test_set_risk_level_invalid(self):
+        """Prüft, dass Werte außerhalb 1-5 sowie ungültige Typen abgewiesen werden."""
+        self.client.set_risk_level(3)
+
+        invalid_values = [0, -1, 6, 10, 99, "0", "6", "-2", "ultra", "", None, [3], {"lvl": 3}]
+        for val in invalid_values:
+            with self.assertRaises(ValueError, msg=f"Erwarteter ValueError für Eingabe: {val}"):
+                self.client.set_risk_level(val)
+
+        # Level muss unverändert 3 bleiben
+        self.assertEqual(self.client.get_risk_level(), 3)
+
+    # =========================================================================
+    # 3. TEST FLASH TOGGLE (flash_enabled & trigger_flash)
+    # =========================================================================
+    def test_get_flash_enabled_default(self):
+        """Prüft, dass Flash-Signale standardmäßig aktiviert (True) sind."""
+        self.assertTrue(self.client.get_flash_enabled())
+
+    def test_set_flash_enabled_toggle(self):
+        """Prüft das Umschalten von flash_enabled (Boolean und Strings) inkl. Persistenz."""
+        # 1. Deaktivieren via bool
+        res_off = self.client.set_flash_enabled(False)
+        self.assertTrue(res_off.get("success"))
+        self.assertFalse(res_off.get("flash_enabled"))
+        self.assertFalse(self.client.get_flash_enabled())
+
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            saved_cfg = json.load(f)
+        self.assertFalse(saved_cfg.get("espn_fantasy", {}).get("flash_enabled"))
+
+        # 2. Wieder aktivieren via bool
+        res_on = self.client.set_flash_enabled(True)
+        self.assertTrue(res_on.get("success"))
+        self.assertTrue(res_on.get("flash_enabled"))
+        self.assertTrue(self.client.get_flash_enabled())
+
+        # 3. String Parsing: "false", "0", "no", "off" -> False
+        for false_val in ("false", "False", "0", "off", "no"):
+            self.client.set_flash_enabled(false_val)
+            self.assertFalse(self.client.get_flash_enabled())
+
+        # 4. String Parsing: "true", "1", "yes", "on" -> True
+        for true_val in ("true", "True", "1", "on", "yes"):
+            self.client.set_flash_enabled(true_val)
+            self.assertTrue(self.client.get_flash_enabled())
+
+    def test_trigger_flash_disabled(self):
+        """Prüft, dass trigger_flash sofort False liefert und übersprungen wird, wenn deaktiviert."""
+        self.client.set_flash_enabled(False)
+        # Wenn deaktiviert, darf trigger_flash sofort False zurückgeben ohne HA-Aufruf
+        res = self.client.trigger_flash()
+        self.assertFalse(res)
+
+    # =========================================================================
+    # 4. TEST SETTINGS BUNDLE & AI STATS
+    # =========================================================================
+    def test_get_and_update_settings(self):
+        """Prüft get_settings und update_settings für gebündelte Abfragen und Aktualisierungen."""
+        settings = self.client.get_settings()
+        self.assertEqual(settings.get("status"), "ok")
+        self.assertEqual(settings.get("mode"), "manual")
+        self.assertEqual(settings.get("risk_level"), 3)
+        self.assertTrue(settings.get("flash_enabled"))
+
+        # update_settings mit partiellen & vollständigen Parametern
+        updated = self.client.update_settings(mode="semi", risk_level=5, flash_enabled=False)
+        self.assertEqual(updated.get("status"), "ok")
+        self.assertEqual(updated.get("mode"), "semi")
+        self.assertEqual(updated.get("risk_level"), 5)
+        self.assertFalse(updated.get("flash_enabled"))
+
+        self.assertEqual(self.client.get_mode(), "semi")
+        self.assertEqual(self.client.get_risk_level(), 5)
+        self.assertFalse(self.client.get_flash_enabled())
+
+        # Ungültiger Parameter muss ValueError werfen
+        with self.assertRaises(ValueError):
+            self.client.update_settings(risk_level=99)
+
+    def test_get_ai_stats(self):
+        """Prüft das Abrufen der KI-Tokenstatistiken und Modellangaben."""
+        stats = self.client.get_ai_stats()
+        self.assertEqual(stats.get("status"), "ok")
+        self.assertIn("model", stats)
+        self.assertIn("last_token_usage", stats)
+        usage = stats["last_token_usage"]
+        self.assertIn("prompt_tokens", usage)
+        self.assertIn("completion_tokens", usage)
+        self.assertIn("total_tokens", usage)
+        self.assertIsInstance(usage["total_tokens"], int)
+
+    # =========================================================================
+    # 5. TEST SAFEGUARDS: validate_roster_move
     # =========================================================================
     def test_validate_empty_items(self):
         """Prüft Abweisung leerer oder ungültiger Move-Listen."""
@@ -410,6 +528,84 @@ class TestEspnAiManager(unittest.TestCase):
             self.assertEqual(resp_ana.status_code, 200)
             data_ana = resp_ana.get_json()
             self.assertEqual(data_ana.get("status"), "ok")
+
+    def test_flask_settings_endpoint(self):
+        """Prüft den Flask-Endpunkt /api/espn/settings (GET und POST) inkl. Validierung."""
+        from app import app
+        app.config["TESTING"] = True
+        client = app.test_client()
+
+        # Ursprüngliche Einstellungen sichern
+        orig_resp = client.get("/api/espn/settings")
+        self.assertEqual(orig_resp.status_code, 200)
+        orig_data = orig_resp.get_json()
+        self.assertEqual(orig_data.get("status"), "ok")
+        self.assertIn("mode", orig_data)
+        self.assertIn("risk_level", orig_data)
+        self.assertIn("flash_enabled", orig_data)
+
+        try:
+            # 1. POST /api/espn/settings: Gültiges Update aller Parameter
+            post_resp = client.post("/api/espn/settings", json={
+                "mode": "semi",
+                "risk_level": 4,
+                "flash_enabled": False
+            })
+            self.assertEqual(post_resp.status_code, 200)
+            post_data = post_resp.get_json()
+            self.assertEqual(post_data.get("status"), "ok")
+            self.assertEqual(post_data.get("mode"), "semi")
+            self.assertEqual(post_data.get("risk_level"), 4)
+            self.assertFalse(post_data.get("flash_enabled"))
+
+            # 2. GET /api/espn/settings: Verifikation der neuen Einstellungen
+            get_resp = client.get("/api/espn/settings")
+            self.assertEqual(get_resp.status_code, 200)
+            get_data = get_resp.get_json()
+            self.assertEqual(get_data.get("mode"), "semi")
+            self.assertEqual(get_data.get("risk_level"), 4)
+            self.assertFalse(get_data.get("flash_enabled"))
+
+            # 3. POST /api/espn/settings: Ungültiges risk_level (> 5) muss HTTP 400 liefern
+            resp_too_high = client.post("/api/espn/settings", json={"risk_level": 6})
+            self.assertEqual(resp_too_high.status_code, 400)
+            self.assertEqual(resp_too_high.get_json().get("status"), "error")
+
+            # 4. POST /api/espn/settings: Ungültiges risk_level (< 1) muss HTTP 400 liefern
+            resp_too_low = client.post("/api/espn/settings", json={"risk_level": 0})
+            self.assertEqual(resp_too_low.status_code, 400)
+            self.assertEqual(resp_too_low.get_json().get("status"), "error")
+
+            # 5. POST /api/espn/settings: Nicht-numerischer String als risk_level muss HTTP 400 liefern
+            resp_str_inv = client.post("/api/espn/settings", json={"risk_level": "maximum_risk"})
+            self.assertEqual(resp_str_inv.status_code, 400)
+            self.assertEqual(resp_str_inv.get_json().get("status"), "error")
+
+        finally:
+            # Zustand sauber wiederherstellen
+            client.post("/api/espn/settings", json={
+                "mode": orig_data.get("mode", "manual"),
+                "risk_level": orig_data.get("risk_level", 3),
+                "flash_enabled": orig_data.get("flash_enabled", True)
+            })
+
+    def test_flask_ai_stats_endpoint(self):
+        """Prüft den Flask-Endpunkt /api/espn/ai-stats (GET)."""
+        from app import app
+        app.config["TESTING"] = True
+        client = app.test_client()
+
+        resp = client.get("/api/espn/ai-stats")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertEqual(data.get("status"), "ok")
+        self.assertIn("model", data)
+        self.assertIn("last_token_usage", data)
+        usage = data["last_token_usage"]
+        self.assertIn("prompt_tokens", usage)
+        self.assertIn("completion_tokens", usage)
+        self.assertIn("total_tokens", usage)
+        self.assertIsInstance(usage["total_tokens"], int)
 
 
 if __name__ == "__main__":
