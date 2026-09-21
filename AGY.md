@@ -1600,3 +1600,514 @@ function stopAllGeminiAudio() {
   5. `turn_complete` Signal erfolgreich empfangen
 - **Systemd Service**: `systemctl --user restart agydashboard.service` fehlerfrei aktiv.
 
+---
+
+# Architektur- & Implementierungsplan: Remote Node "PIMMEL" (Raspberry Pi Telemetrie & 9Router Hub)
+
+## 1. Zielsetzung & Kontext
+
+### 1.1 Ausgangssituation & Topologie
+Das System-Dashboard `agydashboard` läuft aktuell auf dem lokalen Host (`BiggerPimmel`, User `cb`) unter Systemd (`agydashboard.service`) und visualisiert lokale ODN-Sensordaten, KI-Agenten und 9Router-Statistiken aus der lokalen Datenbank `~/.9router/db/data.sqlite`.
+
+Im Heimnetzwerk / Tailscale-Mesh existiert ein dedizierter Remote Node:
+- **Hostname**: `PiMMEL` (Raspberry Pi 4 / ARM64, Debian 12)
+- **Netzwerk**: IP `100.88.215.98` (Tailscale) bzw. `192.168.178.84` (lokales LAN)
+- **SSH-Zugang**: Bereits schlüsselloser Zugang via `ssh pimmel` (User `yash`, SSH-Key `~/.ssh/id_ed25519`) eingerichtet und verifiziert (Ping/Latenz < 25ms, SSH-Befehlsausführung < 0.9s).
+- **Aktive Kerndienste auf PiMMEL**:
+  - `9router`: Node.js Proxy/Router, gemanagt via PM2 (`pm2 jlist`, Instanzname `9router`, Port 20128, PID, Memory ~160 MB).
+  - `hermes-gateway`: Systemd User-Service (`systemctl --user status hermes-gateway`, Telegram/Matrix Bot-Gateway, User `yash`).
+  - `data.sqlite`: Vollständige Routing- und Verbrauchsdatenbank unter `/home/yash/.9router/db/data.sqlite` (>2.100 Requests, `usageDaily`, `usageHistory`, `providerConnections`).
+  - `9router-out.log`: Fortlaufende Ausgabelogs unter `/home/yash/.pm2/logs/9router-out.log` mit detaillierten Tokens-, Cache- und Latenzinformationen.
+
+### 1.2 Zieldefinition
+Implementierung einer eigenständigen, vollwertigen LCARS-Kategorie und Dashboard-Sektion **"PIMMEL"** im `agydashboard`.
+
+Der Funktionsumfang gliedert sich in vier Kernbereiche:
+1. **Pimmel Host-Vitals**: Echtzeit-Monitoring von CPU-Last, Load Average (1m, 5m, 15m), RAM, Root-Disk, SoC-Temperatur, Uptime sowie dem Dienststatus von `hermes-gateway` (systemd) und `9router` (PM2).
+2. **9Router Telemetrie & Verbrauchs-Kennzahlen**: Automatisierte Synchronisation der Remote-SQLite-Datenbank in einen lokalen Cache, Berechnung von Token-Volumina (Prompt, Completion, Cached), Prompt-Caching-Ersparnis (Quote & $), Provider- und Modell-Verteilungen sowie tabellarische Übersicht der letzten Transaktionen aus `usageHistory`.
+3. **PM2 Live-Logstream**: LCARS-Terminal zur Einsicht der letzten Zeilen von `9router-out.log` mit farblichem Highlighting für Transaktionen, Tokens, Cache-Hits und Fehler.
+4. **Historie der System- & 9Router-Nutzung**:
+   - Rolling 24h-Sensorhistorie (CPU, RAM, Temperatur) von PiMMEL über Zeit (10m, 30m, 1h, 12h, 24h).
+   - Historischer Token- und Request-Verlauf über Tage hinweg (aggregiert aus `usageDaily`).
+
+---
+
+## 2. Analyse der bestehenden Dashboard-Architektur (`app.py`)
+
+### 2.1 Bestehendes `get_9router_stats()`
+In `app.py` (Zeilen 1522–1795) existiert die Funktion `get_9router_stats()`. Diese liest derzeit hardcodiert `~/.9router/db/data.sqlite` des lokalen Hosts aus:
+- **Queries**: Aggregiert `usageDaily` (JSON-Payloads pro Tag für Requests, Tokens, Provider, Modelle), `usageHistory` (letzte 15 Zeilen), `providerConnections` (aktive Verbindungen) und berechnet über SQL-Heuristiken die Prompt-Caching-Ersparnis.
+- **Limitation**: Fest auf den lokalen Pfad gebunden, keine Mehrmandantenfähigkeit (Local vs. Remote Node).
+- **Lösungsansatz**: Modularisierung / Refactoring in eine wiederverwendbare Funktion bzw. einen Service `parse_9router_sqlite(db_path)`, der sowohl von der lokalen KI-Info-Sektion als auch vom neuen `PimmelService` für `/home/cb/Projects/agydashboard/data_cache/pimmel_9router.sqlite` verwendet werden kann.
+
+### 2.2 Navigation & LCARS-Pillar
+- In `app.py` (Zeilen 4868–4905) steuert die Navigationssäule (`.nav-pillar`) das Wechseln der Kategorien via `switchCategory(catId)`.
+- Die Kategorien sind in `CATEGORY_NAMES` (Zeilen 8329–8341) definiert.
+- Beim Kategoriewechsel blendet `switchCategory` alle `.lcars-section` aus, aktiviert die Ziel-Sektion (`#section-<catId>`) und führt ggf. Resize- und Re-Render-Routinen für Canvas-Charts aus (`historyChart.resize()`, `initHistoryChart()`).
+- Das Berechtigungssystem (`permissions_service.py`) definiert `VALID_SECTIONS` und sperrt nicht freigegebene Bereiche mit dem Command Code `0901`.
+
+### 2.3 Chart-Engine & UI-Konventionen
+- Das Dashboard nutzt eine hybride Chart-Engine: Bevorzugt `Chart.js` (über `ensureChart()`), gekoppelt mit nativen LCARS-Canvas-Renderern als Ausfallsicherung.
+- Bereits etablierte Chart-Typen:
+  - Line-Charts für Sensor-Historien (CPU, RAM, Temp).
+  - Doughnut-Charts für Modell-Tokenverteilung (`nineRouterModelChart`, `hermesChart`).
+  - Bar/Line-Kombinations-Charts für Transaktionen und Tokenflüsse (`nineRouterTimelineChart`).
+- Visuelle LCARS-Klassen:
+  - `.lcars-card`, `.card-violet`, `.card-blue`, `.card-almond`, `.card-red`.
+  - `.readout-grid`, `.card-metric`, `.lcars-bar-track`, `.badge-status`.
+
+---
+
+## 3. System- & Komponentenarchitektur
+
+### 3.1 Architekturübersicht
+
+```mermaid
+flowchart TD
+    subgraph RemoteNode ["Remote Node: PiMMEL (100.88.215.98)"]
+        R_SYS["/proc, /sys/thermal, os.getloadavg()"]
+        R_SYSTEMD["systemctl --user is-active hermes-gateway"]
+        R_PM2["PM2 Daemon: 9router status & logs"]
+        R_SQLITE["~/.9router/db/data.sqlite (WAL Mode)"]
+    end
+
+    subgraph ServiceLayer ["agydashboard: Backend (BiggerPimmel)"]
+        PS["pimmel_service.py (PimmelService Singleton)"]
+        WORKER_FAST["Worker Thread: Telemetrie & Logs (5s - 10s)"]
+        WORKER_SYNC["Worker Thread: SQLite Rsync (30s / on-demand)"]
+        RING_BUF["In-Memory Rolling History Buffer (24h)"]
+        CACHE_DB["data_cache/pimmel_9router.sqlite"]
+        SQL_ENGINE["9Router Analytics & Aggregation Engine"]
+    end
+
+    subgraph FlaskEndpoints ["Flask App (app.py)"]
+        EP_STATUS["/api/pimmel/status"]
+        EP_HIST["/api/pimmel/history?range=..."]
+        EP_9R["/api/pimmel/9router"]
+        EP_LOGS["/api/pimmel/logs"]
+        EP_SYNC["/api/pimmel/sync"]
+    end
+
+    subgraph LCARS_UI ["LCARS Frontend (DASHBOARD_HTML)"]
+        PILL_NAV["Nav-Pill: PIMMEL"]
+        SEC_HOST["Panel 1: Host Vitals (CPU, RAM, Temp, Services)"]
+        SEC_CHARTS["Panel 2: Sensor-History & 9Router Charts"]
+        SEC_TABLE["Panel 3: 9Router Transmissions-Tabelle"]
+        SEC_LOGS["Panel 4: PM2 9Router Live Console Logs"]
+    end
+
+    %% Datenflüsse
+    WORKER_FAST -- "SSH BatchMode (Python One-Shot via Stdin)" --> R_SYS
+    WORKER_FAST -- "SSH BatchMode" --> R_SYSTEMD
+    WORKER_FAST -- "SSH BatchMode" --> R_PM2
+    WORKER_FAST --> RING_BUF
+
+    WORKER_SYNC -- "rsync -az (Delta Transfer)" --> R_SQLITE
+    WORKER_SYNC --> CACHE_DB
+    CACHE_DB --> SQL_ENGINE
+
+    PS --> WORKER_FAST
+    PS --> WORKER_SYNC
+    PS --> RING_BUF
+    PS --> SQL_ENGINE
+
+    FlaskEndpoints --> PS
+    LCARS_UI -- "fetch('/api/pimmel/...')" --> FlaskEndpoints
+```
+
+### 3.2 Modulare Kapselung: `pimmel_service.py`
+Zur Vermeidung einer weiteren Aufblähung von `app.py` wird die gesamte Node-Logik analog zu `ha_service.py` und `cycle_service.py` in einer separaten Datei `pimmel_service.py` gekapselt:
+- **`PimmelService`**:
+  - Verwaltet Konfiguration (Host, IP, Intervalle, Pfade).
+  - Hält Thread-Locks (`threading.RLock`) für thread-sicheren Zustand.
+  - Initialisiert und steuert die Background-Worker.
+  - Stellt saubere Abfragemethoden für Controller/Routen bereit:
+    - `get_status()`
+    - `get_history(range_seconds)`
+    - `get_9router_data()`
+    - `get_logs(lines)`
+    - `trigger_sync()`
+
+---
+
+## 4. Datenbeschaffung & Caching-Strategie (SSH Polling / Sync)
+
+### 4.1 Schnelles Host-Telemetrie-Polling (5s–10s Intervall)
+Das Polling der Host-Metriken muss extrem schlank, nicht-blockierend und resistent gegen Verbindungsabbrüche sein.
+Statt mehrfach separate SSH-Befehle abzusetzen, wird ein einzelnes, hochoptimiertes Python-Script über `ssh -o ConnectTimeout=3 -o BatchMode=yes pimmel "python3 -"` via Standardeingabe gestreamt.
+
+#### Remote One-Shot Script Payload:
+```python
+import datetime, json, os, subprocess, sys
+
+# 1. CPU & Load
+load1, load5, load15 = os.getloadavg()
+cores = os.cpu_count() or 1
+cpu_pct = round(min(100.0, (load1 / cores) * 100), 1)
+
+# 2. Uptime
+uptime_sec = 0.0
+with open("/proc/uptime") as f:
+  uptime_sec = float(f.read().split()[0])
+
+# 3. Memory
+mem_total, mem_avail = 0, 0
+with open("/proc/meminfo") as f:
+  for line in f:
+    if line.startswith("MemTotal:"):
+      mem_total = int(line.split()[1]) * 1024
+    elif line.startswith("MemAvailable:"):
+      mem_avail = int(line.split()[1]) * 1024
+mem_used = max(0, mem_total - mem_avail)
+mem_pct = round((mem_used / mem_total) * 100, 1) if mem_total else 0.0
+
+# 4. Root Disk
+st = os.statvfs("/")
+disk_total = st.f_blocks * st.f_frsize
+disk_free = st.f_bavail * st.f_frsize
+disk_used = disk_total - disk_free
+disk_pct = round((disk_used / disk_total) * 100, 1) if disk_total else 0.0
+
+# 5. SoC Temperatur
+temp_c = 0.0
+try:
+  with open("/sys/class/thermal/thermal_zone0/temp") as f:
+    temp_c = round(float(f.read().strip()) / 1000.0, 1)
+except Exception:
+  pass
+
+# 6. Hermes Gateway (User Systemd)
+try:
+  hermes_active = subprocess.check_output(
+      ["systemctl", "--user", "is-active", "hermes-gateway"], text=True
+  ).strip()
+except Exception:
+  hermes_active = "inactive"
+
+# 7. PM2 9Router Prozess
+pm2_9router = {"status": "offline"}
+try:
+  raw = subprocess.check_output(["pm2", "jlist"], text=True)
+  for p in json.loads(raw):
+    if p.get("name") == "9router":
+      monit = p.get("monit", {})
+      env = p.get("pm2_env", {})
+      pm2_9router = {
+          "status": env.get("status", "unknown"),
+          "pid": p.get("pid"),
+          "pm_id": p.get("pm_id"),
+          "uptime_ms": env.get("pm_uptime"),
+          "restarts": env.get("restart_time", 0),
+          "cpu": monit.get("cpu", 0),
+          "memory": monit.get("memory", 0),
+          "version": env.get("version", ""),
+      }
+      break
+except Exception as e:
+  pm2_9router = {"status": "error", "error": str(e)}
+
+# 8. PM2 9Router Logs (letzte 40 Zeilen)
+logs = ""
+try:
+  logs = subprocess.check_output(
+      ["tail", "-n", "40", "/home/yash/.pm2/logs/9router-out.log"], text=True
+  )
+except Exception as e:
+  logs = f"[WARN] Fehler beim Lesen der Logs: {e}"
+
+print("__JSON_START__")
+print(
+    json.dumps({
+        "hostname": "PiMMEL",
+        "ip": "100.88.215.98",
+        "timestamp": datetime.datetime.now().isoformat(),
+        "load": {
+            "1m": round(load1, 2),
+            "5m": round(load5, 2),
+            "15m": round(load15, 2),
+            "cores": cores,
+        },
+        "cpu": {"percent": cpu_pct, "cores": cores},
+        "ram": {
+            "total": mem_total,
+            "used": mem_used,
+            "free": mem_avail,
+            "percent": mem_pct,
+        },
+        "disk": {
+            "total": disk_total,
+            "used": disk_used,
+            "free": disk_free,
+            "percent": disk_pct,
+        },
+        "temp": temp_c,
+        "uptime_sec": int(uptime_sec),
+        "hermes": {"status": hermes_active},
+        "pm2_9router": pm2_9router,
+        "logs": logs,
+    })
+)
+```
+*Performance-Ergebnis*: Der gesamte Aufruf benötigt im Testbetrieb via Tailscale lediglich **~0.90 Sekunden** und liefert ein vollständiges Telemetrie-Paket.
+
+### 4.2 SQLite Datenbank-Synchronisation (30s–60s Intervall)
+Die SQLite-Datei `~/.9router/db/data.sqlite` auf PiMMEL ist rund 4.7 MB groß. Um Remote-Locks oder Lese-Konflikte mit dem laufenden 9Router-Prozess zu vermeiden, wird sie in ein lokales Cache-Verzeichnis gespiegelt:
+- **Lokaler Cache-Pfad**: `/home/cb/Projects/agydashboard/data_cache/pimmel_9router.sqlite`
+- **Sync-Mechanismus**: `rsync -az --timeout=10 pimmel:/home/yash/.9router/db/data.sqlite /home/cb/Projects/agydashboard/data_cache/pimmel_9router.sqlite`
+- **Vorteile**:
+  1. `rsync` überträgt nur veränderte Blöcke (Delta-Transfer), Laufzeit < 0.5s bei bestehender Verbindung.
+  2. Lokale SQLite-Queries blockieren weder den Remote-Knoten noch das Netzwerk.
+  3. Vollständige Offline-Fähigkeit: Selbst wenn PiMMEL kurzzeitig neu startet, stehen die Verbrauchsdaten und Modellstatistiken nahtlos zur Verfügung.
+  4. Die SQLite-Verbindung im Python-Backend öffnet die Datei immer mit `uri=True, mode=ro` (`file:...data.sqlite?mode=ro`).
+
+### 4.3 In-Memory 24h Sensor-Ringbuffer
+- Ein dedizierter `deque(maxlen=8760)` speichert alle 10 Sekunden einen Snapshot von PiMMEL (`ts, cpu, ram, temp, disk, load1`).
+- Bereitstellung für Zeiträume `10m`, `30m`, `1h`, `12h`, `24h` analog zum bestehenden lokalen `history_store`.
+
+---
+
+## 5. Backend REST-API Schnittstellenspezifikation (`app.py`)
+
+Die folgenden Endpunkte werden in `app.py` registriert und greifen auf die `pimmel_service`-Instanz zu:
+
+| Endpunkt | Methode | Parameter | Beschreibung |
+|---|---|---|---|
+| `/api/pimmel/status` | `GET` | Keine | Gibt aktuellen Status des Nodes, Host-Vitals, Service-Status und 9Router-Summen zurück. |
+| `/api/pimmel/history` | `GET` | `range` (`10m`, `30m`, `1h`, `12h`, `24h`) | Liefert Zeitreihen-Array der Sensordaten von PiMMEL für den LCARS-Sensorchart. |
+| `/api/pimmel/9router` | `GET` | Keine | Liefert detaillierte 9Router-Daten: `totals`, `by_provider`, `by_model`, `daily_timeline`, `recent_history`, `connections`. |
+| `/api/pimmel/logs` | `GET` | `lines` (optional, default 50, max 200) | Gibt die letzten PM2-Ausgabelogs von 9Router mit Zeilenanzahl und Metadaten zurück. |
+| `/api/pimmel/sync` | `POST` | Keine | Triggert eine sofortige asynchrone Re-Synchronisation der SQLite-Datenbank und Telemetrie. |
+
+### 5.1 Beispielhafte Antwortstruktur `/api/pimmel/status`:
+```json
+{
+  "node": {
+    "hostname": "PiMMEL",
+    "ip": "100.88.215.98",
+    "online": true,
+    "last_sync": "2026-09-21T18:34:45+02:00",
+    "last_error": null
+  },
+  "host_metrics": {
+    "cpu": { "percent": 3.8, "cores": 4 },
+    "load": { "1m": 0.15, "5m": 0.10, "15m": 0.05, "cores": 4 },
+    "ram": { "total": 8243306496, "used": 1788481536, "free": 6454824960, "percent": 21.7, "used_gb": "1.66 GB", "total_gb": "7.68 GB" },
+    "disk": { "total": 61840048128, "used": 41226698752, "free": 20613349376, "percent": 66.7, "used_gb": "38.39 GB", "total_gb": "57.59 GB" },
+    "temp": { "value": 41.9, "display": "41.9 °C" },
+    "uptime": { "seconds": 11520, "display": "3 Std 12 Min", "boot_time": "2026-09-21 15:22:00" },
+    "services": {
+      "hermes_gateway": { "status": "active", "display": "ONLINE // RUNNING", "type": "systemd-user" },
+      "pm2_9router": { "status": "online", "pid": 6748, "pm_id": 0, "restarts": 2, "cpu": 0.9, "memory_mb": 158.1, "version": "0.5.75" }
+    }
+  },
+  "nine_router_summary": {
+    "total_requests": 2154,
+    "total_tokens_formatted": "34.8M",
+    "prompt_tokens_formatted": "32.1M",
+    "completion_tokens_formatted": "2.7M",
+    "cached_tokens_formatted": "28.4M",
+    "cache_hit_rate_formatted": "88.5%",
+    "cost_formatted": "$6.4215",
+    "saved_cost_formatted": "$14.8200",
+    "saved_cost_pct_formatted": "69.7%"
+  }
+}
+```
+
+---
+
+## 6. LCARS Frontend UI-Spezifikation (`DASHBOARD_HTML`)
+
+### 6.1 Navigation & Pillar-Integration
+- **Nav-Pill-Button**:
+  ```html
+  <button class="lcars-pill-btn pill-pimmel" onclick="switchCategory('pimmel')" id="btn-cat-pimmel">
+    PIMMEL
+  </button>
+  ```
+- **CSS-Klasse**: `.pill-pimmel` erhält einen charakteristischen LCARS-Farbton (z. B. `--c-secondary` / `#baa4e5` oder `--c-blue` / `#8899ff`) mit passendem Hover- und Aktivzustand.
+- **Titel-Banner**: `CATEGORY_NAMES['pimmel'] = 'REMOTE NODE // PIMMEL ODN-HUB (100.88.215.98)'`.
+
+### 6.2 Struktur der Sektion `#section-pimmel`
+Die Sektion wird in logische LCARS-Bereiche unterteilt:
+
+```
++-----------------------------------------------------------------------------------------+
+| [HEADER] REMOTE NODE // PIMMEL (100.88.215.98)   [STATUS: ONLINE] [⟳ REFRESH] [SYNC DB]|
++-----------------------------------------------------------------------------------------+
+| [READOUT GRID 1: PIMMEL HOST VITALS]                                                    |
+|  [ CPU 3.8% ] [ RAM 21.7% ] [ TEMP 41.9°C ] [ DISK 66.7% ] [ UPTIME ] [ HERMES ] [ 9R ]|
++-----------------------------------------------------------------------------------------+
+| [READOUT GRID 2: 9ROUTER TELEMETRIE TILES]                                              |
+|  [ REQUESTS ] [ TOKEN VOLUMEN ] [ CACHE ERSPARNIS ] [ GESAMTKOSTEN ] [ PROVIDER AKTIV ] |
++-----------------------------------------------------------------------------------------+
+| [GRAFISCHE ANALYSE: DUAL CHARTS]                                                        |
+|  +---------------------------------------+  +-----------------------------------------+ |
+|  | PIMMEL 24H SENSOR HISTORIE            |  | 9ROUTER MODELL-TOKEN VERTEILUNG         | |
+|  | [10m][30m][1h][12h][24h] [CPU][RAM][T]|  | (Doughnut Chart: GPT, Claude, Codex)    | |
+|  | (Chart.js Line Canvas)                |  |                                         | |
+|  +---------------------------------------+  +-----------------------------------------+ |
++-----------------------------------------------------------------------------------------+
+| [9ROUTER TRANSMISSIONS-HISTORIE & TOKEN-FLOW]                                           |
+|  (Stacked Bar/Line Chart: Täglicher Verlauf Requests, Prompt/Cached/Compl, Kosten)     |
++-----------------------------------------------------------------------------------------+
+| [9ROUTER TRANSMISSIONS-LOG // LETZTE REQUESTS TABELLE]                                  |
+|  ID | ZEITPUNKT | PROVIDER | MODELL | PROMPT | COMPL | CACHED | TOTAL | KOSTEN | STATUS|
++-----------------------------------------------------------------------------------------+
+| [PM2 9ROUTER LIVE CONSOLE LOGS (~/.pm2/logs/9router-out.log)]                           |
+|  [AUTO-SCROLL ON/OFF] [ZEILEN: 30/60/100]                                               |
+|  > [16:49:15] 🔴 ▶ POST cx/gpt-5.6-luna → codex/gpt-5.6-luna ...                        |
+|  > [16:49:20] 🔴 📊 DONE 4605ms · TTFT 1579ms · IN 16261 (CACHE ↻15872) · OUT 159       |
++-----------------------------------------------------------------------------------------+
+```
+
+### 6.3 Details zu den UI-Komponenten
+
+#### 1. Host-Vitals Cards
+- **CPU & Load Average**: Zeigt prozentuale Last, Kerne und Tooltip mit Load-Average (1m/5m/15m).
+- **RAM**: Füllstandsbalken mit genauer Angabe `1.66 GB / 7.68 GB`.
+- **SoC Temperatur**: Visuelle LCARS-Farbcodierung (<50°C Normal/Grün, 50-70°C Gelb/Orange, >70°C Alarm/Rot).
+- **Disk Root**: Füllstandsanzeige der SD-Karte / NVMe-Storage.
+- **Hermes Gateway Badge**: Statusbadge grün bei `ACTIVE (RUNNING)` oder rot bei `INACTIVE / FAILED`.
+- **PM2 9Router Badge**: PM2-Instanzstatus, Memory-Verbrauch, Restarts und Version.
+
+#### 2. 9Router Telemetrie
+- Aggregiert aus der synchronisierten SQLite-Datenbank:
+  - Total Requests
+  - Total Tokens (unterteilt in Prompt, Completion und Cached)
+  - Cache-Hit-Quote (z. B. `88.5%`) und berechnete Dollar-Ersparnis
+  - Gesamt-Routingkosten im Vergleich zu den ungecachten Basiskosten
+  - Aktive Provider-Verbindungen
+
+#### 3. Interaktiver PM2 Log Viewer
+- Styled im LCARS Terminal-Look (Monospace-Schriftart `Share Tech Mono`, dunkler Hintergrund, LCARS-Orange/Cyan Akzentrahmen).
+- Parser hebt spezifische 9Router-Logmuster hervor:
+  - `POST ...` -> Akzentuiertes Cyan / Gold.
+  - `DONE ...ms` -> Grüner Status.
+  - `CACHE ↻...` -> Leuchtendes Blau.
+  - Fehler / Timeouts -> Rote Warnmarkierung.
+- Buttons für `Auto-Scroll Umschaltung` und `Manuelles Neuladen`.
+
+---
+
+## 7. Client-seitige JavaScript-Engine
+
+### 7.1 Lifecycle & Polling
+- In `fetchLiveStats()`: Wenn `currentCategory === 'pimmel'`, wird automatisch `fetchPimmelStats(false)` aufgerufen.
+- Beim Tab-Wechsel in `switchCategory(catId)`:
+  ```javascript
+  if (catId === 'pimmel') {
+    fetchPimmelStats(true);
+    setTimeout(() => {
+      if (pimmelHistoryChart) pimmelHistoryChart.resize();
+      if (pimmelModelChart) pimmelModelChart.resize();
+      if (pimmelTimelineChart) pimmelTimelineChart.resize();
+      initPimmelCharts();
+    }, 60);
+  }
+  ```
+
+### 7.2 Chart-Initialisierung & Fallback
+- `initPimmelCharts()`:
+  - `initPimmelHistoryChart(range)`: Dual Chart.js + nativer LCARS-Canvas für Sensordaten.
+  - `initPimmelModelChart(data)`: Doughnut-Chart der Modell-Verteilung auf PiMMEL.
+  - `initPimmelTimelineChart(data)`: Stacked Bar Chart mit sekundärer Y-Achse für Kosten.
+
+---
+
+## 8. Konfiguration & Berechtigungs-Management
+
+### 8.1 Erweiterung in `config.json`
+```json
+{
+  "pimmel_node": {
+    "enabled": true,
+    "ssh_host": "pimmel",
+    "ip": "100.88.215.98",
+    "poll_interval_seconds": 10,
+    "sync_interval_seconds": 30,
+    "remote_db_path": "/home/yash/.9router/db/data.sqlite",
+    "remote_log_path": "/home/yash/.pm2/logs/9router-out.log",
+    "cache_db_path": "data_cache/pimmel_9router.sqlite"
+  }
+}
+```
+
+### 8.2 Anpassung in `permissions_service.py`
+- Hinzufügen von `"pimmel"` zu `VALID_SECTIONS`.
+- Das Dashboard kann die Sektion bei Bedarf analog zu `pulsecast` oder `gemini_live` über den Command Code `0901` absichern.
+
+---
+
+## 9. Risiken, Edge-Cases & Sicherheitsmaßnahmen
+
+| Risiko / Randfall | Ursache | Vermeidungsstrategie |
+|---|---|---|
+| **SSH-Timeout / Nicht-Erreichbarkeit** | PiMMEL ist im Standby, Tailscale unterbrochen oder Node rebootet | SSH-Befehle werden mit `-o ConnectTimeout=3 -o BatchMode=yes` und striktem Timeout ausgeführt. Im Fehlerfall meldet der Service `status: "offline"`, ohne den Flask-Webserver oder das Dashboard zu blockieren. Die UI zeigt ein amber/rotes LCARS-Verbindungswarnbanner. |
+| **SQLite Lock-Konflikte (Concurrency)** | 9Router auf PiMMEL schreibt während rsync synchronisiert | Remote-Datenbank läuft im WAL-Modus (`data.sqlite-wal`). Die lokale Kopie wird read-only geöffnet (`mode=ro`). Bei Lese-Exceptions greift ein Retry mit kurzem Backoff. |
+| **CPU-Last auf dem Raspberry Pi** | Zu häufige SSH-Sessions erzeugen CPU-Spitzen auf PiMMEL | Konsolidierung aller Systemdaten, PM2-Status und Logs in einen einzigen Python-Aufruf alle 10 Sekunden; rsync nur alle 30–60 Sekunden. |
+| **Gleichzeitiges Polling / Race Conditions** | Mehrere Browser-Clients rufen gleichzeitig `/api/pimmel/status` auf | `PimmelService` pollt im Hintergrund unabhängig von HTTP-Requests. HTTP-Endpunkte lesen ausschließlich aus dem In-Memory-Cache des Singletons (`cache_ttl = 3.0s`). |
+| **Log-Datei Überlauf** | `9router-out.log` wächst über Zeit stark an | Es wird per `tail -n 60` immer nur das Dateiende gestreamt, keine Übertragung des gesamten Logfiles. |
+
+---
+
+## 10. Detaillierter Implementierungs- und Verifikationsplan
+
+### Phase 1: Service-Modul `pimmel_service.py`
+1. Erstellung des Service-Moduls `pimmel_service.py` mit:
+   - Hintergrund-Worker `_poller_worker` (SSH-Metriken & Logs).
+   - Hintergrund-Worker `_sync_worker` (rsync der SQLite-Datenbank in `data_cache/`).
+   - SQLite-Analyse-Funktion für `usageDaily`, `usageHistory`, `providerConnections` und Ersparnisberechnung.
+   - Ringbuffer für 24h-Sensorhistorie.
+2. Erstellung eines Test- und Verifikationsskripts `test_pimmel_service.py`:
+   - Prüfung von SSH-Zugang, Datenabruf, SQLite-Caching und JSON-Serialisierung.
+
+### Phase 2: Konfiguration & Zugriffsschutz
+1. Integration von `"pimmel"` in `permissions_service.py` (`VALID_SECTIONS`).
+2. Konfigurationseintrag `"pimmel_node"` in `config.json`.
+3. Validierung via `python3 -c "import permissions_service; print(permissions_service.VALID_SECTIONS)"`.
+
+### Phase 3: Flask Backend API-Routen in `app.py`
+1. Import von `pimmel_service` in `app.py`.
+2. Registrierung der Routen:
+   - `/api/pimmel/status`
+   - `/api/pimmel/history`
+   - `/api/pimmel/9router`
+   - `/api/pimmel/logs`
+   - `/api/pimmel/sync`
+3. Abdeckung im HTTP-Discovery / Scanner falls gewünscht.
+
+### Phase 4: LCARS UI & DOM in `DASHBOARD_HTML`
+1. Hinzufügen des Nav-Pills `btn-cat-pimmel` in `.nav-pillar`.
+2. Eintrag in `CATEGORY_NAMES`.
+3. Implementierung des Sektions-Containers `<section class="lcars-section" id="section-pimmel">`:
+   - Header Bar & Status-Indikatoren.
+   - Readout-Grid für Pimmel-Host-Vitals.
+   - Readout-Grid für 9Router-Telemetrie.
+   - Canvas-Container für Sensor-History und Modell-Doughnut.
+   - 9Router-Transmissions-Historie Chart.
+   - Letzte Transaktionen Tabelle aus `usageHistory`.
+   - Live PM2 9Router Console Log Terminal.
+
+### Phase 5: Client-seitiges JavaScript & Chart-Rendering
+1. Implementierung von `fetchPimmelStats(playSound)`.
+2. Integration in `switchCategory('pimmel')` und automatische Chart-Größenanpassung.
+3. Implementierung der Chart-Initialisierungs- und Update-Funktionen (`initPimmelHistoryChart`, `initPimmelModelChart`, `initPimmelTimelineChart`).
+4. Implementierung des Terminal-Log-Renderers mit LCARS-Farbformatierung.
+
+### Phase 6: Verifikation & Systemtests
+1. **Statische Code- & Syntaxprüfung**:
+   - `python3 -m py_compile app.py pimmel_service.py permissions_service.py` (0 Syntaxfehler).
+   - Extraktion und Prüfung aller JavaScript-Blöcke via `node --check` (0 Syntaxfehler).
+2. **API-Endpunkttests**:
+   - Direkter Aufruf aller 5 Endpunkte (`/api/pimmel/status`, `/history`, `/9router`, `/logs`, `/sync`) mit Validierung der Rückgabewerte.
+3. **UI-Interaktionstests**:
+   - Navigation auf die PIMMEL-Sektion: Verifikation der Sichtbarkeit, LCARS-Beep-Sounds und korrekter Tabellen- und Chart-Renderings.
+   - Umschaltung der Sensor-Zeitbereiche (10m, 30m, 1h, 12h, 24h).
+   - Prüfung des Log-Streamers und der Auto-Scroll-Funktion.
+4. **Stresstest & Resilienz**:
+   - Simulation eines temporären Verbindungsverlusts (z. B. erzwungener SSH-Timeout).
+   - Verifikation, dass das Dashboard stabil bleibt und den Offline-Status anzeigt.
+5. **Systemd-Service Verifikation**:
+   - Neustart des Dienstes: `systemctl --user restart agydashboard.service`.
+   - Prüfung von `systemctl --user status agydashboard.service` und `journalctl --user -u agydashboard.service -n 50`.
