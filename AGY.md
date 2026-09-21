@@ -2111,3 +2111,533 @@ Die Sektion wird in logische LCARS-Bereiche unterteilt:
 5. **Systemd-Service Verifikation**:
    - Neustart des Dienstes: `systemctl --user restart agydashboard.service`.
    - Prüfung von `systemctl --user status agydashboard.service` und `journalctl --user -u agydashboard.service -n 50`.
+
+---
+
+# Architektur- und Implementierungsplan: ESPN Fantasy KI-Manager
+
+## 1. Zielsetzung & Funktionsumfang
+
+Das LCARS Dashboard (`agydashboard`) verfügt über eine aktive Live-Anbindung an die private ESPN Fantasy Football API v3 für die Liga **"Incomplete Pass"** (16 Teams, Liga-ID `378649793`, Team-ID `17`, Saison `2026`). Das bestehende System liest Matchup-, Roster-, Punkte- und Tabellendaten aus und steuert bei Score-Erhöhungen ein Home-Assistant-Lichtsignal (`light.esstisch`).
+
+Dieses Feature transformiert die ESPN Fantasy Integration von einem rein passiven Display zu einem intelligenten, proaktiven **KI-Manager** mit einem **3-Stufen-Modus-Schalter**:
+
+```
+[ MANUAL ] ──▶ [ SEMI-AI ] ──▶ [ FULL-AI ]
+```
+
+### Die drei Betriebsmodi im Detail:
+1. **`manual` (Passiv / Monitor)**:
+   - Reines Monitoring von Live-Scores, Kader und Tabellen.
+   - Keine automatischen Analysen oder Transaktionen.
+   - Kein Schreibzugriff auf die ESPN API.
+2. **`semi` (Co-Pilot / Vorschlagsmodus)**:
+   - Die KI analysiert periodisch vor Spieltagen (Dienstag nach Waiver, Donnerstag vor TNF, Sonntag vor Kickoffs, Montag vor MNF) das eigene Team, den Gegner, Verletzungsberichte und freie Spieler.
+   - Bei erkannten Handlungsbedarfen (z.B. Starter verletzt, deutliche Matchup-Vorteile auf der Bank) generiert die KI konkrete Start/Sit- oder Waiver-Vorschläge inklusive Begründung und Konfidenz-Score.
+   - Der Vorschlag wird per Telegram gemeldet und im LCARS Dashboard als auffälliges Interaktions-Banner dargestellt.
+   - Keine automatische Ausführung: Die Transaktion wird erst nach expliziter Bestätigung durch den Benutzer (`[ FREIGEBEN & AUSFÜHREN ]`) an ESPN übermittelt.
+3. **`full` (Autonomer Agent)**:
+   - Die KI überwacht selbstständig die Kickoff-Zeitfenster aller aktiven Spieler (T-60 Min, T-30 Min, T-10 Min).
+   - Bei verletzten Spielern (`OUT`, `INJURY_RESERVE`, `DOUBTFUL`) oder taktischen Vorteilen tauscht die KI autonom den Starter gegen den optimalen gesunden Bankspieler aus.
+   - Jeder Move durchläuft vor der Übermittlung an `lm-api-writes` eine strikte Safeguard-Validierungsmatrix (Lock-Status, Slot-Eligibility, IR-Regeln).
+   - Nach erfolgreicher Ausführung sendet der Manager eine Erfolgs- und Statusmeldung mit Begründung via Telegram und protokolliert die Aktion im LCARS Audit-Trail.
+
+---
+
+## 2. Systemarchitektur & Interaktionsfluss
+
+### 2.1 Gesamtsystem-Übersicht
+
+```mermaid
+flowchart TD
+    subgraph LCARS ["LCARS Dashboard (Frontend)"]
+        UI_Switch["3-Stufen Modus-Schalter\n[MANUAL | SEMI | FULL]"]
+        UI_Banner["Vorschlags-Banner (Semi-Modus)\n[Freigeben / Verwerfen]"]
+        UI_Card["ESPN Fantasy Card\n(Matchup, Roster, KI-Status)"]
+        UI_Audit["KI-Audit & History Drawer"]
+    end
+
+    subgraph Backend ["agydashboard Backend (Flask & Daemon)"]
+        API_Mode["/api/espn/mode\n(GET / POST)"]
+        API_Proposals["/api/espn/proposals\n(GET / POST apply/dismiss)"]
+        API_Analyze["/api/espn/analyze\n(POST On-Demand)"]
+        ConfigMgr["Config Manager\n(config.json)"]
+        Scheduler["Hintergrund-Scheduler\n(EspnAiScheduler in espn_service.py)"]
+        DecisionEngine["KI-Entscheidungs-Engine\n(Gemini 3.8 Flash via 9Router)"]
+        Safeguards["Safeguard- & Validierungsmatrix"]
+        WriteClient["ESPN Transaction Client\n(lm-api-writes)"]
+    end
+
+    subgraph AI ["9Router & LLM Hub (Port 20128)"]
+        NineRouter["9Router Proxy (http://127.0.0.1:20128)"]
+        GeminiFlash["ag/gemini-3.8-flash-high"]
+    end
+
+    subgraph External ["Externe APIs & Kommunikationskanäle"]
+        ESPN_R["ESPN Read API\nlm-api-reads.fantasy.espn.com"]
+        ESPN_W["ESPN Write API\nlm-api-writes.fantasy.espn.com"]
+        TelegramGate["Telegram / Hermes-Gateway (PiMMEL)"]
+        HA["Home Assistant\n(light.esstisch Flash)"]
+    end
+
+    UI_Switch -->|POST /api/espn/mode| API_Mode
+    API_Mode --> ConfigMgr
+    Scheduler -->|Kickoff-Timer / Intervall| DecisionEngine
+    DecisionEngine -->|Lese aktuellen Kader & Gegner| ESPN_R
+    DecisionEngine -->|Structured Prompt| NineRouter
+    NineRouter --> GeminiFlash
+    GeminiFlash -->|JSON Recommendation| DecisionEngine
+    DecisionEngine --> Safeguards
+    
+    Safeguards -->|Modus SEMI: Vorschlag speichern| API_Proposals
+    API_Proposals --> UI_Banner
+    Safeguards -->|Modus SEMI: Benachrichtigung| TelegramGate
+    UI_Banner -->|Klick: Freigeben| API_Proposals
+    API_Proposals --> WriteClient
+
+    Safeguards -->|Modus FULL: Autonom ausführen| WriteClient
+    WriteClient -->|POST ROSTER Transaction| ESPN_W
+    WriteClient -->|Aktionsbericht| TelegramGate
+    WriteClient --> UI_Audit
+```
+
+### 2.2 Sequenzdiagramm: Semi-Modus (Vorschlag & Freigabe)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Commander (User)
+    participant LCARS as LCARS Dashboard
+    participant Backend as Flask API & Service
+    participant 9Router as 9Router (Port 20128)
+    participant ESPN as ESPN API
+    participant Telegram as Telegram Bot / Hermes
+
+    Backend->>Backend: Scheduler erkennt bevorstehenden Spieltag (z.B. So 18:00)
+    Backend->>ESPN: Lese Kader, Gegner & Verletzungsstatus
+    ESPN-->>Backend: Roster-Daten (Nico Collins = OUT)
+    Backend->>9Router: Prompt mit Kader, Matchup & Projektionen
+    9Router-->>Backend: JSON: Empfehle Swap Nico Collins -> Jameson Williams
+    Backend->>Backend: Safeguards prüfen (Slots, Lock-Zeiten, IR): VALID
+    Backend->>Backend: Speichere Proposal in espn_proposals.json
+    Backend->>Telegram: Sende Vorschlag mit Details & LCARS-Link
+    Telegram-->>User: Push-Nachricht erhalten
+    User->>LCARS: Öffnet Sektion FANTASY
+    LCARS->>Backend: GET /api/espn/proposals
+    Backend-->>LCARS: Aktiver Vorschlag
+    LCARS->>User: Zeigt goldenes Vorschlags-Banner
+    User->>LCARS: Klick auf [ FREIGEBEN & AUSFÜHREN ]
+    LCARS->>Backend: POST /api/espn/proposals/<id>/apply
+    Backend->>ESPN: POST /transactions/ (executionType: EXECUTE)
+    ESPN-->>Backend: HTTP 200 OK (Transaktion bestätigt)
+    Backend->>LCARS: Status: ERFOLGREICH
+    Backend->>Telegram: "✅ Move erfolgreich ausgeführt"
+```
+
+### 2.3 Sequenzdiagramm: Full-Modus (Autonomer Kickoff-Schutz)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Scheduler as Kickoff-Scheduler
+    participant Engine as Safeguard- & KI-Engine
+    participant 9Router as 9Router (Gemini 3.8 Flash)
+    participant ESPN_W as ESPN lm-api-writes
+    participant Telegram as Telegram Benachrichtigung
+
+    Scheduler->>Engine: Kickoff-Check T-15 Minuten vor NFL-Spielen
+    Engine->>Engine: Prüfe Starter auf Verletzungen (OUT / IR / DOUBTFUL)
+    alt Starter ist verletzt (z.B. RB2 Chuba Hubbard OUT)
+        Engine->>9Router: Ermittle besten Ersatzspieler auf der Bank
+        9Router-->>Engine: Vorschlag: Ty Johnson (RB) starten
+        Engine->>Engine: Safeguards: Ty Johnson nicht gelockt? Slot berechtigt?
+        Engine->>ESPN_W: Dry-Run (executionType: VALIDATE)
+        ESPN_W-->>Engine: HTTP 200 OK
+        Engine->>ESPN_W: Live-Ausführung (executionType: EXECUTE)
+        ESPN_W-->>Engine: Transaktion verarbeitet
+        Engine->>Engine: Schreibe Audit-Log in espn_decision_log.json
+        Engine->>Telegram: "🏈 [FULL-AUTONOM] Kickoff-Optimierung: Chuba Hubbard (OUT) durch Ty Johnson ersetzt."
+    else Alle Starter fit & aktiv
+        Engine->>Engine: Keine Aktion erforderlich, Lineup optimal
+    end
+```
+
+---
+
+## 3. Konfiguration & Datenmodell
+
+### 3.1 Erweiterung in `config.json`
+Die Sektion `espn_fantasy` in `/home/cb/Projects/agydashboard/config.json` wird um die Modus- und KI-Steuerungsparameter erweitert:
+
+```json
+{
+  "espn_fantasy": {
+    "enabled": true,
+    "league_id": 378649793,
+    "team_id": 17,
+    "season_year": 2026,
+    "swid": "{553C1E20-D00A-4967-8DEB-7B50CB7C5914}",
+    "espn_s2": "AEAgQbeHCIrgaePAfzf1jGiVgIXZHv1%2Fb%2FMKQqE5y3o%2BikszTjFrlNubnn6zhkwFO44Mmgeyp0I67iLVPFdi8rMZ35Ybn791r%2Bme9n7RhB4xwWMFeRGYA8aY7cBwOK%2FluIRBBkatk98g9Jr2GKcumt8l%2F0EfaY9woFIjTVciAlkduD6992NYqolAklw6xbENwSj66vG563%2FOqer82hZ%2BcnrnjlVNNSbwp0dfGVqCPjSSiR68ALYIqWju2lWVkC0jCh1oIasi2lO1B6biDYDQ9IUv8nQdGhmhpJgikUEkidht1ZRV4xKkZSLfnVqkSNXULY6aNzYwDRe414TgfTBOdYsa",
+    "flash_light": "light.esstisch",
+    "flash_duration": 1.2,
+    "flash_enabled": true,
+    "poll_interval": 35,
+    "mode": "manual",
+    "ai_model": "ag/gemini-3.8-flash-high",
+    "kickoff_check_buffer_minutes": 15,
+    "telegram_notifications": true,
+    "telegram_bot_token": "",
+    "telegram_chat_id": ""
+  }
+}
+```
+
+### 3.2 Persistente Zustandsdateien
+1. **`espn_proposals.json`**:
+   Speichert aktive, noch nicht bearbeitete Vorschläge im `semi`-Modus:
+   ```json
+   {
+     "active_proposals": [
+       {
+         "id": "prop_20260921_w2_01",
+         "created_at": 1790025600,
+         "week": 2,
+         "status": "pending",
+         "reason": "Nico Collins ist offiziell OUT. Jameson Williams bietet das höchste Upside auf WR/FLEX.",
+         "confidence": 0.94,
+         "moves": [
+           {
+             "player_in_id": 4426515,
+             "player_in_name": "Jameson Williams",
+             "from_slot": 20,
+             "to_slot": 4
+           },
+           {
+             "player_out_id": 4430878,
+             "player_out_name": "Nico Collins",
+             "from_slot": 4,
+             "to_slot": 20
+           }
+         ]
+       }
+     ]
+   }
+   ```
+2. **`espn_decision_log.json`**:
+   Audit-Trail aller analysierten und ausgeführten Aktionen für Transparenz im Dashboard.
+
+---
+
+## 4. ESPN API Interaktion: Roster Moves & Lineup Updates
+
+### 4.1 Endpunkt & Autorisierung
+Für schreibende Transaktionen nutzt die ESPN Fantasy Plattform die dedizierte Write-Domain:
+- **URL**: `https://lm-api-writes.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}/segments/0/leagues/{league_id}/transactions/`
+- **Methode**: `POST`
+- **Header**:
+  ```http
+  Content-Type: application/json
+  Accept: application/json
+  User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+  Cookie: SWID={swid}; espn_s2={espn_s2};
+  ```
+
+### 4.2 Transaktions-Payload für Start/Sit Lineup-Swaps
+Ein Spielerwechsel zwischen Startaufstellung und Bank erfordert immer **zwei Items** (eingehender und ausgehender Spieler):
+
+```json
+{
+  "isLeagueManager": false,
+  "teamId": 17,
+  "type": "ROSTER",
+  "scoringPeriodId": 2,
+  "executionType": "EXECUTE",
+  "items": [
+    {
+      "playerId": 4426515,
+      "type": "LINEUP",
+      "fromLineupSlotId": 20,
+      "toLineupSlotId": 4
+    },
+    {
+      "playerId": 4430878,
+      "type": "LINEUP",
+      "fromLineupSlotId": 4,
+      "toLineupSlotId": 20
+    }
+  ]
+}
+```
+
+### 4.3 Slot-ID Referenztabelle (ESPN Fantasy Football)
+| Slot ID | Label | Berechtigte Positionen / Bedeutung |
+|---|---|---|
+| `0` | **QB** | Quarterback (`POS 1`) |
+| `1` | **TQB** | Team Quarterback |
+| `2` | **RB** | Running Back (`POS 2`) |
+| `3` | **RB/WR** | Running Back oder Wide Receiver |
+| `4` | **WR** | Wide Receiver (`POS 3`) |
+| `5` | **WR/TE** | Wide Receiver oder Tight End |
+| `6` | **TE** | Tight End (`POS 4`) |
+| `7` | **OP** | Offensive Player / Superflex (QB/RB/WR/TE) |
+| `16` | **D/ST** | Defense / Special Teams (`POS 16`) |
+| `17` | **K** | Kicker (`POS 5`) |
+| `20` | **BENCH** | Bank (inaktiv für Punktwertung) |
+| `21` | **IR** | Injured Reserve (nur für `OUT` / `INJURY_RESERVE`) |
+| `23` | **FLEX** | Flex-Position (RB/WR/TE) |
+
+### 4.4 Dry-Run Prüfung via `VALIDATE`
+Vor jeder echten Ausführung kann der Payload mit `"executionType": "VALIDATE"` gesendet werden. ESPN führt eine serverseitige Konsistenzprüfung durch (z.B. Gültigkeit der Slots, Sperrstatus) und liefert Status 200 zurück, ohne die Aufstellung tatsächlich zu verändern.
+
+---
+
+## 5. KI-Entscheidungs-Engine (9Router / Gemini 3.8 Flash)
+
+### 5.1 Infrastruktur & Modell
+- **Gateway**: Lokaler 9Router Proxy auf Port `20128` (`http://127.0.0.1:20128/v1/chat/completions`).
+- **Primärmodell**: `ag/gemini-3.8-flash-high` (hohe analytische Tiefe, minimale Latenz, exzellente Befolgung von JSON-Schemas).
+- **Fallback**: Bei Unerreichbarkeit des 9Routers greift ein regelbasierter Notfall-Optimizer (Heuristik).
+
+### 5.2 Prompt-Konstruktion & Kontext
+Der Prompt übergibt dem LLM das vollständige Bild:
+1. Eigene Aufstellung gegliedert nach Startern, Bank und IR mit:
+   - `name`, `pro_team`, `slot`, `injuryStatus` (`ACTIVE`, `QUESTIONABLE`, `DOUBTFUL`, `OUT`, `INJURY_RESERVE`)
+   - `actualPoints`, `projectedPoints`, `eligibleSlots`, `lineupLocked`
+2. Matchup-Status: Eigener Score & Projektion vs. Gegner Score & Projektion, Siegchance.
+3. Kickoff-Zeiten der NFL-Partien aus `proGamesByScoringPeriod`.
+
+### 5.3 System Prompt & Structured Output Schema
+```json
+{
+  "system_instruction": "Du bist der Starfleet LCARS Fantasy Football Taktik-Offizier der USS Antigravity. Analysiere das Kader nach strengen sportwissenschaftlichen und mathematischen Kriterien. Ein verletzter Starter mit Status OUT oder INJURY_RESERVE MUSS IMMER gegen einen fitten Bankspieler ausgetauscht werden. Nutze für Moves nur Spieler, die noch nicht gelockt sind (lineupLocked == false) und deren eligibleSlots mit dem Ziel-Slot übereinstimmen. Antworte ausschließlich mit einem validen JSON-Objekt.",
+  "response_format": {
+    "type": "json_object"
+  }
+}
+```
+
+**JSON Output Schema**:
+```json
+{
+  "assessment": "Strategische Kurzzusammenfassung der Lage",
+  "win_probability_impact": "+4.2%",
+  "recommended_moves": [
+    {
+      "action": "SWAP",
+      "player_in_id": 4426515,
+      "player_in_name": "Jameson Williams",
+      "from_slot_in": 20,
+      "to_slot_in": 4,
+      "player_out_id": 4430878,
+      "player_out_name": "Nico Collins",
+      "from_slot_out": 4,
+      "to_slot_out": 20,
+      "rationale": "Nico Collins ist offiziell OUT. Williams hat ein vorteilhaftes Matchup.",
+      "projected_gain": 11.8
+    }
+  ],
+  "waiver_targets": [],
+  "confidence": 0.95
+}
+```
+
+### 5.4 Regelbasierter Notfall-Fallback
+Sollte der 9Router oder die KI temporär ausfallen (z.B. Offline-Netzwerk, HTTP 502), wird der `full`-Modus nicht blockiert:
+- **Heuristische Regel**:
+  Wenn ein Starter den Status `OUT` oder `INJURY_RESERVE` hat, sucht die Heuristik auf der Bank nach dem fitten Spieler (`ACTIVE` oder `QUESTIONABLE`), der den passenden `eligibleSlot` besitzt und die **höchste offizielle ESPN-Projektion** aufweist. Dieser wird als Notfall-Wechsel eingereicht.
+
+---
+
+## 6. Risiken, Safeguards & Validierungs-Engine
+
+Um fatale Fehlentscheidungen, ungültige Roster-Zustände oder Disqualifikationen in der Liga auszuschließen, ist der Ausführung eine mehrstufige Safeguard-Engine vorgeschaltet:
+
+```mermaid
+flowchart TD
+    Start[Vorgeschlagener Roster Move] --> C1{Kickoff erfolgt oder\nlineupLocked == true?}
+    C1 -- Ja --> E1[ABBRUCH: Spieler ist gelockt\nKeine Transaktion möglich]
+    C1 -- Nein --> C2{toLineupSlotId in\nplayer.eligibleSlots?}
+    C2 -- Nein --> E2[ABBRUCH: Ungültiger Slot\nPositions-Inkompatibilität]
+    C2 -- Ja --> C3{Ist Ziel-Slot == 21 IR?}
+    C3 -- Ja --> C4{Hat Spieler injuryStatus\nOUT oder INJURY_RESERVE?}
+    C4 -- Nein --> E3[ABBRUCH: Gesunder Spieler\ndarf nicht auf IR gesetzt werden]
+    C4 -- Ja --> C5
+    C3 -- Nein --> C5{Prüfung Gegenpart:\nWird verletzter Starter ersetzt?}
+    C5 --> C6{Pre-Flight Dry Run:\nexecutionType == VALIDATE}
+    C6 -- ESPN meldet Fehler (z.B. 400/401) --> E4[ABBRUCH & ALERT: Transaktion abgelehnt]
+    C6 -- ESPN meldet 200 OK --> OK[FREIGABE: Ausführung an ESPN lm-api-writes]
+```
+
+### 6.1 Die Kern-Safeguards im Detail:
+1. **Lineup Lock Safeguard (Gestartete Spiele)**:
+   - Die ESPN API liefert in `playerPoolEntry` das native Flag `lineupLocked: true/false`.
+   - Zusätzlich wird der Kickoff-Timestamp des NFL-Teams (`proGamesByScoringPeriod.date`) geprüft. Liegt dieser in der Vergangenheit oder weniger als 60 Sekunden in der Zukunft, wird der Move strikt verweigert.
+2. **Positions- & Slot-Eligibility Safeguard**:
+   - Die Liste `player.eligibleSlots` definiert verbindlich, welche Positionen ein Spieler bekleiden kann. Ein Move auf einen Slot, der nicht in diesem Array enthalten ist, wird im Vorfeld blockiert.
+3. **IR-Slot Schutz**:
+   - Ein gesunder Spieler auf einem IR-Slot (Slot 21) markiert das Roster in ESPN als "Ineligible Roster" und blockiert alle nachfolgenden Transaktionen. Daher darf ein Spieler nur dann auf IR geschoben werden, wenn `injuryStatus in ["OUT", "INJURY_RESERVE"]` zutrifft.
+4. **Rate Limiting & Cooldown**:
+   - Zwischen zwei Transaktionen wird ein Mindestabstand von 10 Sekunden erzwungen.
+   - Pro Spieltag sind maximal 5 autonome Swaps im `full`-Modus erlaubt, um Endlos-Schleifen bei Scoring-Schwankungen zu unterbinden.
+5. **Cookie-Validierung & Expiry Protection**:
+   - Alle 6 Stunden sowie vor jeder Transaktion erfolgt ein Lese-Check (`mMatchup`).
+   - Meldet ESPN HTTP 401 oder 403, wird der Modus automatisch auf `manual` zurückgesetzt, alle Automatismen gestoppt und ein rotes Warnbanner im Dashboard aktiviert: *"ESPN Authentifizierung abgelaufen – bitte SWID / espn_s2 in config.json aktualisieren"*.
+
+---
+
+## 7. Backend REST-API Spezifikation (`app.py`)
+
+Folgende Endpunkte werden in `app.py` implementiert:
+
+| Endpunkt | Methode | Beschreibung | Payload / Rückgabe |
+|---|---|---|---|
+| `/api/espn/mode` | `GET` | Liefert aktuellen Betriebsmodus & Status | `{"status": "ok", "mode": "manual"\|"semi"\|"full", "updated_at": "..."}` |
+| `/api/espn/mode` | `POST` | Ändert Betriebsmodus & speichert in `config.json` | Request: `{"mode": "semi"}`<br>Response: `{"success": true, "mode": "semi"}` |
+| `/api/espn/analyze` | `POST` | Startet manuelle KI-Analyse des aktuellen Rosters | Request: `{}`<br>Response: `{"status": "ok", "recommendation": {...}}` |
+| `/api/espn/proposals` | `GET` | Ruft offene Vorschläge für den Semi-Modus ab | `{"proposals": [...]}` |
+| `/api/espn/proposals/<id>/apply` | `POST` | Genehmigt Vorschlag und führt ihn via ESPN API aus | `{"success": true, "message": "Lineup aktualisiert"}` |
+| `/api/espn/proposals/<id>/dismiss` | `POST` | Verwirft einen Vorschlag | `{"success": true, "dismissed": "<id>"}` |
+| `/api/espn/lineup/move` | `POST` | Direkter Roster-Move mit optionalem Dry-Run | Request: `{"items": [...], "dry_run": false}` |
+| `/api/espn/history` | `GET` | Audit-Trail der letzten KI-Entscheidungen & Moves | `{"history": [...]}` |
+
+---
+
+## 8. LCARS Frontend Integration (Dashboard UI)
+
+### 8.1 Drei-Stufen Modus-Schalter im Card-Header
+In der ESPN Fantasy Card (`<section class="lcars-section" id="section-fantasy">`) wird im Header ein dreiteiliger LCARS Pill-Schalter platziert:
+
+```html
+<div class="espn-mode-switcher-container">
+  <span class="lcars-pill-tag" style="margin-right:0.5rem;">KI-MODUS:</span>
+  <div class="lcars-btn-group">
+    <button type="button" class="lcars-subnav-pill mode-btn active" id="btn-espn-mode-manual" onclick="setEspnMode('manual')">
+      MANUAL
+    </button>
+    <button type="button" class="lcars-subnav-pill mode-btn" id="btn-espn-mode-semi" onclick="setEspnMode('semi')">
+      SEMI-AI
+    </button>
+    <button type="button" class="lcars-subnav-pill mode-btn" id="btn-espn-mode-full" onclick="setEspnMode('full')">
+      FULL-AI
+    </button>
+  </div>
+  <span id="espnModeBadge" class="espn-mode-indicator badge-manual">
+    ● PASSIV // REINES MONITORING
+  </span>
+</div>
+```
+
+### 8.2 Vorschlags-Banner im Semi-Modus
+Wenn im `semi`-Modus ein aktiver Vorschlag vorliegt, blendet das Dashboard oberhalb der Aufstellung ein goldenes LCARS-Aktions-Banner ein:
+
+```html
+<div id="espnProposalBanner" class="lcars-card proposal-alert" style="display:none;">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+    <div>
+      <div style="font-size:0.75rem; color:var(--c-gold); font-weight:700; letter-spacing:0.08em;">
+        ⚠️ KI-EMPFEHLUNG // FREIGABE ERFORDERLICH
+      </div>
+      <div id="proposalReasonText" style="font-size:1.05rem; color:#fff; margin-top:0.3rem; font-weight:600;">
+        Nico Collins ist OUT. Tausche gegen Jameson Williams (WR).
+      </div>
+      <div id="proposalGainText" style="font-size:0.85rem; color:var(--c-blue); margin-top:0.2rem;">
+        Erwarteter Punktgewinn: +11.8 PTS
+      </div>
+    </div>
+    <div style="display:flex; gap:0.5rem;">
+      <button class="lcars-pill-btn pill-green" onclick="applyEspnProposal()" style="font-size:0.8rem; padding:0.4rem 0.9rem;">
+        ⚡ FREIGEBEN
+      </button>
+      <button class="lcars-pill-btn pill-red" onclick="dismissEspnProposal()" style="font-size:0.8rem; padding:0.4rem 0.9rem;">
+        ✕ VERWERFEN
+      </button>
+    </div>
+  </div>
+</div>
+```
+
+---
+
+## 9. Benachrichtigungsintegration (Telegram & Home Assistant)
+
+### 9.1 Versandwege
+- **Primär**: Direkter Telegram Bot API Call (`https://api.telegram.org/bot<token>/sendMessage`) oder über den lokalen User-Service `hermes-gateway` auf PiMMEL.
+- **Sekundär**: Home Assistant Service `notify.telegram` bzw. Persistent Notification.
+
+### 9.2 Nachrichten-Templates
+- **Semi-Modus Proposal**:
+  ```text
+  🏈 [LCARS ESPN KI-MANAGER // SEMI]
+  Spieltag 2: Aufstellungs-Optimierung empfohlen!
+
+  🔄 Move: Jameson Williams (Bench ➔ WR)
+     für: Nico Collins (WR ➔ Bench [OUT])
+  
+  💡 Begründung: Collins fällt wegen Oberschenkelverletzung aus. Williams projiziert 11.8 PTS gegen schwache Pass-Defense.
+  
+  👉 Freigeben im Dashboard: https://dash.pimmel.site#fantasy
+  ```
+- **Full-Modus Autonomer Vollzug**:
+  ```text
+  ⚡ [LCARS ESPN KI-MANAGER // FULL-AUTONOM]
+  Kickoff-Schutz ausgeführt (T-15 Min):
+  
+  ✅ Nico Collins (OUT) auf die Bank verschoben.
+  ✅ Jameson Williams als Starter auf WR aufgestellt.
+  
+  Status: Transaktion von ESPN bestätigt.
+  ```
+
+---
+
+## 10. Detaillierter Implementierungs- und Testplan
+
+### Phase 1: Datenmodell & Konfiguration in `espn_service.py`
+1. Erweiterung der Klasse `EspnFantasyClient`:
+   - `get_mode()` und `set_mode(mode)`.
+   - Speichern von `espn_fantasy.mode` in `config.json`.
+   - Persistenzmethoden für `espn_proposals.json` und `espn_decision_log.json`.
+
+### Phase 2: ESPN Write-Client & Transaktions-Engine
+1. Implementierung der Methode `execute_roster_transaction(items, execution_type="EXECUTE")`:
+   - POST Request an `lm-api-writes.fantasy.espn.com`.
+   - Beachtung von `swid` und `espn_s2` Headern.
+   - Fehler-Parsing und Mapping von ESPN HTTP Statuscodes.
+
+### Phase 3: Safeguard- & Validierungsmodul
+1. Implementierung von `validate_roster_move(items, roster_entries)`:
+   - Abgleich gegen `eligibleSlots`.
+   - Prüfung von `lineupLocked` und Kickoff-Timestamps.
+   - Validierung der IR-Slot-Sonderregeln.
+
+### Phase 4: KI-Entscheidungs-Engine (Gemini 3.8 Flash)
+1. Implementierung von `analyze_roster_with_ai(roster_data, matchup_data)`:
+   - JSON-Prompt-Aufbereitung.
+   - Aufruf von `forward_chat_completion` via 9Router (Port 20128) mit Modell `ag/gemini-3.8-flash-high`.
+   - Parsing und Validierung des LLM-Outputs.
+   - Fallback-Heuristik bei Ausfall des KI-Proxys.
+
+### Phase 5: Hintergrund-Scheduler
+1. Erweiterung des Daemon-Threads in `espn_service.py`:
+   - Überwachung von NFL-Spielplänen und Kickoff-Timestamps.
+   - Triggering der Safeguards & Moves im `full`-Modus.
+   - Triggering der Proposals im `semi`-Modus.
+
+### Phase 6: Flask API-Routen in `app.py`
+1. Registrierung aller neuen Endpunkte (`/api/espn/mode`, `/api/espn/analyze`, `/api/espn/proposals`, etc.).
+2. Absicherung über das Berechtigungssystem (`permissions_service`).
+
+### Phase 7: LCARS Dashboard Frontend
+1. HTML-Markup für den 3-Stufen Schalter und das Proposals-Banner in `section-fantasy`.
+2. CSS-Styling für Modus-Pills (`manual`, `semi`, `full`) und Alert-Banner.
+3. JavaScript-Logik in `app.py` für State-Synchronisation, Modus-Wechsel und Banner-Aktionen.
+
+### Phase 8: Verifikation & Systemtests
+1. **Statische Code-Prüfung**: `python3 -m py_compile app.py espn_service.py`.
+2. **Unit-Tests**:
+   - Validierung aller Safeguard-Regeln mit synthetischen Roster-Objekten.
+   - Test des Modus-Wechsels und Persistenz in `config.json`.
+3. **API-Endpunkttests**: Curl-Aufrufe aller neuen Routen.
+4. **Live-Dry-Run**: Durchführung einer Test-Validierung gegen die echte ESPN API mit `executionType: "VALIDATE"`.
+5. **Systemd-Service Verifikation**: Neustart von `agydashboard.service` und Log-Kontrolle.
+

@@ -6443,13 +6443,56 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="lcars-header-bar">
             <span class="lcars-pill-tag">ESPN // LIVE METRIKEN</span>
             <h2 id="fantasySectionTitle">LCARS SUBRAUM RELAY // INCOMPLETE PASS LIGA</h2>
-            <div style="margin-left:auto; display:flex; align-items:center; gap:0.6rem;">
+            <div style="margin-left:auto; display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
+              <!-- 3-STUFEN-MODUS-SCHALTER -->
+              <div class="fantasy-mode-selector" style="display:inline-flex; align-items:center; background:rgba(0,0,0,0.6); border:1px solid rgba(255,255,255,0.18); border-radius:14px; padding:2px; gap:2px;">
+                <button type="button" id="btn-fantasy-mode-manual" onclick="setFantasyMode('manual')" class="fantasy-mode-btn active" style="font-size:0.75rem; padding:0.25rem 0.65rem; border-radius:12px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; letter-spacing:0.04em; background:var(--c-butterscotch); color:#000; transition:all 0.2s ease;">
+                  MANUELL
+                </button>
+                <button type="button" id="btn-fantasy-mode-semi" onclick="setFantasyMode('semi')" class="fantasy-mode-btn" style="font-size:0.75rem; padding:0.25rem 0.65rem; border-radius:12px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; letter-spacing:0.04em; background:transparent; color:#888; transition:all 0.2s ease;">
+                  SEMI-AUTO
+                </button>
+                <button type="button" id="btn-fantasy-mode-full" onclick="setFantasyMode('full')" class="fantasy-mode-btn" style="font-size:0.75rem; padding:0.25rem 0.65rem; border-radius:12px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; letter-spacing:0.04em; background:transparent; color:#888; transition:all 0.2s ease;">
+                  FULL-AUTO
+                </button>
+              </div>
+
               <button id="fantasyTestFlashBtn" onclick="testFantasyFlash(event)" style="font-size:0.75rem; color:var(--c-primary); background:rgba(235,148,58,0.15); border:1px solid rgba(235,148,58,0.4); padding:0.25rem 0.65rem; border-radius:12px; font-family:var(--mono-family); cursor:pointer; letter-spacing:0.04em; transition:all 0.2s ease;" title="Flash-Signal auf light.esstisch testen">
                 ⚡ TEST FLASH
               </button>
               <span id="fantasyCountdownBadge" style="font-size:0.8rem; color:#44dd88; background:rgba(68,221,136,0.15); border:1px solid rgba(68,221,136,0.4); padding:0.25rem 0.75rem; border-radius:12px; font-family:var(--mono-family); letter-spacing:0.04em;">
                 ● REFRESH IN 30S
               </span>
+            </div>
+          </div>
+
+          <!-- VORSCHLAG-CONTAINER (SEMI-MODUS PROPOSAL BANNER) -->
+          <div id="fantasyProposalBanner" class="lcars-card" style="display:none; margin-top:1rem; border-left:4px solid var(--c-gold); background:rgba(237, 179, 120, 0.08); border-top:1px solid rgba(237, 179, 120, 0.3); border-right:1px solid rgba(237, 179, 120, 0.2); border-bottom:1px solid rgba(237, 179, 120, 0.2); border-radius:8px; padding:1rem 1.25rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+              <div style="flex:1; min-width:280px;">
+                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.35rem;">
+                  <span style="font-size:0.75rem; color:var(--c-gold); font-weight:800; letter-spacing:0.08em; background:rgba(237,179,120,0.2); padding:2px 8px; border-radius:10px;">
+                    ⚠️ KI-EMPFEHLUNG // FREIGABE ERFORDERLICH
+                  </span>
+                  <span id="fantasyProposalConfidence" style="font-size:0.75rem; color:var(--c-blue); font-family:var(--mono-family);">
+                    KONFIDENZ: --
+                  </span>
+                </div>
+                <div id="fantasyProposalReason" style="font-size:1.05rem; font-weight:700; color:#fff; margin-bottom:0.35rem;">
+                  --
+                </div>
+                <div id="fantasyProposalDetails" style="font-size:0.85rem; color:var(--c-butterscotch); font-family:var(--mono-family);">
+                  --
+                </div>
+              </div>
+              <div style="display:flex; gap:0.6rem; align-items:center;">
+                <button type="button" id="fantasyProposalApplyBtn" style="font-size:0.8rem; font-weight:700; color:#000; background:#44dd88; border:none; padding:0.45rem 1.1rem; border-radius:14px; cursor:pointer; font-family:var(--font-family); letter-spacing:0.05em; transition:all 0.2s ease;" title="Vorschlag genehmigen und via ESPN anwenden">
+                  ⚡ FREIGEBEN
+                </button>
+                <button type="button" id="fantasyProposalDismissBtn" style="font-size:0.8rem; font-weight:700; color:#fff; background:rgba(235,58,58,0.25); border:1px solid var(--c-red); padding:0.45rem 1.1rem; border-radius:14px; cursor:pointer; font-family:var(--font-family); letter-spacing:0.05em; transition:all 0.2s ease;" title="Vorschlag ablehnen / verwerfen">
+                  ✕ ABLEHNEN
+                </button>
+              </div>
             </div>
           </div>
 
@@ -8816,6 +8859,124 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }, 2200);
   };
 
+  // ESPN KI-MANAGER STEUERUNG
+  let currentFantasyMode = 'manual';
+
+  function updateFantasyModeButtons(mode) {
+    const modes = ['manual', 'semi', 'full'];
+    modes.forEach(m => {
+      const btn = document.getElementById(`btn-fantasy-mode-${m}`);
+      if (!btn) return;
+      if (m === mode) {
+        btn.classList.add('active');
+        if (m === 'manual') {
+          btn.style.background = 'var(--c-butterscotch)';
+          btn.style.color = '#000';
+          btn.style.boxShadow = '0 0 10px rgba(218,165,32,0.4)';
+        } else if (m === 'semi') {
+          btn.style.background = 'var(--c-gold)';
+          btn.style.color = '#000';
+          btn.style.boxShadow = '0 0 10px rgba(237,179,120,0.6)';
+        } else if (m === 'full') {
+          btn.style.background = 'var(--c-primary)';
+          btn.style.color = '#000';
+          btn.style.boxShadow = '0 0 12px rgba(235,148,58,0.7)';
+        }
+      } else {
+        btn.classList.remove('active');
+        btn.style.background = 'transparent';
+        btn.style.color = '#888';
+        btn.style.boxShadow = 'none';
+      }
+    });
+  }
+
+  window.setFantasyMode = async function(mode) {
+    if (!mode) return;
+    updateFantasyModeButtons(mode);
+    try {
+      const resp = await fetch('/api/espn/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: mode })
+      });
+      const res = await resp.json();
+      if (res.status === 'ok' || res.success) {
+        currentFantasyMode = res.mode || mode;
+        updateFantasyModeButtons(currentFantasyMode);
+        loadFantasyData(false);
+      } else {
+        console.error('Fehler beim Setzen des Fantasy-Modus:', res.message || res.error);
+        loadFantasyData(false);
+      }
+    } catch (e) {
+      console.error('Netzwerkfehler beim Setzen des Fantasy-Modus:', e);
+      loadFantasyData(false);
+    }
+  };
+
+  window.applyFantasyProposal = async function(proposalId) {
+    if (!proposalId) return;
+    const applyBtn = document.getElementById('fantasyProposalApplyBtn');
+    const dismissBtn = document.getElementById('fantasyProposalDismissBtn');
+    if (applyBtn) {
+      applyBtn.disabled = true;
+      applyBtn.textContent = '⚡ AUSFÜHREN...';
+      applyBtn.style.opacity = '0.7';
+    }
+    if (dismissBtn) dismissBtn.disabled = true;
+
+    try {
+      const resp = await fetch(`/api/espn/proposals/${encodeURIComponent(proposalId)}/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const res = await resp.json();
+      if (res.success) {
+        if (applyBtn) {
+          applyBtn.textContent = '✓ FREIGEGEBEN';
+          applyBtn.style.background = '#44dd88';
+          applyBtn.style.color = '#000';
+        }
+        setTimeout(() => {
+          loadFantasyData(true);
+        }, 1200);
+      } else {
+        alert(`Fehler beim Ausführen des Vorschlags: ${res.error || res.message || 'Safeguard-Abweisung'}`);
+        if (applyBtn) {
+          applyBtn.disabled = false;
+          applyBtn.textContent = '⚡ FREIGEBEN';
+          applyBtn.style.opacity = '1';
+        }
+        if (dismissBtn) dismissBtn.disabled = false;
+      }
+    } catch (e) {
+      alert(`Netzwerkfehler: ${e.message}`);
+      if (applyBtn) {
+        applyBtn.disabled = false;
+        applyBtn.textContent = '⚡ FREIGEBEN';
+        applyBtn.style.opacity = '1';
+      }
+      if (dismissBtn) dismissBtn.disabled = false;
+    }
+  };
+
+  window.dismissFantasyProposal = async function(proposalId) {
+    if (!proposalId) return;
+    const banner = document.getElementById('fantasyProposalBanner');
+    if (banner) banner.style.display = 'none';
+    try {
+      await fetch(`/api/espn/proposals/${encodeURIComponent(proposalId)}/dismiss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      loadFantasyData(true);
+    } catch (e) {
+      console.error('Fehler beim Verwerfen des Vorschlags:', e);
+      loadFantasyData(false);
+    }
+  };
+
   async function loadFantasyData(force = false) {
     if (isFantasyLoading) return;
     isFantasyLoading = true;
@@ -8835,6 +8996,62 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
         isFantasyLoading = false;
         return;
+      }
+
+      // Modus-Button anhand von data.mode markieren
+      if (data.mode) {
+        currentFantasyMode = data.mode;
+        updateFantasyModeButtons(data.mode);
+      }
+
+      // Aktiven Vorschlag rendern
+      const banner = document.getElementById('fantasyProposalBanner');
+      if (banner) {
+        const prop = data.active_proposal;
+        if (prop && prop.status === 'pending') {
+          banner.style.display = 'block';
+          const reasonEl = document.getElementById('fantasyProposalReason');
+          const detailsEl = document.getElementById('fantasyProposalDetails');
+          const confEl = document.getElementById('fantasyProposalConfidence');
+          const applyBtn = document.getElementById('fantasyProposalApplyBtn');
+          const dismissBtn = document.getElementById('fantasyProposalDismissBtn');
+
+          if (reasonEl) reasonEl.textContent = prop.reason || 'Strategische Aufstellungsoptimierung empfohlen.';
+
+          const escapeFn = typeof escapeHtml === 'function' ? escapeHtml : (s => String(s || ''));
+          let detailsText = '';
+          if (prop.player_in_name && prop.player_out_name) {
+            detailsText = `🔄 TAUSCH: <strong>${escapeFn(prop.player_in_name)}</strong> (Bank ➔ Start) für <strong>${escapeFn(prop.player_out_name)}</strong> (Start ➔ Bank)`;
+          } else if (prop.moves && prop.moves.length > 0) {
+            detailsText = `🔄 TAUSCH: ${prop.moves.length} Spielerwechsel`;
+          }
+          if (prop.projected_gain != null && prop.projected_gain !== 0) {
+            const gainSign = prop.projected_gain > 0 ? '+' : '';
+            detailsText += ` | Erwarteter Zuwachs: ${gainSign}${Number(prop.projected_gain).toFixed(1)} PTS`;
+          }
+          if (detailsEl) detailsEl.innerHTML = detailsText;
+
+          if (confEl) {
+            const confPct = Math.round((prop.confidence || 0.9) * 100);
+            confEl.textContent = `KONFIDENZ: ${confPct}%`;
+          }
+
+          if (applyBtn) {
+            applyBtn.disabled = false;
+            applyBtn.textContent = '⚡ FREIGEBEN';
+            applyBtn.style.opacity = '1';
+            applyBtn.style.background = '#44dd88';
+            applyBtn.style.color = '#000';
+            applyBtn.onclick = () => applyFantasyProposal(prop.id);
+          }
+          if (dismissBtn) {
+            dismissBtn.disabled = false;
+            dismissBtn.textContent = '✕ ABLEHNEN';
+            dismissBtn.onclick = () => dismissFantasyProposal(prop.id);
+          }
+        } else {
+          banner.style.display = 'none';
+        }
       }
 
       // League & Team info
@@ -17940,6 +18157,86 @@ if USE_FLASK:
             })
         return jsonify({"success": False, "error": "Weder espn_client noch ha_service verfügbar"}), 503
 
+    # =========================================================================
+    # ESPN FANTASY KI-MANAGER ENDPUNKTE
+    # =========================================================================
+    @app.route("/api/espn/mode", methods=["GET", "POST"])
+    def api_espn_mode():
+        if not espn_client:
+            return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            mode = data.get("mode")
+            if not mode:
+                return jsonify({"status": "error", "message": "Feld 'mode' erforderlich ('manual', 'semi', 'full')"}), 400
+            try:
+                res = espn_client.set_mode(mode)
+                return jsonify({"status": "ok", **res})
+            except ValueError as ve:
+                return jsonify({"status": "error", "message": str(ve)}), 400
+            except Exception as e:
+                return jsonify({"status": "error", "message": str(e)}), 500
+        mode = espn_client.get_mode()
+        return jsonify({"status": "ok", "mode": mode})
+
+    @app.route("/api/espn/proposals", methods=["GET"])
+    def api_espn_proposals():
+        if not espn_client:
+            return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
+        only_pending = request.args.get("pending", "false").lower() in ("true", "1")
+        proposals = espn_client.get_proposals(only_pending=only_pending)
+        return jsonify({"status": "ok", "proposals": proposals})
+
+    @app.route("/api/espn/proposals/<proposal_id>/apply", methods=["POST"])
+    def api_espn_proposal_apply(proposal_id):
+        if not espn_client:
+            return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
+        res = espn_client.apply_proposal(proposal_id)
+        status_code = 200 if res.get("success") else 400
+        return jsonify(res), status_code
+
+    @app.route("/api/espn/proposals/<proposal_id>/dismiss", methods=["POST"])
+    def api_espn_proposal_dismiss(proposal_id):
+        if not espn_client:
+            return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
+        found = espn_client.dismiss_proposal(proposal_id)
+        if found:
+            return jsonify({"status": "ok", "success": True, "dismissed": proposal_id})
+        return jsonify({"status": "error", "success": False, "message": f"Vorschlag '{proposal_id}' nicht gefunden oder bereits bearbeitet."}), 404
+
+    @app.route("/api/espn/analyze", methods=["POST"])
+    def api_espn_analyze():
+        if not espn_client:
+            return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
+        res = espn_client.analyze_roster_with_ai(force=True)
+        return jsonify(res)
+
+    @app.route("/api/espn/history", methods=["GET"])
+    def api_espn_history():
+        if not espn_client:
+            return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
+        try:
+            limit = int(request.args.get("limit", 50))
+        except (ValueError, TypeError):
+            limit = 50
+        history = espn_client.get_decision_log(limit=limit)
+        return jsonify({"status": "ok", "history": history})
+
+    @app.route("/api/espn/lineup/move", methods=["POST"])
+    def api_espn_lineup_move():
+        if not espn_client:
+            return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
+        data = request.get_json(silent=True) or {}
+        items = data.get("items", [])
+        dry_run = bool(data.get("dry_run", False))
+        exec_type = "VALIDATE" if dry_run else "EXECUTE"
+        val = espn_client.validate_roster_move(items)
+        if not val.get("valid"):
+            return jsonify({"success": False, "error": val.get("error")}), 400
+        res = espn_client.execute_roster_transaction(items, execution_type=exec_type)
+        status_code = 200 if res.get("success") else 400
+        return jsonify(res), status_code
+
     @app.route("/api/homeassistant/config", methods=["GET"])
     def api_ha_config():
         if ha_service:
@@ -19141,6 +19438,24 @@ else:
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+            elif parsed.path == "/api/espn/mode":
+                mode_val = espn_client.get_mode() if espn_client else "manual"
+                data = json.dumps({"status": "ok", "mode": mode_val}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif parsed.path == "/api/espn/proposals":
+                query = urllib.parse.parse_qs(parsed.query)
+                only_pending = query.get("pending", ["false"])[0].lower() in ("true", "1")
+                props = espn_client.get_proposals(only_pending=only_pending) if espn_client else []
+                data = json.dumps({"status": "ok", "proposals": props}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
             elif parsed.path == "/api/homeassistant/config":
                 cfg = ha_service.get_config(safe=True) if ha_service else {"configured": False}
                 data = json.dumps(cfg).encode("utf-8")
@@ -19477,6 +19792,76 @@ else:
                 else:
                     resp = json.dumps({"success": False, "error": "Dienst nicht verfügbar"}).encode("utf-8")
                 self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/espn/mode":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {}
+                mode = data.get("mode")
+                if espn_client and mode:
+                    try:
+                        res = espn_client.set_mode(mode)
+                        resp = json.dumps({"status": "ok", **res}).encode("utf-8")
+                        code = 200
+                    except Exception as e:
+                        resp = json.dumps({"status": "error", "message": str(e)}).encode("utf-8")
+                        code = 400
+                elif not espn_client:
+                    resp = json.dumps({"status": "error", "message": "ESPN Service nicht verfügbar"}).encode("utf-8")
+                    code = 503
+                else:
+                    resp = json.dumps({"status": "error", "message": "Feld 'mode' erforderlich"}).encode("utf-8")
+                    code = 400
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path == "/api/espn/analyze":
+                if espn_client:
+                    res = espn_client.analyze_roster_with_ai(force=True)
+                    resp = json.dumps(res).encode("utf-8")
+                    code = 200
+                else:
+                    resp = json.dumps({"status": "error", "message": "ESPN Service nicht verfügbar"}).encode("utf-8")
+                    code = 503
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path.startswith("/api/espn/proposals/") and parsed.path.endswith("/apply"):
+                parts = parsed.path.split("/")
+                proposal_id = parts[4] if len(parts) >= 6 else ""
+                if espn_client and proposal_id:
+                    res = espn_client.apply_proposal(proposal_id)
+                    code = 200 if res.get("success") else 400
+                    resp = json.dumps(res).encode("utf-8")
+                else:
+                    code = 503 if not espn_client else 400
+                    resp = json.dumps({"success": False, "error": "Fehler beim Ausführen"}).encode("utf-8")
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            elif parsed.path.startswith("/api/espn/proposals/") and parsed.path.endswith("/dismiss"):
+                parts = parsed.path.split("/")
+                proposal_id = parts[4] if len(parts) >= 6 else ""
+                if espn_client and proposal_id:
+                    found = espn_client.dismiss_proposal(proposal_id)
+                    code = 200 if found else 404
+                    resp = json.dumps({"status": "ok" if found else "error", "success": bool(found), "dismissed": proposal_id}).encode("utf-8")
+                else:
+                    code = 503 if not espn_client else 400
+                    resp = json.dumps({"status": "error", "success": False, "message": "Fehler"}).encode("utf-8")
+                self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()
