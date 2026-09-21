@@ -15788,12 +15788,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let geminiAudioStream = null;
   let geminiAudioSourceNode = null;
   let geminiScriptNode = null;
+  let geminiMuteNode = null;
   let geminiInputAnalyser = null;
   let geminiOutputAnalyser = null;
   let geminiActiveAudioSources = [];
   let geminiNextPlaybackTime = 0;
   let geminiVizAnimId = null;
   let currentModelTurnEl = null;
+  let pttStopTimer = null;
 
   async function checkGeminiLiveStatus() {
     try {
@@ -15976,6 +15978,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       isSpeaking = false;
       lastSpeechTime = 0;
       isModelSpeaking = false;
+      currentModelTurnEl = null;
+      if (pttStopTimer) { clearTimeout(pttStopTimer); pttStopTimer = null; }
       updateGeminiConnBadge('GETRENNT', 'var(--c-red)', '#fff');
       updateGeminiToggleBtn(false);
       stopGeminiAudioCapture();
@@ -15996,6 +16000,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     isSpeaking = false;
     lastSpeechTime = 0;
     isModelSpeaking = false;
+    currentModelTurnEl = null;
+    if (pttStopTimer) { clearTimeout(pttStopTimer); pttStopTimer = null; }
     updateGeminiConnBadge('GETRENNT', 'var(--c-red)', '#fff');
     updateGeminiToggleBtn(false);
     stopGeminiAudioCapture();
@@ -16109,6 +16115,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       geminiScriptNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
 
       geminiScriptNode.onaudioprocess = (e) => {
+        // Output-Puffer auf 0 setzen, um jegliche Mikrofon-Rückkopplung auf Lautsprecher zu verhindern
+        for (let ch = 0; ch < e.outputBuffer.numberOfChannels; ch++) {
+          e.outputBuffer.getChannelData(ch).fill(0);
+        }
+
         if (!geminiLiveChannelOpen || geminiLiveMuted) return;
 
         // In PTT-Modus nur senden wenn PTT aktiv ist
@@ -16164,8 +16175,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       };
 
       geminiAudioSourceNode.connect(geminiScriptNode);
-      // Dummy Destination Verbindung, damit onaudioProcess feuert
-      geminiScriptNode.connect(audioCtx.destination);
+      // Stummer GainNode (0x) damit onaudioprocess ohne akustische Lautsprecher-Rückkopplung läuft
+      geminiMuteNode = audioCtx.createGain();
+      geminiMuteNode.gain.value = 0;
+      geminiScriptNode.connect(geminiMuteNode);
+      geminiMuteNode.connect(audioCtx.destination);
 
       startGeminiVisualizer();
       appendGeminiLog('system', 'Mikrofon aktiv (16 kHz PCM Audio-Graph initialisiert).');
@@ -16184,6 +16198,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         geminiScriptNode.onaudioprocess = null;
       } catch (e) {}
       geminiScriptNode = null;
+    }
+    if (geminiMuteNode) {
+      try { geminiMuteNode.disconnect(); } catch (e) {}
+      geminiMuteNode = null;
     }
     if (geminiAudioSourceNode) {
       try { geminiAudioSourceNode.disconnect(); } catch (e) {}
@@ -16225,9 +16243,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   function int16ToBase64(int16Array) {
     const uint8 = new Uint8Array(int16Array.buffer, int16Array.byteOffset, int16Array.byteLength);
     let binary = '';
-    const len = uint8.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(uint8[i]);
+    const chunkSize = 4096;
+    for (let i = 0; i < uint8.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, uint8.subarray(i, i + chunkSize));
     }
     return btoa(binary);
   }
@@ -16393,9 +16411,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     const startPtt = (e) => {
       if (e) e.preventDefault();
-      if (!geminiLiveChannelOpen || geminiLiveMode !== 'ptt' || isPttActive) return;
+      if (pttStopTimer) {
+        clearTimeout(pttStopTimer);
+        pttStopTimer = null;
+      }
+      if (!geminiLiveChannelOpen) {
+        appendGeminiLog('error', 'Subraum-Kanal nicht geöffnet. Bitte zuerst "SUBRAUM-KANAL ÖFFNEN" anklicken.');
+        return;
+      }
+      if (geminiLiveMode !== 'ptt' || isPttActive) return;
+
+      const audioCtx = getAudioCtx();
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+
       isPttActive = true;
       pttAudioSent = false;
+      currentModelTurnEl = null;
       pttBtn.style.background = 'var(--c-primary)';
       pttBtn.style.color = '#000';
       pttBtn.style.borderColor = 'var(--c-primary)';
@@ -16409,28 +16442,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const stopPtt = (e) => {
       if (e) e.preventDefault();
       if (!isPttActive) return;
-      isPttActive = false;
+
       pttBtn.style.background = 'rgba(186,164,229,0.15)';
       pttBtn.style.color = 'var(--c-secondary)';
       pttBtn.style.borderColor = 'var(--c-secondary)';
       pttBtn.textContent = '🎙️ SPRECHEN (GEDRÜCKT HALTEN / LEERTASTE)';
       playLcarsBeep(1200, 880);
 
-      if (pttAudioSent) {
-        if (geminiLiveWs && geminiLiveWs.readyState === WebSocket.OPEN) {
-          geminiLiveWs.send(JSON.stringify({ type: 'end_of_turn' }));
+      // 60ms Grace-Puffer: stellt sicher, dass der letzte Audiopuffer aus onaudioprocess noch gesendet wird
+      if (pttStopTimer) clearTimeout(pttStopTimer);
+      pttStopTimer = setTimeout(() => {
+        if (!isPttActive) return;
+        isPttActive = false;
+
+        if (pttAudioSent) {
+          if (geminiLiveWs && geminiLiveWs.readyState === WebSocket.OPEN) {
+            geminiLiveWs.send(JSON.stringify({ type: 'end_of_turn' }));
+            const turnInd = document.getElementById('geminiLiveTurnIndicator');
+            if (turnInd) turnInd.textContent = 'BORDCOMPUTER DENKT...';
+            updateGeminiConnBadge('DENKT...', 'var(--c-gold)', '#000');
+          }
+        } else {
           const turnInd = document.getElementById('geminiLiveTurnIndicator');
-          if (turnInd) turnInd.textContent = 'BORDCOMPUTER DENKT...';
-          updateGeminiConnBadge('DENKT...', 'var(--c-gold)', '#000');
+          if (turnInd && !isModelSpeaking) turnInd.textContent = 'BEREIT // ZUHÖREN';
+          if (geminiLiveChannelOpen && !isModelSpeaking) {
+            updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
+          }
         }
-      } else {
-        const turnInd = document.getElementById('geminiLiveTurnIndicator');
-        if (turnInd && !isModelSpeaking) turnInd.textContent = 'BEREIT // ZUHÖREN';
-        if (geminiLiveChannelOpen && !isModelSpeaking) {
-          updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
-        }
-      }
-      pttAudioSent = false;
+        pttAudioSent = false;
+      }, 60);
     };
 
     pttBtn.addEventListener('mousedown', startPtt);
@@ -16463,6 +16503,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   // Transkript & Terminal Log
   function appendGeminiLog(role, text, isStreaming = false) {
+    if (!text && text !== '') return;
     const box = document.getElementById('geminiLiveTranscript');
     if (!box) return;
 
@@ -16478,16 +16519,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     row.style.wordBreak = 'break-word';
 
     if (role === 'user') {
+      currentModelTurnEl = null;
       row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-primary); font-weight:700;">COMMANDER:</span> <span style="color:#fff;">${escapeHtml(text)}</span>`;
     } else if (role === 'model') {
       row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-secondary); font-weight:700;">COMPUTER:</span> <span class="model-turn-text" style="color:#e0e8ff;">${escapeHtml(text)}</span>`;
-      currentModelTurnEl = row.querySelector('.model-turn-text');
+      currentModelTurnEl = isStreaming ? row.querySelector('.model-turn-text') : null;
     } else if (role === 'error') {
+      currentModelTurnEl = null;
       row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-red); font-weight:700;">[WARNUNG]</span> <span style="color:var(--c-red);">${escapeHtml(text)}</span>`;
-      currentModelTurnEl = null;
     } else {
-      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-gold);">[SYSTEM]</span> <span style="color:#ccc;">${escapeHtml(text)}</span>`;
       currentModelTurnEl = null;
+      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-gold);">[SYSTEM]</span> <span style="color:#ccc;">${escapeHtml(text)}</span>`;
     }
 
     box.appendChild(row);
@@ -16506,11 +16548,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     playLcarsBeep(1200, 1600);
+    currentModelTurnEl = null;
     geminiLiveWs.send(JSON.stringify({
       type: 'text',
       text: val
     }));
     inp.value = '';
+    inp.focus();
+    const turnInd = document.getElementById('geminiLiveTurnIndicator');
+    if (turnInd) turnInd.textContent = 'BORDCOMPUTER DENKT...';
+    updateGeminiConnBadge('DENKT...', 'var(--c-gold)', '#000');
   }
 
   function clearGeminiLiveTranscript() {
@@ -17613,6 +17660,38 @@ if USE_FLASK:
                                         except Exception:
                                             break
 
+                                    # 1. Output transcription (Modell-Sprachausgabe als Text)
+                                    out_tx = sc.get("outputTranscription")
+                                    if out_tx:
+                                        out_transcription = out_tx.get("text") if isinstance(out_tx, dict) else (out_tx if isinstance(out_tx, str) else "")
+                                        if out_transcription:
+                                            print(f"[GEMINI LIVE] Model Output: {out_transcription}", flush=True)
+                                            try:
+                                                ws.send(json.dumps({
+                                                    "type": "transcript",
+                                                    "role": "model",
+                                                    "text": out_transcription
+                                                }))
+                                            except Exception:
+                                                stop_event.set()
+                                                return
+
+                                    # 2. Input transcription (Transkription der User-Sprache)
+                                    in_tx = sc.get("inputTranscription")
+                                    if in_tx:
+                                        in_transcription = in_tx.get("text") if isinstance(in_tx, dict) else (in_tx if isinstance(in_tx, str) else "")
+                                        if in_transcription:
+                                            print(f"[GEMINI LIVE] User Input Transcription: {in_transcription}", flush=True)
+                                            try:
+                                                ws.send(json.dumps({
+                                                    "type": "transcript",
+                                                    "role": "user",
+                                                    "text": in_transcription
+                                                }))
+                                            except Exception:
+                                                stop_event.set()
+                                                return
+
                                     model_turn = sc.get("modelTurn")
                                     if model_turn:
                                         parts = model_turn.get("parts", [])
@@ -17639,6 +17718,7 @@ if USE_FLASK:
 
                                             text_part = part.get("text")
                                             if text_part:
+                                                print(f"[GEMINI LIVE] Model Output (part.text): {text_part}", flush=True)
                                                 try:
                                                     ws.send(json.dumps({
                                                         "type": "transcript",
@@ -17675,6 +17755,9 @@ if USE_FLASK:
                     t_gemini = threading.Thread(target=gemini_to_client, daemon=True)
                     t_gemini.start()
 
+                    turn_audio_chunks = 0
+                    turn_audio_bytes = 0
+
                     try:
                         while not stop_event.is_set():
                             try:
@@ -17697,6 +17780,11 @@ if USE_FLASK:
                             if msg_type == "audio":
                                 audio_b64 = client_data.get("data", "")
                                 if audio_b64:
+                                    turn_audio_chunks += 1
+                                    raw_bytes = len(audio_b64) * 3 // 4
+                                    turn_audio_bytes += raw_bytes
+                                    if turn_audio_chunks == 1 or turn_audio_chunks % 50 == 0:
+                                        print(f"[GEMINI LIVE] Audio stream: chunk #{turn_audio_chunks} ({raw_bytes} B, total turn bytes: {turn_audio_bytes} B)", flush=True)
                                     realtime_payload = {
                                         "realtimeInput": {
                                             "mediaChunks": [
@@ -17713,7 +17801,9 @@ if USE_FLASK:
                                         break
 
                             elif msg_type in ("end_of_turn", "turn_complete"):
-                                print("[GEMINI LIVE] User turn complete, waiting for model response", flush=True)
+                                print(f"[GEMINI LIVE] User turn complete (audio chunks sent in this turn: {turn_audio_chunks})", flush=True)
+                                turn_audio_chunks = 0
+                                turn_audio_bytes = 0
                                 turn_payload = {
                                     "clientContent": {
                                         "turnComplete": True
@@ -17729,6 +17819,8 @@ if USE_FLASK:
                                 text_input = client_data.get("text", "").strip()
                                 if text_input:
                                     print(f"[GEMINI LIVE] User text input: {text_input[:60]}", flush=True)
+                                    turn_audio_chunks = 0
+                                    turn_audio_bytes = 0
                                     client_content_payload = {
                                         "clientContent": {
                                             "turns": [
