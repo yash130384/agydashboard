@@ -1039,3 +1039,513 @@ Ebenso unterstützt die Fallback-Route (`BaseHTTPRequestHandler` Zeile 16130) tr
 6. Paginierung:
    - Seitenwechsel ◀ Vorherige / Nächste ▶ funktioniert mit korrekter Anzeige "SEITE X VON Y".
 
+---
+
+# Architektur- & Implementierungsplan: Google Gemini 3.8 Live Integration (SST: Schnittstelle + LCARS UI)
+
+## 1. Zielsetzung & Übersicht
+
+Integration des multimodalen Echtzeit-Sprachmodells **Google Gemini 3.8 Live** in das LCARS System Dashboard (`agydashboard`). Das System ermöglicht eine bidirektionale, latenzarme Sprachkommunikation (Speech-to-Speech / SST: Speech-to-Text & Text-to-Speech Relay) direkt aus dem Browser im authentischen Star Trek LCARS Bordcomputer-Design ("SUBRAUM COMM").
+
+### 1.1 Kernanforderungen & Spezifikationen
+| Parameter | Wert / Spezifikation |
+|---|---|
+| **Schnittstellen-Typ** | Bidirektionales Audio- und Text-Streaming via WebSockets |
+| **Backend-Endpunkt** | `ws(s)://<host>:5000/api/gemini-live/ws` (via `flask-sock` / WebSocket Handler) |
+| **Google Live API URL** | `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=<api_key>` |
+| **Primäres Modell** | `gemini-3.8-live` (Ressource: `models/gemini-3.8-live`) |
+| **Modell-Fallback** | **Kein Fallback** (Strikte Bindung an `gemini-3.8-live`) |
+| **Audio-Eingabe (Browser -> Gemini)** | PCM 16-Bit Mono, 16.000 Hz Little-Endian (`audio/pcm;rate=16000`) |
+| **Audio-Ausgabe (Gemini -> Browser)** | PCM 16-Bit Mono, 24.000 Hz Little-Endian (`audio/pcm;rate=24000`) |
+| **Sicherheitskonfiguration** | Registrierung als `gemini_live` in `VALID_SECTIONS` (`permissions_service.py`) |
+| **Zugangsschutz** | Standardmäßig in `locked_sections` (`config.json`), Freigabe nur via Command-Code `0901` |
+| **Interaktionsmodi** | Push-to-Talk (PTT via Button / Leertaste) & Toggle-Live-Modus (Dauerhafte Duplex-Verbindung) |
+| **LCARS UI-Elemente** | Nav-Button `SUBRAUM COMM`, Gate-View, Dual Audio-Visualizer (Pegelanzeige), Live-Transkriptionsterminal |
+
+---
+
+## 2. System- & Komponentenarchitektur
+
+### 2.1 Datenfluss- und Streaming-Architektur
+
+```mermaid
+flowchart TD
+    subgraph Frontend["LCARS Frontend (Browser)"]
+        MIC[Mikrofon MediaStream] --> RESAMP[Web Audio Downsampler 16kHz PCM]
+        RESAMP --> WS_CLIENT[WebSocket Client /api/gemini-live/ws]
+        WS_CLIENT --> VIS_IN[Input Visualizer Pegel]
+        
+        WS_CLIENT --> AUDIO_QUEUE[Audio Queue 24kHz PCM]
+        AUDIO_QUEUE --> AUDIO_CTX[AudioContext Destination Speaker]
+        AUDIO_QUEUE --> VIS_OUT[Output Visualizer Pegel]
+        WS_CLIENT --> TRANSCRIPT[Live Transkriptionsterminal]
+    end
+
+    subgraph Dashboard["agydashboard Server (Port 5000)"]
+        AUTH_GATE{Command-Code 0901 autorisiert?}
+        CF_IN[Cloudflare Named Tunnel / LAN] --> AUTH_GATE
+        AUTH_GATE -- Nein --> WS_REJECT[HTTP 403 / Close Frame]
+        AUTH_GATE -- Ja --> FLASK_SOCK[Flask-Sock / Relay Handler]
+        
+        FLASK_SOCK <--> RELAY_CORE[Bi-Directional Relay Engine]
+        CFG[(config.json: gemini_live)] -.-> RELAY_CORE
+    end
+
+    subgraph GoogleCloud["Google Gemini Live API"]
+        BIDI_EP[wss://generativelanguage.googleapis.com/.../BidiGenerateContent]
+        GEMINI_MODEL["Modell: gemini-3.8-live"]
+        BIDI_EP <--> GEMINI_MODEL
+    end
+
+    RELAY_CORE <-->|WSS + Setup + Audio/Text Frames| BIDI_EP
+```
+
+### 2.2 Sequenzdiagramm: Verbindungsaufbau, Session & Interruption
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as LCARS Frontend
+    participant Relay as Dashboard Backend (/api/gemini-live/ws)
+    participant Perm as permissions_service
+    participant Google as Gemini Live API (BidiGenerateContent)
+
+    UI->>Relay: WS Connect /api/gemini-live/ws?code=0901
+    Relay->>Perm: verify_code(0901) & is_locked("gemini_live")
+    alt Code ungültig oder gesperrt
+        Relay-->>UI: Close Frame / Error 4403 (Zugriff verweigert)
+    else Autorisierung erfolgreich
+        Relay->>Google: WSS Connect (?key=<API_KEY>)
+        Relay->>Google: Setup Payload {"setup": {"model": "models/gemini-3.8-live", "generationConfig": {"responseModalities": ["AUDIO"]}}}
+        Google-->>Relay: {"setupComplete": {}}
+        Relay-->>UI: {"type": "setup_complete", "status": "ready"}
+    end
+
+    Note over UI,Google: Sprachübertragung (Push-to-Talk oder Continuous Live)
+    loop Audio Streaming (Upstream)
+        UI->>Relay: {"type": "audio", "data": "<base64 PCM 16kHz>"}
+        Relay->>Google: {"realtimeInput": {"mediaChunks": [{"mimeType": "audio/pcm;rate=16000", "data": "..."}]}}
+    end
+
+    loop Modell-Antwort (Downstream)
+        Google-->>Relay: {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"data": "...", "mimeType": "audio/pcm;rate=24000"}}, {"text": "Transkript..."}]}}}
+        Relay-->>UI: {"type": "model_turn", "audio": "<base64>", "rate": 24000, "text": "Transkript..."}
+        UI->>UI: AudioBuffer 24kHz abspielen + Visualizer + Transkript anzeigen
+    end
+
+    Note over UI,Google: User unterbricht das Modell (Barge-In)
+    UI->>Relay: Weiteres Audio senden (User spricht dazwischen)
+    Google-->>Relay: {"serverContent": {"interrupted": true}}
+    Relay-->>UI: {"type": "interrupted"}
+    UI->>UI: Sofortige Stummschaltung aller laufenden/gequeuten AudioBuffer
+```
+
+---
+
+## 3. Tech-Stack & Abhängigkeiten
+
+### 3.1 Backend
+- **Python-Laufzeitumgebung**: Python 3.14 (Arch Linux / Omarchy System-Python).
+- **Web-Framework**: `Flask` 3.1.3 (bereits aktiv in `app.py`).
+- **WebSocket-Unterstützung**: 
+  - `flask-sock` (integriert sich direkt in die bestehende Werkzeug WSGI-Laufzeit von `app.run(threaded=True)` via Socket-Hijacking).
+  - `simple-websocket` (Transport- und Frame-Engine für `flask-sock`).
+  - `websockets` (Version 16+ / 17+, synchrone oder asynchrone Client-Engine `websockets.sync.client` für die ausgehende Verbindung zur Google Live API).
+- **Installation der Pakete**:
+  - `uv pip install --python /usr/bin/python3 --break-system-packages flask-sock websockets` (oder entsprechende Systempakete via `pacman -S python-simple-websocket python-websockets`).
+
+### 3.2 Frontend
+- **Web Audio API**:
+  - `navigator.mediaDevices.getUserMedia`: Erfassung des Audio-Input-Streams mit Rauschunterdrückung (`noiseSuppression`), Echokompensation (`echoCancellation`) und automatischer Pegelanpassung (`autoGainControl`).
+  - `AudioContext`: Generierung und Taktung des Audio-Graphs.
+  - `AudioWorkletNode` / Inline Resampling: Konvertierung beliebiger Hardware-Abtastraten (44.1kHz, 48kHz) in striktes 16kHz PCM (Int16Array).
+  - `AnalyserNode`: Frequenz- und RMS-Pegel-Extraktion für den LCARS Dual-Visualizer.
+  - `AudioBufferSourceNode`: Jitter-freies Queuing von empfangenem 24kHz PCM Audio.
+
+---
+
+## 4. Konfigurations- & Zugriffsschutz-Konzept
+
+### 4.1 Erweiterung von `config.json`
+Ein neuer Konfigurationsabschnitt `"gemini_live"` wird auf oberster Ebene integriert:
+
+```json
+{
+  "gemini_live": {
+    "api_key": "<GEMINI_LIVE_API_KEY>",
+    "model": "gemini-3.8-live",
+    "voice": "Puck",
+    "system_instruction": "Du bist der LCARS Bordcomputer der USS Antigravity. Du interagierst direkt mit dem Commander über Subraum-Audio. Antworte stets präzise, professionell, hilfsbereit und im authentischen Ton eines Starfleet Computer-Terminals auf Deutsch.",
+    "temperature": 0.6
+  },
+  "permissions": {
+    "command_code": "0901",
+    "locked_sections": [
+      "agents",
+      "ai-info",
+      "config",
+      "fantasy",
+      "homeassistant",
+      "cycle",
+      "pulsecast",
+      "gemini_live"
+    ]
+  }
+}
+```
+
+### 4.2 Integration in `permissions_service.py`
+1. **Erweiterung von `VALID_SECTIONS`**:
+   ```python
+   VALID_SECTIONS = [
+       "system",
+       "services",
+       "agents",
+       "ai-info",
+       "config",
+       "fantasy",
+       "solar",
+       "homeassistant",
+       "cycle",
+       "pulsecast",
+       "gemini_live",  # Neu für Subraum Comm
+   ]
+   ```
+2. **Erweiterung von `DEFAULT_LOCKED_SECTIONS`**:
+   `gemini_live` wird standardmäßig als geschützte Sektion hinterlegt.
+3. **Validierungsmethode in `app.py`**:
+   ```python
+   def _gemini_live_authorized():
+       if not permissions_service:
+           return True
+       with permissions_service.lock:
+           if "gemini_live" not in permissions_service.locked_sections:
+               return True
+       code = (
+           request.headers.get("X-Command-Code")
+           or request.headers.get("X-Auth-Code")
+           or request.args.get("code")
+       )
+       if not code and request.is_json:
+           b = request.get_json(silent=True) or {}
+           code = b.get("code")
+       if not code:
+           auth_hdr = request.headers.get("Authorization", "")
+           if auth_hdr.startswith("Bearer "):
+               code = auth_hdr.split(" ", 1)[1].strip()
+       return permissions_service.verify_code(code)
+   ```
+
+---
+
+## 5. Backend-Schnittstellenspezifikation (`app.py`)
+
+### 5.1 Endpunkt-Definition
+- **Route**: `@sock.route("/api/gemini-live/ws")`
+- **Protokoll**: WebSocket (`ws://` bzw. `wss://`)
+- **Query-Parameter**: `?code=<command_code>` (z.B. `0901`)
+
+### 5.2 Handshake & Autorisierung
+1. Überprüfung des übergebenen Command-Codes via `permissions_service.verify_code(code)`.
+2. Bei Sperre und ungültigem Code: Senden eines JSON-Fehlers `{"type": "error", "error": "LCARS Zugriff verweigert: Ungültiger Command Code", "locked": true}` und sofortiges Schließen des WebSockets mit Code `4403`.
+3. Auslesen von `api_key`, `model` (`gemini-3.8-live`), `voice` und `system_instruction` aus `config.json`.
+
+### 5.3 Google Live API Verbindungsaufbau
+- **WebSocket-Verbindungsziel**:
+  `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=<api_key>`
+- **Initiales Setup-Paket**:
+  ```json
+  {
+    "setup": {
+      "model": "models/gemini-3.8-live",
+      "generationConfig": {
+        "responseModalities": ["AUDIO"],
+        "speechConfig": {
+          "voiceConfig": {
+            "prebuiltVoiceConfig": {
+              "voiceName": "Puck"
+            }
+          }
+        },
+        "temperature": 0.6
+      },
+      "systemInstruction": {
+        "parts": [
+          {
+            "text": "Du bist der LCARS Bordcomputer der USS Antigravity. Du interagierst direkt mit dem Commander über Subraum-Audio. Antworte stets präzise, professionell, hilfsbereit und im authentischen Ton eines Starfleet Computer-Terminals auf Deutsch."
+          }
+        ]
+      }
+    }
+  }
+  ```
+
+### 5.4 Datenpakete & Übertragungsprotokoll
+
+#### A. Client -> Backend -> Google (Audio-Input)
+- **Client sendet**:
+  ```json
+  {
+    "type": "audio",
+    "data": "<Base64-kodierte 16-Bit PCM 16kHz Audiodaten>"
+  }
+  ```
+- **Backend leitet weiter an Google**:
+  ```json
+  {
+    "realtimeInput": {
+      "mediaChunks": [
+        {
+          "mimeType": "audio/pcm;rate=16000",
+          "data": "<Base64-kodierte PCM Chunks>"
+        }
+      ]
+    }
+  }
+  ```
+
+#### B. Google -> Backend -> Client (Audio-Output & Transkript)
+- **Google liefert**:
+  ```json
+  {
+    "serverContent": {
+      "modelTurn": {
+        "parts": [
+          {
+            "inlineData": {
+              "mimeType": "audio/pcm;rate=24000",
+              "data": "<Base64-kodierte 24kHz PCM Chunks>"
+            }
+          },
+          {
+            "text": "Bordcomputer bereit. Wie kann ich behilflich sein, Commander?"
+          }
+        ]
+      },
+      "interrupted": false,
+      "turnComplete": true
+    }
+  }
+  ```
+- **Backend liefert an Client**:
+  ```json
+  {
+    "type": "model_turn",
+    "audio": "<Base64-kodierte 24kHz PCM Chunks>",
+    "rate": 24000,
+    "text": "Bordcomputer bereit. Wie kann ich behilflich sein, Commander?",
+    "interrupted": false,
+    "turnComplete": true
+  }
+  ```
+
+#### C. Unterbrechung (Barge-In)
+- Wenn Google `"interrupted": true` meldet, sendet das Backend an den Client:
+  ```json
+  {
+    "type": "interrupted"
+  }
+  ```
+- Das Frontend stoppt unverzüglich alle abgespielten und in der Warteschlange befindlichen Audio-Chunks.
+
+---
+
+## 6. LCARS Frontend UI-Spezifikation
+
+### 6.1 LCARS Navigation & Banner
+1. **Nav-Button im linken Frame**:
+   ```html
+   <button class="lcars-pill-btn pill-gemini-live" onclick="switchCategory('gemini_live')" id="btn-cat-gemini_live" style="display: none;">
+     SUBRAUM COMM
+   </button>
+   ```
+2. **Farbgebung**:
+   - Akzentfarbe: `var(--c-secondary)` (Violett / African Violet `#baa4e5`) oder `var(--c-blue)` (`#8899ff`) mit Kontrast-Schriftzug `#000000`.
+3. **Banner-Titel**:
+   - `CATEGORY_NAMES['gemini_live'] = 'LCARS SUBRAUM-KOMMUNIKATION // GEMINI 3.8 LIVE';`
+
+### 6.2 LCARS Command-Code Gate View
+Befindet sich die Sektion `gemini_live` im Status "Gesperrt" und ist keine valide Session vorhanden, wird das Gate gerendert:
+- `#geminiLiveGateView`:
+  - Titel: `ZUGRIFF AUF SUBRAUM COMM VERWEIGERT`
+  - Erklärung: `Die direkte Audioverbindung zur neuralen Schnittstelle Gemini 3.8 Live erfordert Autorisierung mit dem LCARS Command Code.`
+  - Passwort-/Code-Feld mit "AUTORISIEREN" Button.
+
+### 6.3 Aktiver Arbeitsbereich (`#geminiLiveActiveContent`)
+
+Das Interface gliedert sich in drei LCARS-Bedienbereiche:
+
+```
++-----------------------------------------------------------------------------------+
+| LCARS SUBRAUM-KOMMUNIKATION // GEMINI 3.8 LIVE                    [ONLINE // PUCK]|
++-----------------------------------------------------------------------------------+
+|  [ MODUS: PUSH-TO-TALK ]  [ MODUS: DAUERHAFT LIVE ]  [ 🎤 MUTE ]  [ ⏹ TRENNEN ]    |
++------------------------------------+----------------------------------------------+
+| 1. AUDIO VISUALIZER & PEGELEINHEIT | 2. TERMINAL LOG & LIVE-TRANSKRIPTION        |
+|                                    |                                              |
+| EINGANG (MIKROFON 16 kHz):         | [01:54:10] SYSTEM: Subraum-Kanal aktiv.     |
+| [ |||||||||||||||||||||||||| ] 42% | [01:54:12] COMMANDER: Statusbericht Warp-    |
+|                                    |            antrieb anfordern.                |
+| AUSGANG (GEMINI 3.8 LIVE 24 kHz):  | [01:54:14] COMPUTER: Warp-Kern arbeitet mit |
+| [ |||||||||||||||||||||||||| ] 78% |            98,4 Prozent Effizienz. Keine     |
+|                                    |            Anomalien detektiert.             |
+| STATUS: TRANSMITTING AUDIO...      |                                              |
+|                                    | [ Textnachricht eingeben... ] [ SENDEN ]     |
++------------------------------------+----------------------------------------------+
+| [ 🎙 SPRECHEN (LEERTASTE GEDRÜCKT HALTEN / BUTTON HALTEN) ]                       |
++-----------------------------------------------------------------------------------+
+```
+
+### 6.4 Web Audio Erfassungs- & Abspiel-Engine
+
+#### Mikrofon-Erfassung & 16kHz Downsampling
+```javascript
+// Web Audio Downsampler für Gemini 16kHz PCM
+function initAudioRecording(stream) {
+  const audioCtx = getAudioCtx();
+  const sourceNode = audioCtx.createMediaStreamSource(stream);
+  
+  // Analyser für Input-Visualizer
+  const inputAnalyser = audioCtx.createAnalyser();
+  inputAnalyser.fftSize = 64;
+  sourceNode.connect(inputAnalyser);
+
+  // ScriptProcessor / AudioWorklet für PCM Chunks
+  const bufferSize = 2048;
+  const scriptNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
+  
+  scriptNode.onaudioprocess = (audioEvent) => {
+    if (!isRecordingActive) return;
+    const inputData = audioEvent.inputBuffer.getChannelData(0);
+    
+    // Resampling von Hardware SampleRate auf 16000 Hz
+    const pcm16 = downsampleTo16k(inputData, audioCtx.sampleRate);
+    const base64Audio = int16ToBase64(pcm16);
+    
+    if (geminiLiveWs && geminiLiveWs.readyState === WebSocket.OPEN) {
+      geminiLiveWs.send(JSON.stringify({
+        type: 'audio',
+        data: base64Audio
+      }));
+    }
+  };
+
+  sourceNode.connect(scriptNode);
+  scriptNode.connect(audioCtx.destination);
+}
+```
+
+#### Audio-Wiedergabe & Jitter Buffer
+```javascript
+let nextPlaybackTime = 0;
+let activeAudioSources = [];
+
+function playGeminiAudioChunk(base64Audio, sampleRate = 24000) {
+  const audioCtx = getAudioCtx();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+
+  const pcmBytes = base64ToInt16(base64Audio);
+  const float32 = new Float32Array(pcmBytes.length);
+  for (let i = 0; i < pcmBytes.length; i++) {
+    float32[i] = pcmBytes[i] / 32768.0;
+  }
+
+  const audioBuffer = audioCtx.createBuffer(1, float32.length, sampleRate);
+  audioBuffer.copyToChannel(float32, 0);
+
+  const source = audioCtx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(outputAnalyserNode);
+  outputAnalyserNode.connect(audioCtx.destination);
+
+  const now = audioCtx.currentTime;
+  const startTime = Math.max(now, nextPlaybackTime);
+  source.start(startTime);
+  nextPlaybackTime = startTime + audioBuffer.duration;
+
+  activeAudioSources.push(source);
+  source.onended = () => {
+    const idx = activeAudioSources.indexOf(source);
+    if (idx !== -1) activeAudioSources.splice(idx, 1);
+  };
+}
+
+function stopAllGeminiAudio() {
+  activeAudioSources.forEach(s => {
+    try { s.stop(); } catch(e) {}
+  });
+  activeAudioSources = [];
+  const audioCtx = getAudioCtx();
+  if (audioCtx) nextPlaybackTime = audioCtx.currentTime;
+}
+```
+
+---
+
+## 7. Risiken, Edge-Cases & Absicherungen
+
+| Risiko / Randfall | Ursache | Vermeidungsstrategie |
+|---|---|---|
+| **Fehlende WebSocket-Bibliotheken** | `flask-sock` oder `websockets` nicht in `/usr/bin/python3` installiert | Automatischer Check und sichere Bereitstellung via `uv pip install --python /usr/bin/python3 --break-system-packages flask-sock websockets`. |
+| **API-Key Schutz** | API-Key könnte im Frontend exponiert werden | Der API-Key verbleibt **ausschließlich** serverseitig in `config.json`. Der Browser verbindet sich nur zum lokalen Dashboard-Endpunkt `/api/gemini-live/ws`. |
+| **Kein Fallback auf andere Modelle** | Gemini 3.8 Live meldet Überlastung oder Quota-Fehler | Anforderung strikt umgesetzt: Kein Modell-Fallback. Fehler wird transparent mit LCARS-Alarm im Terminal gemeldet. |
+| **Mikrofon-Berechtigung im Browser** | `getUserMedia` erfordert HTTPS oder localhost | Graceful Error Handling: Prüfung auf `window.isSecureContext`. Wenn über IP im LAN aufgerufen, LCARS-Hinweis auf `https://dash.pimmel.site` einblenden. |
+| **Audio-Jitter & Knackser** | Netzwerk-Latenz führt zu ungleichmäßigen Chunks | Zeitgesteuertes AudioBuffer-Scheduling (`nextPlaybackTime = Math.max(now, nextPlaybackTime) + chunkDuration`) garantiert unterbrechungsfreie Wiedergabe. |
+| **Barge-In (User unterbricht KI)** | User spricht während das Modell noch Audio generiert | Sofortiges Abfangen des `interrupted: true` Events -> Aufruf von `stopAllGeminiAudio()` und Leeren der Wiedergabewarteschlange. |
+| **Python Multiline String Escaping** | `DASHBOARD_HTML` in `app.py` stolpert über `\/` in Javascript-Regex | Strikte Einhaltung der Escaping-Regeln: Keine unescaped `\/` in Strings oder Regex innerhalb von `app.py`. |
+
+---
+
+## 8. Detaillierter Implementierungs- und Verifikationsplan
+
+### Phase 1: Abhängigkeiten & Systemumgebung
+- Installation der erforderlichen Python-Module (`flask-sock`, `websockets`, `simple-websocket`) in die Zielumgebung `/usr/bin/python3`.
+- Verifikation via Import-Test: `python3 -c "import flask_sock; from websockets.sync.client import connect; print('OK')"`.
+
+### Phase 2: Konfiguration & Zugriffsschutz
+- Eintrag des neuen Blocks `"gemini_live"` in `config.json` mit Model `gemini-3.8-live` und API-Key (in `config.local.json` bzw. Umgebungsvariable).
+- Hinzufügen von `"gemini_live"` zu `VALID_SECTIONS` in `permissions_service.py`.
+- Ergänzung von `"gemini_live"` in `permissions.locked_sections` in `config.json`.
+- Syntax- und Funktionstest von `permissions_service.py`.
+
+### Phase 3: Backend WebSocket-Relay (`app.py`)
+- Initialisierung von `Sock(app)` in `app.py`.
+- Implementierung der Autorisierungsfunktion `_gemini_live_authorized()` für WebSocket- und HTTP-Anfragen.
+- Erstellung der WebSocket-Route `@sock.route("/api/gemini-live/ws")`:
+  - Handshake-Validierung (Command-Code Prüfung).
+  - Outbound-Verbindung zu `wss://generativelanguage.googleapis.com/.../BidiGenerateContent`.
+  - Senden des Setup-Frames mit Modell `models/gemini-3.8-live`.
+  - Zwei Worker-Threads/Loops für simultanes Upstream- und Downstream-Relay.
+  - Sauberes Schließen und Freigeben der Ressourcen bei Verbindungsabbruch.
+
+### Phase 4: LCARS Frontend DOM & UI-Elemente
+- Hinzufügen des Nav-Buttons `btn-cat-gemini_live` ("SUBRAUM COMM") in die LCARS-Sidebar.
+- Einbindung von `gemini_live` in `CATEGORY_NAMES` und `applyPermissionsVisibility()`.
+- Hinzufügen der Checkbox für `gemini_live` in die Berechtigungsverwaltung der CONFIG-Sektion.
+- Implementierung der Section `#section-gemini_live` mit Header, Status-Badges, `#geminiLiveGateView` und `#geminiLiveActiveContent`.
+- Gestaltung des Control-Panels (Push-to-Talk vs. Live-Modus, Mute, Disconnect).
+
+### Phase 5: Web Audio API, Visualizer & Transkription
+- Implementierung der Mikrofon-Pipeline (16kHz Downsampler, Int16 PCM Base64 Encoder).
+- Implementierung der Audio-Ausgabe-Pipeline (24kHz PCM Decoder, Queue-Scheduler, Barge-In Handler).
+- Implementierung des LCARS Dual-Visualizers (Echtzeit-Pegel für Mikrofon und Gemini-Stimme über Canvas/Segment-Bars).
+- Implementierung des Transkriptions-Terminals mit Scrolling, Rollenfarben und Statusanzeige.
+- Implementierung der PTT-Steuerung (Maus-Hold und Leertaste Event Listener).
+
+### Phase 6: Verifikation & Systemtests
+1. **Syntax- & Kompilierungsprüfung**:
+   - `python3 -m py_compile app.py permissions_service.py` fehlerfrei.
+2. **Rechteprüfung**:
+   - Dashboard aufrufen: `SUBRAUM COMM` Button ist bei gesperrtem Zustand unsichtbar oder führt zum Command-Code Modal.
+   - Eingabe von `0901` schaltet den Bereich frei.
+   - WebSocket-Aufruf ohne Code oder mit falschem Code wird mit 4403 abgewiesen.
+3. **Audio-Streaming-Prüfung**:
+   - Klick auf "SUBRAUM-KANAL ÖFFNEN" stellt Verbindung zu Gemini Live her (Status wechselt auf BEREIT).
+   - Spracheingabe (PTT oder Continuous): Pegel schlägt im Input-Visualizer aus.
+   - Modell antwortet: Live-Transkript erscheint und Stimme wird über AudioContext sauber abgespielt.
+   - Visualizer zeigt den Ausgangspegel synchron zur Sprachausgabe an.
+   - Barge-In Test: Dazwischensprechen bricht die laufende Sprachausgabe sofort ab.
+4. **Service-Stabilität**:
+   - Neustart von `agydashboard.service` via `systemctl --user restart agydashboard.service`.
+   - Prüfung von `journalctl --user -u agydashboard.service -n 50` auf sauberen Start.
+

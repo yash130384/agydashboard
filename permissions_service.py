@@ -11,7 +11,7 @@ import sys
 import threading
 
 DEFAULT_COMMAND_CODE = "0901"
-DEFAULT_LOCKED_SECTIONS = ["cycle", "pulsecast"]
+DEFAULT_LOCKED_SECTIONS = ["cycle", "pulsecast", "gemini_live"]
 VALID_SECTIONS = [
     "system",
     "services",
@@ -23,6 +23,7 @@ VALID_SECTIONS = [
     "homeassistant",
     "cycle",
     "pulsecast",
+    "gemini_live",
 ]
 
 

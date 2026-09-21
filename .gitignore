@@ -5,3 +5,5 @@ node_modules/
 *.log
 espn_score_tracker.json
 *.db*
+static/leto
+config.local.json

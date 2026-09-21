@@ -22,12 +22,19 @@
   "home_assistant": {
     "enabled": true,
     "url": "http://127.0.0.1:8123",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI3Y2Y5NGRjZGJmMzU0ZTU5YTZjNWRkODZiMTkzZjdjZCIsImlhdCI6MTc4OTkyNTQ0MiwiZXhwIjoxNzg5OTI3MjQyfQ.OLGL1NwmMpmB2yHbAoYyXTtHxxezsGsgF6y4hiF1qwk",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI3Y2Y5NGRjZGJmMzU0ZTU5YTZjNWRkODZiMTkzZjdjZCIsImlhdCI6MTc4OTk0ODUwMiwiZXhwIjoxNzg5OTUwMzAyfQ.GjXiu_mnXZBlvLTXdzuBhO09PcF4SJ9hdlmr3t-3WZk",
     "username": "cb",
     "password": "mymaajen",
     "refresh_token": "e2e1a52cf9bc59f6990f74a1586db8f8e9a5203aef6c462a05f0a7a54816ff7dfe36248ce0aa1a28140e94dfd29b3b694eac6fe8260aa342aef3b2c08dd9d453",
-    "token_expires_at": 1789927182.8402996,
+    "token_expires_at": 1789950242.3410547,
     "name": "Assistant"
+  },
+  "gemini_live": {
+    "api_key": "",
+    "model": "gemini-3.8-live",
+    "voice": "Puck",
+    "system_instruction": "Du bist der LCARS Bordcomputer der USS Antigravity. Du interagierst direkt mit dem Commander über Subraum-Audio. Antworte stets präzise, professionell, hilfsbereit und im authentischen Ton eines Starfleet Computer-Terminals auf Deutsch.",
+    "temperature": 0.6
   },
   "permissions": {
     "command_code": "0901",
@@ -38,7 +45,8 @@
       "fantasy",
       "homeassistant",
       "cycle",
-      "pulsecast"
+      "pulsecast",
+      "gemini_live"
     ]
   }
 }
