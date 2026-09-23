@@ -1563,6 +1563,8 @@ def get_9router_stats(cache_ttl=10.0):
         },
         "by_provider": {},
         "by_model": {},
+        "by_instance": [],
+        "by_api_key": [],
         "daily_timeline": [],
         "recent_history": [],
         "connections": [],
@@ -1574,6 +1576,32 @@ def get_9router_stats(cache_ttl=10.0):
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
         try:
             c = conn.cursor()
+
+            # 0. apiKeys: Mapping von API-Keys zu Namen & Status laden
+            api_key_meta = {}
+            try:
+                c.execute("SELECT key, name, isActive FROM apiKeys")
+                for row in c.fetchall():
+                    k, name, is_act = row
+                    api_key_meta[k] = {
+                        "name": name or "Unbenannter Key",
+                        "is_active": bool(is_act)
+                    }
+            except Exception:
+                pass
+
+            aggregated_by_instance = {}
+            for k, meta in api_key_meta.items():
+                aggregated_by_instance[k] = {
+                    "key": k,
+                    "name": meta["name"],
+                    "is_active": meta["is_active"],
+                    "requests": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "cached_tokens": 0,
+                    "cost": 0.0,
+                }
 
             # 1. usageDaily: Alle Tage aggregieren
             c.execute("SELECT dateKey, data FROM usageDaily ORDER BY dateKey ASC")
@@ -1654,6 +1682,27 @@ def get_9router_stats(cache_ttl=10.0):
                     aggregated_by_model[raw_model]["completionTokens"] += m_info.get("completionTokens", 0)
                     aggregated_by_model[raw_model]["cachedTokens"] += m_info.get("cachedTokens", 0)
                     aggregated_by_model[raw_model]["cost"] += m_info.get("cost", 0.0)
+
+                # byApiKey
+                for ak_key, ak_info in day_data.get("byApiKey", {}).items():
+                    raw_key = ak_info.get("apiKey") or (ak_key.split("|")[0] if "|" in ak_key else ak_key) or "unauthenticated"
+                    if raw_key not in aggregated_by_instance:
+                        meta = api_key_meta.get(raw_key, {})
+                        aggregated_by_instance[raw_key] = {
+                            "key": raw_key,
+                            "name": meta.get("name") or (f"Unbekannt ({raw_key[:7]}...{raw_key[-4:]})" if len(raw_key) > 14 else raw_key),
+                            "is_active": meta.get("is_active", True),
+                            "requests": 0,
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "cached_tokens": 0,
+                            "cost": 0.0,
+                        }
+                    aggregated_by_instance[raw_key]["requests"] += ak_info.get("requests", 0)
+                    aggregated_by_instance[raw_key]["prompt_tokens"] += ak_info.get("promptTokens", 0)
+                    aggregated_by_instance[raw_key]["completion_tokens"] += ak_info.get("completionTokens", 0)
+                    aggregated_by_instance[raw_key]["cached_tokens"] += ak_info.get("cachedTokens", 0)
+                    aggregated_by_instance[raw_key]["cost"] += ak_info.get("cost", 0.0)
 
             # 2. usageHistory: Letzte 15 Requests
             c.execute("""
@@ -1754,6 +1803,34 @@ def get_9router_stats(cache_ttl=10.0):
                     return f"{n/1_000:.1f}k"
                 return str(n)
 
+            by_instance = []
+            for k, stats_item in aggregated_by_instance.items():
+                total_tok = stats_item["prompt_tokens"] + stats_item["completion_tokens"]
+                pct = round((total_tok / total_tokens * 100), 1) if total_tokens > 0 else 0.0
+                prefix = f"{k[:7]}...{k[-4:]}" if len(k) > 14 else k
+                by_instance.append({
+                    "key": k,
+                    "key_prefix": prefix,
+                    "name": stats_item["name"],
+                    "is_active": stats_item.get("is_active", True),
+                    "requests": stats_item["requests"],
+                    "requests_formatted": f"{stats_item['requests']:,}",
+                    "prompt_tokens": stats_item["prompt_tokens"],
+                    "completion_tokens": stats_item["completion_tokens"],
+                    "cached_tokens": stats_item["cached_tokens"],
+                    "total_tokens": total_tok,
+                    "total_formatted": fmt_num(total_tok),
+                    "prompt_formatted": fmt_num(stats_item["prompt_tokens"]),
+                    "completion_formatted": fmt_num(stats_item["completion_tokens"]),
+                    "cached_formatted": fmt_num(stats_item["cached_tokens"]),
+                    "cost": round(stats_item["cost"], 6),
+                    "cost_formatted": f"${stats_item['cost']:.4f}",
+                    "percent": pct,
+                    "percent_formatted": f"{pct:.1f}%"
+                })
+
+            by_instance.sort(key=lambda x: (x["total_tokens"], x["cost"]), reverse=True)
+
             res = {
                 "status": "online",
                 "totals": {
@@ -1781,6 +1858,8 @@ def get_9router_stats(cache_ttl=10.0):
                 },
                 "by_provider": aggregated_by_provider,
                 "by_model": aggregated_by_model,
+                "by_instance": by_instance,
+                "by_api_key": by_instance,
                 "daily_timeline": daily_timeline,
                 "recent_history": recent_requests,
                 "connections": connections
@@ -5604,6 +5683,66 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </div>
           </div>
 
+          <!-- 9ROUTER INSTANZEN / VERURSACHER TOKEN-VERBRAUCH -->
+          <div class="lcars-card" style="margin-top:1.25rem; width:100%; min-width:0; overflow-x:auto;">
+            <div class="card-head" style="margin-bottom:0.75rem; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <span class="card-head-title" style="color:var(--c-primary); font-size:1.1rem;">
+                  9ROUTER INSTANZEN / VERURSACHER TOKEN-VERBRAUCH
+                </span>
+                <span class="card-head-icon">🤖</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <span class="badge-status badge-online">ODN AGENTEN-AUFSCHLÜSSELUNG</span>
+              </div>
+            </div>
+
+            <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+              <thead>
+                <tr style="border-bottom:2px solid var(--c-primary); text-align:left; color:var(--c-gold); font-size:0.8rem; letter-spacing:0.05em;">
+                  <th style="padding:0.6rem 0.5rem;">INSTANZ / AGENT</th>
+                  <th style="padding:0.6rem 0.5rem;">API-KEY</th>
+                  <th style="padding:0.6rem 0.5rem; text-align:right;">REQUESTS</th>
+                  <th style="padding:0.6rem 0.5rem; text-align:right;">PROMPT</th>
+                  <th style="padding:0.6rem 0.5rem; text-align:right;">COMPLETION</th>
+                  <th style="padding:0.6rem 0.5rem; text-align:right; color:var(--c-blue);">CACHED</th>
+                  <th style="padding:0.6rem 0.5rem; text-align:right; color:var(--c-primary); font-weight:700;">GESAMT</th>
+                  <th style="padding:0.6rem 0.5rem; text-align:right; color:var(--c-gold);">KOSTEN</th>
+                  <th style="padding:0.6rem 0.5rem; width:130px; text-align:center;">ANTEIL</th>
+                </tr>
+              </thead>
+              <tbody id="nineRouterInstancesTableBody">
+                {% if stats.nine_router and stats.nine_router.by_instance %}
+                  {% for inst in stats.nine_router.by_instance %}
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.08); font-family:var(--mono-family);">
+                    <td style="padding:0.55rem 0.5rem; font-weight:700; color:var(--c-primary);">
+                      <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:{% if inst.is_active %}#00e676{% else %}#ff5252{% endif %}; margin-right:6px;"></span>
+                      {{ inst.name }}
+                    </td>
+                    <td style="padding:0.55rem 0.5rem; color:#aaa; font-size:0.8rem;" title="{{ inst.key }}">{{ inst.key_prefix }}</td>
+                    <td style="padding:0.55rem 0.5rem; text-align:right;">{{ inst.requests|number_format }}</td>
+                    <td style="padding:0.55rem 0.5rem; text-align:right;">{{ inst.prompt_formatted }}</td>
+                    <td style="padding:0.55rem 0.5rem; text-align:right;">{{ inst.completion_formatted }}</td>
+                    <td style="padding:0.55rem 0.5rem; text-align:right; color:var(--c-blue);">{{ inst.cached_formatted }}</td>
+                    <td style="padding:0.55rem 0.5rem; text-align:right; font-weight:700; color:var(--c-primary);">{{ inst.total_formatted }}</td>
+                    <td style="padding:0.55rem 0.5rem; text-align:right; color:var(--c-gold);">{{ inst.cost_formatted }}</td>
+                    <td style="padding:0.55rem 0.5rem; text-align:center;">
+                      <div style="display:flex; align-items:center; gap:6px;">
+                        <div style="flex:1; background:rgba(255,255,255,0.1); height:6px; border-radius:3px; overflow:hidden;">
+                          <div style="width:{{ inst.percent }}%; background:var(--c-primary); height:100%;"></div>
+                        </div>
+                        <span style="font-size:0.75rem; min-width:38px; text-align:right;">{{ inst.percent_formatted }}</span>
+                      </div>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                {% else %}
+                  <tr><td colspan="9" style="padding:1rem; text-align:center; color:#888;">Keine Instanzen-Daten erfasst.</td></tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+
           <!-- WEITERE KI-DIENSTE (OPENROUTER, ANTIGRAVITY, HERMES) -->
           <div class="readout-grid" style="margin-top: 1rem;">
             <!-- OpenRouter -->
@@ -8498,6 +8637,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   var lastServicesFingerprint = '';
   var lastNrConnFingerprint = '';
   var lastNrHistoryFingerprint = '';
+  var lastNrInstancesFingerprint = '';
   var latestDiscoveredServers = initialStats?.discovered_servers || [];
 
   // Sound Engine (Web Audio API Synthesizer)
@@ -11609,6 +11749,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     // Only do heavy DOM table/list updates and chart updates if 'ai-info' or 'agents' is visible
     if (currentCategory !== 'ai-info' && currentCategory !== 'agents') {
       return;
+    }
+
+    // Instances / Verursacher Table Rendering with dirty-checking
+    const instTbody = document.getElementById('nineRouterInstancesTableBody');
+    if (instTbody && nrData.by_instance) {
+      const instFp = nrData.by_instance.map(i => `${i.key_prefix}:${i.requests}:${i.total_tokens}:${i.cost}`).join('|');
+      if (instFp !== lastNrInstancesFingerprint) {
+        lastNrInstancesFingerprint = instFp;
+        if (nrData.by_instance.length === 0) {
+          instTbody.innerHTML = '<tr><td colspan="9" style="padding:1rem; text-align:center; color:#888;">Keine Instanzen-Daten erfasst.</td></tr>';
+        } else {
+          let iHtml = '';
+          nrData.by_instance.forEach(inst => {
+            const dotColor = inst.is_active ? '#00e676' : '#ff5252';
+            iHtml += `
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.08); font-family:var(--mono-family);">
+                <td style="padding:0.55rem 0.5rem; font-weight:700; color:var(--c-primary);">
+                  <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${dotColor}; margin-right:6px;"></span>
+                  ${escapeHtml(inst.name)}
+                </td>
+                <td style="padding:0.55rem 0.5rem; color:#aaa; font-size:0.8rem;" title="${escapeHtml(inst.key)}">${escapeHtml(inst.key_prefix)}</td>
+                <td style="padding:0.55rem 0.5rem; text-align:right;">${Number(inst.requests || 0).toLocaleString()}</td>
+                <td style="padding:0.55rem 0.5rem; text-align:right;">${escapeHtml(inst.prompt_formatted || '0')}</td>
+                <td style="padding:0.55rem 0.5rem; text-align:right;">${escapeHtml(inst.completion_formatted || '0')}</td>
+                <td style="padding:0.55rem 0.5rem; text-align:right; color:var(--c-blue);">${escapeHtml(inst.cached_formatted || '0')}</td>
+                <td style="padding:0.55rem 0.5rem; text-align:right; font-weight:700; color:var(--c-primary);">${escapeHtml(inst.total_formatted || '0')}</td>
+                <td style="padding:0.55rem 0.5rem; text-align:right; color:var(--c-gold);">${escapeHtml(inst.cost_formatted || '$0.00')}</td>
+                <td style="padding:0.55rem 0.5rem; text-align:center;">
+                  <div style="display:flex; align-items:center; gap:6px;">
+                    <div style="flex:1; background:rgba(255,255,255,0.1); height:6px; border-radius:3px; overflow:hidden;">
+                      <div style="width:${inst.percent || 0}%; background:var(--c-primary); height:100%;"></div>
+                    </div>
+                    <span style="font-size:0.75rem; min-width:38px; text-align:right;">${inst.percent_formatted || '0.0%'}</span>
+                  </div>
+                </td>
+              </tr>
+            `;
+          });
+          instTbody.innerHTML = iHtml;
+        }
+      }
     }
 
     // Provider Connections List Rendering with dirty-checking
@@ -18061,6 +18242,13 @@ def render_html_fallback(stats):
 # ---------------------------------------------------------------------------
 if USE_FLASK:
     app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+    @app.template_filter('number_format')
+    def number_format_filter(val):
+        try:
+            return f"{int(val):,}"
+        except Exception:
+            return str(val)
 
     try:
         from flask_sock import Sock

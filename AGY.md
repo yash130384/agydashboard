@@ -2641,3 +2641,415 @@ Wenn im `semi`-Modus ein aktiver Vorschlag vorliegt, blendet das Dashboard oberh
 4. **Live-Dry-Run**: Durchführung einer Test-Validierung gegen die echte ESPN API mit `executionType: "VALIDATE"`.
 5. **Systemd-Service Verifikation**: Neustart von `agydashboard.service` und Log-Kontrolle.
 
+---
+
+# Architektur- & Implementierungsplan: 9Router Instanzen- & Verursacher-Aufschlüsselung (Token- & Kosten-Tracking)
+
+## 1. Zielsetzung & Problemstellung
+
+Im aktuellen System aggregiert die Funktion `get_9router_stats()` in `app.py` sämtliche Token, Requests und Kosten ausschließlich global über Provider und Modelle (`byProvider`, `byModel`). Da bisher alle lokalen KI-Agenten und Bots (**Hermes**, **Bud**, **Terence**) denselben Default-API-Key (`sk-a83b72936d0528ea-bhpytf-49c7be05`) nutzten, war eine Differenzierung nach dem eigentlichen Verursacher (welcher Agent verbraucht wie viele Token und Kosten?) unmöglich.
+
+### Kernziele der Implementierung
+1. **Verursacher-Transparenz**: Aufschlüsselung des Verbrauchs nach individuellen Instanzen / Agenten (Hermes, Bud, Terence, Jennifer etc.) im LCARS Dashboard.
+2. **API-Key Provisionierung**: Trennung der API-Keys für alle Bots in 9Router und Hinterlegung in deren individuellen `.env` / `config.yaml`-Dateien.
+3. **LCARS UI-Integration**: Einbettung einer stilkonformen LCARS-Tabelle "9ROUTER INSTANZEN / VERURSACHER TOKEN-VERBRAUCH" in `#section-ai-info`.
+4. **Dynamisches Polling**: Nahtloses Live-Update der Instanzen-Tabelle im bestehenden Telemetrie-Zyklus ohne DOM-Flackern (Dirty-Checking).
+
+---
+
+## 2. System- & Datenfluss-Architektur
+
+```mermaid
+flowchart TD
+    subgraph Agents["Autonome Agenten & Bots"]
+        Hermes["Hermes (Default)\nsk-a83...be05"]
+        Bud["Bud (Telegram)\nsk-bud..."]
+        Terence["Terence (Telegram)\nsk-ter..."]
+        Jennifer["Jennifer (Hermes Profile)\nsk-jen..."]
+    end
+
+    subgraph Router["9Router AI Gateway (Port 20128)"]
+        Proxy["Proxy Endpoint /v1/chat/completions"]
+        KeyAuth["API-Key Validierung & Zuordnung"]
+        DBWriter["SQLite Writer"]
+    end
+
+    subgraph Storage["Persistenz (~/.9router/db/data.sqlite)"]
+        TblKeys[("apiKeys\n(id, key, name, machineId, isActive)")]
+        TblDaily[("usageDaily\n(dateKey, data -> byApiKey)")]
+        TblHistory[("usageHistory\n(id, timestamp, apiKey, model, tokens...)")]
+    end
+
+    subgraph Dashboard["agydashboard (Port 5000)"]
+        Backend["app.py: get_9router_stats()\n• Query apiKeys (Key -> Name)\n• Aggregation aus usageDaily.byApiKey\n• Erstellung by_instance Liste"]
+        Template["Template #section-ai-info\n• LCARS Instanzen-Tabelle"]
+        FrontendJS["renderNineRouterStats(nrData)\n• Dirty-Checking Fingerprint\n• Dynamisches DOM-Update"]
+    end
+
+    Hermes & Bud & Terence & Jennifer -->|HTTP Request mit individuellem API-Key| Proxy
+    Proxy --> KeyAuth
+    KeyAuth --> DBWriter
+    DBWriter --> TblDaily
+    DBWriter --> TblHistory
+
+    TblKeys & TblDaily & TblHistory -->|sqlite3 (mode=ro)| Backend
+    Backend -->|stats.nine_router.by_instance| Template
+    Backend -->|JSON /api/stats| FrontendJS
+    FrontendJS -->|Live DOM Update| Template
+```
+
+---
+
+## 3. Datenmodell & Aggregationslogik in `get_9router_stats()` (`app.py` L1529–1790)
+
+### 3.1 SQLite-Tabellenstruktur
+In `~/.9router/db/data.sqlite` existieren folgende relevante Schemata:
+- **`apiKeys`**:
+  `CREATE TABLE apiKeys (id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, name TEXT, machineId TEXT, isActive INTEGER DEFAULT 1, createdAt TEXT NOT NULL);`
+- **`usageDaily`**:
+  `CREATE TABLE usageDaily (dateKey TEXT PRIMARY KEY, data TEXT NOT NULL);`
+  Im JSON-Feld `data` existiert das Objekt `byApiKey`. Jedes Element ist geschlüsselt nach `<apiKey>|<rawModel>|<provider>` und enthält:
+  ```json
+  {
+    "apiKey": "sk-a83b72936d0528ea-bhpytf-49c7be05",
+    "rawModel": "gemini-3.8-flash-high",
+    "provider": "antigravity",
+    "requests": 139,
+    "promptTokens": 385579,
+    "completionTokens": 7970,
+    "cachedTokens": 0,
+    "cost": 2.693271
+  }
+  ```
+
+### 3.2 Implementierungsschritte in Python
+
+1. **Mapping von API-Keys zu Namen laden**:
+   ```python
+   c.execute("SELECT key, name, isActive FROM apiKeys")
+   api_key_meta = {}
+   for row in c.fetchall():
+       k, name, is_act = row
+       api_key_meta[k] = {
+           "name": name or "Unbenannter Key",
+           "is_active": bool(is_act)
+       }
+   ```
+
+2. **Aggregation aus `usageDaily.data.byApiKey`**:
+   Für jeden Tag in `usageDaily` wird das JSON-Objekt `byApiKey` durchlaufen. Die Kennzahlen werden pro `raw_key` summiert:
+   - `requests`
+   - `prompt_tokens`
+   - `completion_tokens`
+   - `cached_tokens`
+   - `cost`
+
+3. **Vollständige Instanzen-Liste (`by_instance`) aufbauen**:
+   - Auch Keys aus `apiKeys`, die bisher noch keine Anfragen gesendet haben (0 Requests), werden initialisiert, damit neu angelegte Bots sofort sichtbar sind.
+   - Keys, die in `byApiKey` existieren, aber nicht mehr in `apiKeys` (z.B. gelöschte Keys), erhalten einen Fallback-Namen (`"Gelöschter Key"` oder `"Unbekannt"`).
+
+4. **Metriken & Prozentanteile berechnen**:
+   ```python
+   by_instance = []
+   for k, stats in aggregated_by_key.items():
+       total_tok = stats["prompt_tokens"] + stats["completion_tokens"]
+       pct = round((total_tok / total_tokens * 100), 1) if total_tokens > 0 else 0.0
+       
+       # Key-Prefix zur sicheren Anzeige (z.B. sk-a83b...be05)
+       prefix = f"{k[:7]}...{k[-4:]}" if len(k) > 14 else k
+       
+       by_instance.append({
+           "key": k,
+           "key_prefix": prefix,
+           "name": stats["name"],
+           "is_active": stats.get("is_active", True),
+           "requests": stats["requests"],
+           "prompt_tokens": stats["prompt_tokens"],
+           "completion_tokens": stats["completion_tokens"],
+           "cached_tokens": stats["cached_tokens"],
+           "total_tokens": total_tok,
+           "total_formatted": fmt_num(total_tok),
+           "prompt_formatted": fmt_num(stats["prompt_tokens"]),
+           "completion_formatted": fmt_num(stats["completion_tokens"]),
+           "cached_formatted": fmt_num(stats["cached_tokens"]),
+           "cost": round(stats["cost"], 6),
+           "cost_formatted": f"${stats['cost']:.4f}",
+           "percent": pct,
+           "percent_formatted": f"{pct:.1f}%"
+       })
+
+   # Sortierung absteigend nach total_tokens, sekundär cost
+   by_instance.sort(key=lambda x: (x["total_tokens"], x["cost"]), reverse=True)
+   ```
+
+5. **Erweiterung von `default_res` und `res`**:
+   - `default_res["by_instance"] = []`
+   - `res["by_instance"] = by_instance` (sowie Alias `res["by_api_key"] = by_instance` zur Abwärtskompatibilität).
+
+---
+
+## 4. LCARS UI-Integration im Template (`app.py` L5531–5791)
+
+### 4.1 Positionierung
+Die neue LCARS-Kachel wird in `#section-ai-info` direkt unter den Hauptkacheln (nach Zeile 5605 bzw. vor den externen KI-Diensten in Zeile 5608) platziert.
+
+### 4.2 HTML-Struktur der LCARS-Tabelle
+
+```html
+<!-- 9ROUTER INSTANZEN / VERURSACHER TOKEN-VERBRAUCH -->
+<div class="lcars-card" style="margin-top:1.25rem; width:100%; min-width:0; overflow-x:auto;">
+  <div class="card-head" style="margin-bottom:0.75rem; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
+    <div style="display:flex; align-items:center; gap:0.5rem;">
+      <span class="card-head-title" style="color:var(--c-primary); font-size:1.1rem;">
+        9ROUTER INSTANZEN / VERURSACHER TOKEN-VERBRAUCH
+      </span>
+      <span class="card-head-icon">🤖</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:0.5rem;">
+      <span class="badge-status badge-online">ODN AGENTEN-AUFSCHLÜSSELUNG</span>
+    </div>
+  </div>
+
+  <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+    <thead>
+      <tr style="border-bottom:2px solid var(--c-primary); text-align:left; color:var(--c-gold); font-size:0.8rem; letter-spacing:0.05em;">
+        <th style="padding:0.6rem 0.5rem;">INSTANZ / AGENT</th>
+        <th style="padding:0.6rem 0.5rem;">API-KEY</th>
+        <th style="padding:0.6rem 0.5rem; text-align:right;">REQUESTS</th>
+        <th style="padding:0.6rem 0.5rem; text-align:right;">PROMPT</th>
+        <th style="padding:0.6rem 0.5rem; text-align:right;">COMPLETION</th>
+        <th style="padding:0.6rem 0.5rem; text-align:right; color:var(--c-blue);">CACHED</th>
+        <th style="padding:0.6rem 0.5rem; text-align:right; color:var(--c-primary); font-weight:700;">GESAMT</th>
+        <th style="padding:0.6rem 0.5rem; text-align:right; color:var(--c-gold);">KOSTEN</th>
+        <th style="padding:0.6rem 0.5rem; width:130px; text-align:center;">ANTEIL</th>
+      </tr>
+    </thead>
+    <tbody id="nineRouterInstancesTableBody">
+      {% if stats.nine_router and stats.nine_router.by_instance %}
+        {% for inst in stats.nine_router.by_instance %}
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.08); font-family:var(--mono-family);">
+          <td style="padding:0.55rem 0.5rem; font-weight:700; color:var(--c-primary);">
+            <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:{% if inst.is_active %}#00e676{% else %}#ff5252{% endif %}; margin-right:6px;"></span>
+            {{ inst.name }}
+          </td>
+          <td style="padding:0.55rem 0.5rem; color:#aaa; font-size:0.8rem;" title="{{ inst.key }}">{{ inst.key_prefix }}</td>
+          <td style="padding:0.55rem 0.5rem; text-align:right;">{{ inst.requests|number_format }}</td>
+          <td style="padding:0.55rem 0.5rem; text-align:right;">{{ inst.prompt_formatted }}</td>
+          <td style="padding:0.55rem 0.5rem; text-align:right;">{{ inst.completion_formatted }}</td>
+          <td style="padding:0.55rem 0.5rem; text-align:right; color:var(--c-blue);">{{ inst.cached_formatted }}</td>
+          <td style="padding:0.55rem 0.5rem; text-align:right; font-weight:700; color:var(--c-primary);">{{ inst.total_formatted }}</td>
+          <td style="padding:0.55rem 0.5rem; text-align:right; color:var(--c-gold);">{{ inst.cost_formatted }}</td>
+          <td style="padding:0.55rem 0.5rem; text-align:center;">
+            <div style="display:flex; align-items:center; gap:6px;">
+              <div style="flex:1; background:rgba(255,255,255,0.1); height:6px; border-radius:3px; overflow:hidden;">
+                <div style="width:{{ inst.percent }}%; background:var(--c-primary); height:100%;"></div>
+              </div>
+              <span style="font-size:0.75rem; min-width:38px; text-align:right;">{{ inst.percent_formatted }}</span>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      {% else %}
+        <tr><td colspan="9" style="padding:1rem; text-align:center; color:#888;">Keine Instanzen-Daten erfasst.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+```
+
+---
+
+## 5. Client-seitiges JavaScript (`renderNineRouterStats()`, L11547–11685)
+
+### 5.1 Implementierung & Dirty-Checking
+Im Client-Script wird `renderNineRouterStats(nrData)` erweitert. Um unnötiges Neu-Rendern bei jedem 3-Sekunden-Polling zu verhindern, wird ein String-Fingerprint (`lastNrInstancesFingerprint`) genutzt:
+
+```javascript
+// Variable im oberen Skriptbereich definieren:
+let lastNrInstancesFingerprint = '';
+
+// Innerhalb von renderNineRouterStats(nrData):
+const instTbody = document.getElementById('nineRouterInstancesTableBody');
+if (instTbody && nrData.by_instance) {
+  const instFp = nrData.by_instance.map(i => `${i.key_prefix}:${i.requests}:${i.total_tokens}:${i.cost}`).join('|');
+  if (instFp !== lastNrInstancesFingerprint) {
+    lastNrInstancesFingerprint = instFp;
+    if (nrData.by_instance.length === 0) {
+      instTbody.innerHTML = '<tr><td colspan="9" style="padding:1rem; text-align:center; color:#888;">Keine Instanzen-Daten erfasst.</td></tr>';
+    } else {
+      let iHtml = '';
+      nrData.by_instance.forEach(inst => {
+        const dotColor = inst.is_active ? '#00e676' : '#ff5252';
+        iHtml += `
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.08); font-family:var(--mono-family);">
+            <td style="padding:0.55rem 0.5rem; font-weight:700; color:var(--c-primary);">
+              <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${dotColor}; margin-right:6px;"></span>
+              ${escapeHtml(inst.name)}
+            </td>
+            <td style="padding:0.55rem 0.5rem; color:#aaa; font-size:0.8rem;" title="${escapeHtml(inst.key)}">${escapeHtml(inst.key_prefix)}</td>
+            <td style="padding:0.55rem 0.5rem; text-align:right;">${Number(inst.requests || 0).toLocaleString()}</td>
+            <td style="padding:0.55rem 0.5rem; text-align:right;">${escapeHtml(inst.prompt_formatted || '0')}</td>
+            <td style="padding:0.55rem 0.5rem; text-align:right;">${escapeHtml(inst.completion_formatted || '0')}</td>
+            <td style="padding:0.55rem 0.5rem; text-align:right; color:var(--c-blue);">${escapeHtml(inst.cached_formatted || '0')}</td>
+            <td style="padding:0.55rem 0.5rem; text-align:right; font-weight:700; color:var(--c-primary);">${escapeHtml(inst.total_formatted || '0')}</td>
+            <td style="padding:0.55rem 0.5rem; text-align:right; color:var(--c-gold);">${escapeHtml(inst.cost_formatted || '$0.00')}</td>
+            <td style="padding:0.55rem 0.5rem; text-align:center;">
+              <div style="display:flex; align-items:center; gap:6px;">
+                <div style="flex:1; background:rgba(255,255,255,0.1); height:6px; border-radius:3px; overflow:hidden;">
+                  <div style="width:${inst.percent || 0}%; background:var(--c-primary); height:100%;"></div>
+                </div>
+                <span style="font-size:0.75rem; min-width:38px; text-align:right;">${inst.percent_formatted || '0.0%'}</span>
+              </div>
+            </td>
+          </tr>
+        `;
+      });
+      instTbody.innerHTML = iHtml;
+    }
+  }
+}
+```
+
+### 5.2 Wichtige Platzierungsregel
+> [!IMPORTANT]
+> Sämtliche neuen JavaScript-Funktionen, Event-Handler und Variablen **MÜSSEN zwingend VOR `bootDashboard()` (ca. Zeile 18011 in `app.py`)** platziert werden! Ein Hinzufügen nach `bootDashboard()` führt dazu, dass Funktionen beim Aufruf der Initialisierungs-Routinen noch nicht deklariert sind.
+
+---
+
+## 6. Bot-Konfiguration & Key-Provisionierung (Hermes, Bud, Terence, Jennifer)
+
+### 6.1 Bestehende Situation
+- **Hermes**: Nutzt `sk-a83b72936d0528ea-bhpytf-49c7be05` in `/home/cb/.hermes/.env`. Dieser Key ist in `~/.9router/db/data.sqlite` in der Tabelle `apiKeys` bereits als `"Hermes"` benannt.
+- **Bud & Terence**: Nutzen bisher dieselbe Umgebungsvariable `OPENAI_API_KEY=sk-a83b72936d0528ea-bhpytf-49c7be05` in ihren `.env`-Dateien.
+- **Jennifer**: Läuft als Hermes-Profil unter `/home/cb/.hermes/profiles/jennifer` und benötigt einen eigenen Key.
+
+### 6.2 Key-Erzeugung in 9Router
+9Router verwendet für API-Keys das Schema:
+`sk-<machineId>-<6_stellige_zufallsfolge>-<8_stelliger_hexcode>` (z.B. `sk-a83b72936d0528ea-bud001-c841e921`).
+
+**Verfahren zur Key-Erstellung:**
+1. **Via Web-UI**: In `https://ai.pimmel.site` (bzw. `http://localhost:20128`) unter Menü **API Keys** -> **+ Add Key** die Namen vergeben:
+   - `Bud`
+   - `Terence`
+   - `Jennifer`
+2. **Via automatisiertes CLI/Python-Skript (direkt in SQLite)**:
+   ```bash
+   python3 -c "
+   import sqlite3, uuid, secrets, datetime
+
+   db = '/home/cb/.9router/db/data.sqlite'
+   conn = sqlite3.connect(db)
+   c = conn.cursor()
+   machine_id = 'a83b72936d0528ea'
+   now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
+
+   bots = ['Bud', 'Terence', 'Jennifer']
+   for name in bots:
+       c.execute('SELECT key FROM apiKeys WHERE name = ?', (name,))
+       row = c.fetchone()
+       if not row:
+           key_id = str(uuid.uuid4())
+           rand_part = secrets.token_hex(3)
+           rand_suffix = secrets.token_hex(4)
+           new_key = f'sk-{machine_id}-{rand_part}-{rand_suffix}'
+           c.execute(
+               'INSERT INTO apiKeys (id, key, name, machineId, isActive, createdAt) VALUES (?, ?, ?, ?, 1, ?)',
+               (key_id, new_key, name, machine_id, now)
+           )
+           print(f'Created key for {name}: {new_key}')
+       else:
+           print(f'Key for {name} already exists: {row[0]}')
+   conn.commit()
+   conn.close()
+   "
+   ```
+
+### 6.3 Zuweisungs-Matrix für `.env` und `config.yaml`
+
+| Instanz / Bot | Konfigurationsdatei | Parameter | Wert |
+|---|---|---|---|
+| **Hermes (Default)** | `/home/cb/.hermes/.env` | `OPENAI_API_KEY` | `sk-a83b72936d0528ea-bhpytf-49c7be05` *(bleibt unverändert)* |
+| **Bud** | `/home/cb/bots/bud/data/.env` | `OPENAI_API_KEY` | Neuer Key (z.B. `sk-a83b72936d0528ea-bud...`) |
+| **Terence** | `/home/cb/bots/terence/data/.env` | `OPENAI_API_KEY` | Neuer Key (z.B. `sk-a83b72936d0528ea-ter...`) |
+| **Jennifer** | `/home/cb/.hermes/profiles/jennifer/.env` | `OPENAI_API_KEY` | Neuer Key (z.B. `sk-a83b72936d0528ea-jen...`) |
+
+*(Hinweis: In den zugehörigen `config.yaml`-Dateien verweist `api_key: ${OPENAI_API_KEY}` dynamisch auf diese Variablen).*
+
+### 6.4 Service-Neustarts nach Key-Aktualisierung
+Nach dem Eintragen der Keys werden die Bot-Gateways neu geladen:
+```bash
+# Jennifer Service neu starten
+systemctl --user restart hermes-gateway-jennifer.service
+
+# Bud & Terence (sofern als User-Services oder Screen/PM2 verwaltet)
+# Beispiel:
+kill $(cat /home/cb/bots/bud/data/gateway.pid 2>/dev/null) 2>/dev/null || true
+kill $(cat /home/cb/bots/terence/data/gateway.pid 2>/dev/null) 2>/dev/null || true
+```
+
+---
+
+## 7. Risiken, Edge-Cases & Absicherungsmaßnahmen
+
+1. **SQLite Concurrency & Locks**:
+   - Die Datei `~/.9router/db/data.sqlite` wird aktiv von 9Router beschrieben.
+   - **Absicherung**: Verbindung strictly mit `file:{db_path}?mode=ro` (Read-Only URI) und kurzem Timeout (`timeout=2`) öffnen.
+2. **Leere oder unbenannte Keys**:
+   - Falls Anfragen ohne Key oder mit einem unbekannten Key eintreffen:
+   - **Absicherung**: `raw_key = item.get("apiKey") or "unauthenticated"`. Falls kein Eintrag in `apiKeys` existiert, Anzeige von `Unbekannter Key (${prefix})`.
+3. **Division durch 0 bei Prozentwerten**:
+   - Falls 9Router frisch installiert ist oder 0 Token verzeichnet wurden:
+   - **Absicherung**: `pct = round((total_tok / total_tokens * 100), 1) if total_tokens > 0 else 0.0`.
+4. **DOM-Flackern & Chart-Synchronisation**:
+   - Polling erfolgt client-seitig alle 3 bis 5 Sekunden.
+   - **Absicherung**: String-Fingerprinting verhindert das Neuschreiben des DOMs (`innerHTML`), wenn sich keine Werte geändert haben.
+5. **Reihenfolge der Deklarationen im JavaScript**:
+   - **Absicherung**: Striktes Einhalten der Regel: Alle neuen Rendering-Funktionen vor `bootDashboard()`.
+
+---
+
+## 8. Detaillierter Umsetzungs- & Verifikationsplan
+
+### Phase 1: Key-Erzeugung & Bot-Konfiguration
+1. Erzeugen der 3 separaten Keys für Bud, Terence und Jennifer in `~/.9router/db/data.sqlite`.
+2. Hinterlegen der Keys in den jeweiligen `.env`-Dateien (`/home/cb/bots/bud/data/.env`, `/home/cb/bots/terence/data/.env`, `/home/cb/.hermes/profiles/jennifer/.env`).
+3. Neustart der Bot-Prozesse.
+
+### Phase 2: Backend-Erweiterung (`app.py`)
+1. Anpassen von `get_9router_stats()` (L1529–1790):
+   - `SELECT key, name, isActive FROM apiKeys` einbinden.
+   - Iteration über `byApiKey` in `usageDaily`.
+   - Generieren der Liste `by_instance`.
+2. Hinzufügen von `by_instance: []` in `default_res`.
+3. Syntaxprüfung via `python3 -m py_compile app.py`.
+
+### Phase 3: Template-Integration (`app.py` L5531–5791)
+1. Einfügen der LCARS-Kachel `9ROUTER INSTANZEN / VERURSACHER TOKEN-VERBRAUCH` in `#section-ai-info` nach Zeile 5605.
+2. Jinja2 SSR-Schleife für flackerfreies Initial-Rendering implementieren.
+
+### Phase 4: Frontend-JavaScript (`app.py` L11547–11685)
+1. Ergänzen von `renderNineRouterStats(nrData)` um das Rendering von `nineRouterInstancesTableBody`.
+2. Validieren, dass der Code vor Zeile 18011 (`bootDashboard()`) liegt.
+
+### Phase 5: Verifikation & Systemtests
+1. **Python-Kompilierung**:
+   ```bash
+   python3 -m py_compile /home/cb/Projects/agydashboard/app.py
+   ```
+2. **Backend-Testaufruf**:
+   ```bash
+   python3 -c "from app import get_9router_stats; s = get_9router_stats(0); import json; print(json.dumps(s.get('by_instance', []), indent=2))"
+   ```
+   *Erwartung*: JSON-Array mit allen Keys (Hermes, Bud, Terence, Jennifer) inklusive formatierten Werten.
+3. **Dashboard-Neustart & Log-Check**:
+   ```bash
+   systemctl --user restart agydashboard.service
+   systemctl --user status agydashboard.service
+   ```
+4. **Browser-Test**:
+   - Aufruf von `https://dash.pimmel.site` (bzw. `http://localhost:5000`).
+   - Navigieren zu `KI-INFO`.
+   - Sichtprüfung der neuen Kachel "9ROUTER INSTANZEN / VERURSACHER TOKEN-VERBRAUCH".
+   - Prüfen, ob nach Test-Prompts an Bud oder Terence die Token und Kosten exakt der jeweiligen Instanz gutgeschrieben werden.
+
+

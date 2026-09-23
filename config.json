@@ -16,19 +16,19 @@
     "espn_s2": "AEAgQbeHCIrgaePAfzf1jGiVgIXZHv1%2Fb%2FMKQqE5y3o%2BikszTjFrlNubnn6zhkwFO44Mmgeyp0I67iLVPFdi8rMZ35Ybn791r%2Bme9n7RhB4xwWMFeRGYA8aY7cBwOK%2FluIRBBkatk98g9Jr2GKcumt8l%2F0EfaY9woFIjTVciAlkduD6992NYqolAklw6xbENwSj66vG563%2FOqer82hZ%2BcnrnjlVNNSbwp0dfGVqCPjSSiR68ALYIqWju2lWVkC0jCh1oIasi2lO1B6biDYDQ9IUv8nQdGhmhpJgikUEkidht1ZRV4xKkZSLfnVqkSNXULY6aNzYwDRe414TgfTBOdYsa",
     "flash_light": "light.esstisch",
     "flash_duration": 1.2,
-    "flash_enabled": true,
+    "flash_enabled": false,
     "poll_interval": 35,
-    "mode": "manual",
+    "mode": "full",
     "risk_level": 3
   },
   "home_assistant": {
     "enabled": true,
     "url": "http://127.0.0.1:8123",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI3Y2Y5NGRjZGJmMzU0ZTU5YTZjNWRkODZiMTkzZjdjZCIsImlhdCI6MTc5MDAyNDcwNiwiZXhwIjoxNzkwMDI2NTA2fQ.ov_r5fIzTxafzgYn8byFz82ee05RDGAyn3s9aFSGydk",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI3Y2Y5NGRjZGJmMzU0ZTU5YTZjNWRkODZiMTkzZjdjZCIsImlhdCI6MTc5MDE2NzExMiwiZXhwIjoxNzkwMTY4OTEyfQ.PyxuR-QB4CRF-CekJ3h_isCG-rpONR13MyNotAY9-28",
     "username": "cb",
     "password": "mymaajen",
     "refresh_token": "e2e1a52cf9bc59f6990f74a1586db8f8e9a5203aef6c462a05f0a7a54816ff7dfe36248ce0aa1a28140e94dfd29b3b694eac6fe8260aa342aef3b2c08dd9d453",
-    "token_expires_at": 1790026446.9774108,
+    "token_expires_at": 1790168852.0643947,
     "name": "Assistant"
   },
   "gemini_live": {
