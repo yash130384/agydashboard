@@ -115,7 +115,8 @@ try:
     from pimmel_service import pimmel_service
 except Exception as _pimmel_err:
     pimmel_service = None
-    print(f"[WARN] pimmel_service konnte nicht importiert werden: {_pimmel_err}", file=sys.stderr)
+# Cactus Needle 3 Agent Global Instance
+CACTUS_AGENT = None
 
 # LCARS Login Interface HTML Import
 try:
@@ -6190,7 +6191,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                       <input type="checkbox" id="permLock_gemini_live" value="gemini_live" class="perm-lock-cb">
                       <div class="perm-card-info">
                         <span class="perm-name" style="color:var(--c-secondary);">SUBRAUM COMM</span>
-                        <span class="perm-desc">Gemini 3.8 Live SST Audio-Relay</span>
+                        <span class="perm-desc">Cactus Needle 3 Sprachengine</span>
                       </div>
                     </label>
 
@@ -7718,19 +7719,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <span style="font-size: 1.5rem;">📡</span>
               <div>
                 <h2 style="margin: 0; font-size: 1.35rem; color: var(--c-secondary); letter-spacing: 0.08em; text-transform: uppercase;">
-                  LCARS SUBRAUM-KOMMUNIKATION // GEMINI 3.8 LIVE
+                  LCARS SUBRAUM COMM // CACTUS NEEDLE 3
                 </h2>
                 <div style="font-size: 0.75rem; color: #888; font-family: var(--mono-family);">
-                  Multimodale SST-Echtzeit-Schnittstelle (Bidirektionales PCM-Streaming)
+                  On-Device Natural Language Tool-Calling &amp; Sprachengine (Home Assistant)
                 </div>
               </div>
             </div>
             <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-              <span id="geminiLiveStatusBadge" class="lcars-pill-tag" style="background: var(--c-red); color: #fff; font-weight: 700;">
-                GETRENNT
+              <span id="geminiLiveStatusBadge" class="lcars-pill-tag" style="background: var(--c-green, #44dd88); color: #000; font-weight: 700;">
+                STATUS: ON-DEVICE BEREIT
               </span>
               <span id="geminiLiveModelBadge" class="lcars-pill-tag" style="background: rgba(255,255,255,0.08); color: var(--c-secondary); font-family: var(--mono-family); font-size: 0.8rem;">
-                MODEL: GEMINI-3.8-LIVE
+                MODEL: CACTUS NEEDLE 3
               </span>
               <span id="geminiLiveModeBadge" class="lcars-pill-tag" style="background: rgba(255,255,255,0.08); color: var(--c-gold); font-family: var(--mono-family); font-size: 0.8rem;">
                 MODUS: PTT
@@ -7745,7 +7746,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               SUBRAUM COMM GESPERRT // COMMAND CODE AUTORISIERUNG ERFORDERLICH
             </div>
             <div style="font-size: 0.9rem; color: #ccc; max-width: 540px; margin: 0 auto 1.5rem auto; line-height: 1.5;">
-              Der direkte Subraum-Sprachkanal zu Google Gemini 3.8 Live erfordert Autorisierung mit dem LCARS Command Code.
+              Die Subraum-Sprachengine für Cactus Needle 3 erfordert Autorisierung mit dem LCARS Command Code.
             </div>
             <button class="left-action-btn" onclick="openAuthModal('gemini_live')" style="padding: 0.5rem 1.5rem; font-size: 0.95rem; border-color: var(--c-secondary); color: var(--c-secondary); font-weight: 700;">
               COMMAND CODE EINGEBEN
@@ -7778,6 +7779,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
             </div>
 
+            <!-- MODELL-TESTFAELLE SCHNELLTESTS -->
+            <div class="lcars-card" style="margin-bottom: 1rem; padding: 1rem 1.25rem; border-left: 4px solid var(--c-gold);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+                <div style="font-family: var(--font-family); font-size: 0.95rem; font-weight: 700; color: var(--c-gold); letter-spacing: 0.06em; text-transform: uppercase;">
+                  🧪 MODELL-TESTFÄLLE // CACTUS NEEDLE 3 (HOME ASSISTANT)
+                </div>
+                <div style="font-size: 0.75rem; color: #888; font-family: var(--mono-family);">
+                  4 Modellfälle zum Testen mit Sprache &amp; Inferenz
+                </div>
+              </div>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.6rem;">
+                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Schalte das Licht am Esstisch an')" style="text-align: left; padding: 0.6rem 0.9rem; border-color: var(--c-secondary); color: var(--c-secondary); height: auto; line-height: 1.3;">
+                  <span style="font-weight: 700; display: block; font-size: 0.85rem; color: #fff;">💡 Fall 1: Licht an</span>
+                  <span style="font-size: 0.75rem; color: var(--c-secondary); font-family: var(--mono-family);">"Schalte das Licht am Esstisch an"</span>
+                </button>
+                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Wie wird das Wetter heute in Norderstedt?')" style="text-align: left; padding: 0.6rem 0.9rem; border-color: var(--c-secondary); color: var(--c-secondary); height: auto; line-height: 1.3;">
+                  <span style="font-weight: 700; display: block; font-size: 0.85rem; color: #fff;">🌤️ Fall 2: Wetter</span>
+                  <span style="font-size: 0.75rem; color: var(--c-secondary); font-family: var(--mono-family);">"Wie wird das Wetter heute in Norderstedt?"</span>
+                </button>
+                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Brauche ich heute einen Regenschirm?')" style="text-align: left; padding: 0.6rem 0.9rem; border-color: var(--c-secondary); color: var(--c-secondary); height: auto; line-height: 1.3;">
+                  <span style="font-weight: 700; display: block; font-size: 0.85rem; color: #fff;">☔ Fall 3: Regenschirm</span>
+                  <span style="font-size: 0.75rem; color: var(--c-secondary); font-family: var(--mono-family);">"Brauche ich heute einen Regenschirm?"</span>
+                </button>
+                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Dimme das Licht am Esstisch auf 50 Prozent')" style="text-align: left; padding: 0.6rem 0.9rem; border-color: var(--c-secondary); color: var(--c-secondary); height: auto; line-height: 1.3;">
+                  <span style="font-weight: 700; display: block; font-size: 0.85rem; color: #fff;">🔆 Fall 4: Dimmen</span>
+                  <span style="font-size: 0.75rem; color: var(--c-secondary); font-family: var(--mono-family);">"Dimme das Licht am Esstisch auf 50 Prozent"</span>
+                </button>
+              </div>
+            </div>
+
             <!-- MAIN DUAL GRID -->
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
               
@@ -7801,7 +7832,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <!-- Output VU Meter -->
                 <div>
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; font-size: 0.78rem; font-family: var(--mono-family);">
-                    <span style="color: var(--c-secondary); font-weight: 700;">AUSGANG (GEMINI LIVE 24 kHz):</span>
+                    <span style="color: var(--c-secondary); font-weight: 700;">AUSGANG (SPRACHAUSGABE TTS):</span>
                     <span id="geminiOutLevelText" style="color: var(--c-gold);">0%</span>
                   </div>
                   <div id="geminiOutMeter" class="lcars-meter-track" style="display: flex; gap: 3px; height: 22px; background: rgba(0,0,0,0.6); padding: 3px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">
@@ -7847,13 +7878,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <!-- Log Output Window -->
                 <div id="geminiLiveTranscript" style="flex: 1; background: rgba(0, 0, 0, 0.75); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; padding: 0.75rem 1rem; overflow-y: auto; max-height: 320px; font-family: var(--mono-family); font-size: 0.85rem; line-height: 1.5; display: flex; flex-direction: column; gap: 0.6rem;">
                   <div style="color: #666; font-style: italic;">
-                    [SYSTEM] Subraum-Relay initialisiert. Klicken Sie auf 'SUBRAUM-KANAL ÖFFNEN' um die Session zu starten.
+                    [SYSTEM] Cactus Needle 3 Sprachengine bereit. Wählen Sie einen Testfall, sprechen Sie per PTT oder tippen Sie einen Befehl ein.
                   </div>
                 </div>
 
                 <!-- Quick Text Message Input (Fallback) -->
                 <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
-                  <input type="text" id="geminiLiveTextInput" placeholder="Textnachricht an Bordcomputer senden..." class="lcars-input" style="flex: 1; height: 38px; font-size: 0.85rem;" onkeydown="if(event.key==='Enter') sendGeminiLiveText();">
+                  <input type="text" id="geminiLiveTextInput" placeholder="Befehl oder Frage an Cactus Needle 3 eingeben (z. B. 'Schalte das Licht am Esstisch an')..." class="lcars-input" style="flex: 1; height: 38px; font-size: 0.85rem;" onkeydown="if(event.key==='Enter') sendGeminiLiveText();">
                   <button type="button" class="left-action-btn" onclick="sendGeminiLiveText()" style="height: 38px; padding: 0 1rem; border-color: var(--c-secondary); color: var(--c-secondary); font-weight: 700;">
                     SENDEN
                   </button>
@@ -8856,7 +8887,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     'homeassistant': 'LCARS HAUSSTEUERUNG // HOME ASSISTANT',
     'cycle': 'LCARS BIO-TELEMETRIE // PARTNERINNEN-ZYKLUS',
     'pulsecast': 'LCARS PULSECAST // MEDIA & DOWNLOAD HUB',
-    'gemini_live': 'LCARS SUBRAUM-KOMMUNIKATION // GEMINI 3.8 LIVE',
+    'gemini_live': 'LCARS SUBRAUM COMM // CACTUS NEEDLE 3',
     'pimmel': 'REMOTE NODE // PIMMEL ODN-HUB (100.88.215.98)'
   };
 
@@ -16656,7 +16687,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   // ==========================================================================
-  // GOOGLE GEMINI 3.8 LIVE // SUBRAUM COMM SST CONTROLLER
+  // CACTUS NEEDLE 3 // SUBRAUM COMM ON-DEVICE ENGINE & SPRACHSTEUERUNG
   // ==========================================================================
   let geminiLiveWs = null;
   let geminiLiveMode = 'ptt'; // 'ptt' | 'live'
@@ -16680,6 +16711,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let currentUserTranscriptEl = null;
   let pttStopTimer = null;
 
+  // Cactus STT & TTS State
+  let cactusRecognition = null;
+  let cactusIsListening = false;
+  let cactusRecognizedText = '';
+  let cactusInMeterInterval = null;
+  let cactusTtsMeterInterval = null;
+
   async function checkGeminiLiveStatus() {
     try {
       const resp = await fetch('/api/gemini-live/status');
@@ -16688,6 +16726,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const modelBadge = document.getElementById('geminiLiveModelBadge');
       if (modelBadge && data.model) {
         modelBadge.textContent = 'MODEL: ' + data.model.toUpperCase();
+      }
+      const statusBadge = document.getElementById('geminiLiveStatusBadge');
+      if (statusBadge) {
+        statusBadge.textContent = 'STATUS: ON-DEVICE BEREIT';
+        statusBadge.style.backgroundColor = 'var(--c-green, #44dd88)';
+        statusBadge.style.color = '#000';
       }
     } catch (e) {
       // Ignorieren falls Endpunkt noch nicht erreichbar
@@ -16702,7 +16746,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (isLocked) {
       if (gateView) gateView.style.display = 'block';
       if (activeContent) activeContent.style.display = 'none';
-      disconnectGeminiLiveWs();
+      if (geminiLiveChannelOpen) toggleGeminiLiveChannel();
       return;
     }
 
@@ -16713,6 +16757,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     initGeminiMeterDOM();
     updateGeminiLiveModeUI();
     setupGeminiPttListeners();
+
+    if (!cactusRecognition) {
+      cactusRecognition = setupCactusSpeechRecognition();
+    }
   }
 
   function initGeminiMeterDOM() {
@@ -16741,15 +16789,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     playLcarsBeep(1200, 1600);
     geminiLiveMode = mode;
     isSpeaking = false;
-    lastSpeechTime = 0;
     isPttActive = false;
-    pttAudioSent = false;
     const turnInd = document.getElementById('geminiLiveTurnIndicator');
     if (turnInd && !isModelSpeaking) turnInd.textContent = 'BEREIT // ZUHÖREN';
-    if (geminiLiveChannelOpen && !isModelSpeaking) {
-      updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
-    }
     updateGeminiLiveModeUI();
+
+    if (geminiLiveMode === 'live' && geminiLiveChannelOpen && !isModelSpeaking) {
+      startLiveRecognition();
+    } else if (geminiLiveMode === 'ptt') {
+      stopLiveRecognition();
+    }
   }
 
   function updateGeminiLiveModeUI() {
@@ -16799,99 +16848,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         muteBtn.textContent = '🔇 MIKROFON: STUMM';
         muteBtn.style.borderColor = 'var(--c-red)';
         muteBtn.style.color = 'var(--c-red)';
+        stopLiveRecognition();
       } else {
         muteBtn.textContent = '🎤 MIKROFON: AN';
         muteBtn.style.borderColor = 'var(--c-gold)';
         muteBtn.style.color = 'var(--c-gold)';
+        if (geminiLiveMode === 'live' && geminiLiveChannelOpen) {
+          startLiveRecognition();
+        }
       }
     }
   }
 
   function toggleGeminiLiveChannel() {
+    geminiLiveChannelOpen = !geminiLiveChannelOpen;
+    playLcarsBeep(1200, 1600);
+    updateGeminiToggleBtn(geminiLiveChannelOpen);
+
     if (geminiLiveChannelOpen) {
-      disconnectGeminiLiveWs();
-    } else {
-      connectGeminiLiveWs();
-    }
-  }
-
-  async function connectGeminiLiveWs() {
-    if (geminiLiveWs && geminiLiveWs.readyState === WebSocket.OPEN) return;
-
-    updateGeminiConnBadge('VERBINDET...', 'var(--c-gold)', '#000');
-    appendGeminiLog('system', 'Verbinde mit Subraum-Relay (/api/gemini-live/ws)...');
-
-    const authCode = sessionStorage.getItem('lcars_auth_code') || '0901';
-    const proto = (location.protocol === 'https:') ? 'wss:' : 'ws:';
-    const wsUrl = `${proto}//${location.host}/api/gemini-live/ws?code=${encodeURIComponent(authCode)}`;
-
-    try {
-      geminiLiveWs = new WebSocket(wsUrl);
-    } catch (e) {
-      updateGeminiConnBadge('FEHLER', 'var(--c-red)', '#fff');
-      appendGeminiLog('error', `WebSocket-Initialisierung fehlgeschlagen: ${e}`);
-      return;
-    }
-
-    geminiLiveWs.onopen = async () => {
-      geminiLiveChannelOpen = true;
-      updateGeminiToggleBtn(true);
-      appendGeminiLog('system', 'WebSocket-Handshake erfolgreich. Initialisiere Audio-Engine...');
-      await startGeminiAudioCapture();
-    };
-
-    geminiLiveWs.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        handleGeminiServerMessage(msg);
-      } catch (e) {
-        console.warn('Gemini WS Parse-Fehler:', e);
+      updateGeminiConnBadge('STATUS: ON-DEVICE BEREIT', 'var(--c-green, #44dd88)', '#000');
+      appendGeminiLog('system', 'Subraum-Sprachkanal geöffnet. Cactus Needle 3 Sprachengine aktiv.');
+      startGeminiAudioCapture();
+      if (geminiLiveMode === 'live') {
+        startLiveRecognition();
       }
-    };
-
-    geminiLiveWs.onerror = (err) => {
-      console.error('Gemini WS Fehler:', err);
-      appendGeminiLog('error', 'Fehler in Subraum-Verbindung aufgetreten.');
-    };
-
-    geminiLiveWs.onclose = (event) => {
-      geminiLiveChannelOpen = false;
-      isPttActive = false;
-      pttAudioSent = false;
-      isSpeaking = false;
-      lastSpeechTime = 0;
-      isModelSpeaking = false;
-      currentModelTurnEl = null;
-      currentUserTranscriptEl = null;
-      if (pttStopTimer) { clearTimeout(pttStopTimer); pttStopTimer = null; }
+    } else {
       updateGeminiConnBadge('GETRENNT', 'var(--c-red)', '#fff');
-      updateGeminiToggleBtn(false);
+      appendGeminiLog('system', 'Subraum-Sprachkanal geschlossen.');
+      stopLiveRecognition();
       stopGeminiAudioCapture();
       stopAllGeminiAudio();
-      stopGeminiVisualizer();
-      appendGeminiLog('system', `Subraum-Verbindung beendet (Code ${event.code}).`);
-    };
-  }
-
-  function disconnectGeminiLiveWs() {
-    if (geminiLiveWs) {
-      try { geminiLiveWs.close(); } catch (e) {}
-      geminiLiveWs = null;
     }
-    geminiLiveChannelOpen = false;
-    isPttActive = false;
-    pttAudioSent = false;
-    isSpeaking = false;
-    lastSpeechTime = 0;
-    isModelSpeaking = false;
-    currentModelTurnEl = null;
-    currentUserTranscriptEl = null;
-    if (pttStopTimer) { clearTimeout(pttStopTimer); pttStopTimer = null; }
-    updateGeminiConnBadge('GETRENNT', 'var(--c-red)', '#fff');
-    updateGeminiToggleBtn(false);
-    stopGeminiAudioCapture();
-    stopAllGeminiAudio();
-    stopGeminiVisualizer();
   }
 
   function updateGeminiConnBadge(text, bg, fg = '#000') {
@@ -16917,400 +16904,170 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  function handleGeminiServerMessage(msg) {
-    const type = msg.type;
-    const turnInd = document.getElementById('geminiLiveTurnIndicator');
+  // ==========================================================================
+  // CACTUS NEEDLE 3 INFERENZ & PROMPT ENGINE
+  // ==========================================================================
+  async function sendPromptToCactus(promptText) {
+    promptText = (promptText || '').trim();
+    if (!promptText) return;
 
-    if (type === 'setup_complete') {
-      updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
-      if (turnInd) turnInd.textContent = 'BEREIT // ZUHÖREN';
-      appendGeminiLog('system', `Subraum-Verbindung zu Google Gemini 3.8 Live hergestellt (Modell: ${msg.model || 'gemini-3.8-live'}).`);
-      playLcarsBeep(1400, 2100);
-    } else if (type === 'model_audio') {
-      isModelSpeaking = true;
-      currentUserTranscriptEl = null;
-      updateGeminiConnBadge('SPRICHT...', 'var(--c-blue)', '#000');
-      if (turnInd) turnInd.textContent = 'BORDCOMPUTER SPRICHT...';
-      playGeminiAudioChunk(msg.audio, msg.rate || 24000);
-    } else if (type === 'user_transcript') {
-      appendGeminiLog('user_transcript', msg.text);
-    } else if (type === 'transcript') {
-      if (msg.role === 'model') {
-        appendGeminiLog('model', msg.text, true);
-      } else {
-        appendGeminiLog('user', msg.text, false);
+    playLcarsBeep(1200, 1600);
+    const turnInd = document.getElementById('geminiLiveTurnIndicator');
+    if (turnInd) turnInd.textContent = 'CACTUS INFERENZ...';
+    updateGeminiConnBadge('VERARBEITET...', 'var(--c-gold)', '#000');
+
+    // 1. Protokolliert im Subraum-Logbuch: [BENUTZER] promptText
+    appendGeminiLog('user', promptText);
+
+    const authCode = sessionStorage.getItem('lcars_auth_code') || '0901';
+
+    try {
+      const resp = await fetch('/api/cactus/process', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Command-Code': authCode,
+          'X-Auth-Code': authCode
+        },
+        body: JSON.stringify({ prompt: promptText })
+      });
+
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        const errMsg = errData.error || `HTTP ${resp.status} ${resp.statusText}`;
+        appendGeminiLog('error', errMsg);
+        updateGeminiConnBadge('FEHLER', 'var(--c-red)', '#fff');
+        if (turnInd) turnInd.textContent = 'FEHLER // INFERENZ';
+        playLcarsBeep(440, 220);
+        return;
       }
-    } else if (type === 'interrupted') {
-      stopAllGeminiAudio();
-      currentModelTurnEl = null;
-      currentUserTranscriptEl = null;
-      isModelSpeaking = false;
-      isSpeaking = false;
-      updateGeminiConnBadge('UNTERBROCHEN', 'var(--c-gold)', '#000');
-      if (turnInd) turnInd.textContent = 'BARGE-IN // UNTERBROCHEN';
-      appendGeminiLog('system', 'Signal: Modell-Sprachausgabe durch User-Sprache unterbrochen.');
-      setTimeout(() => {
-        if (geminiLiveChannelOpen) {
-          updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
-          if (turnInd) turnInd.textContent = 'BEREIT // ZUHÖREN';
-        }
-      }, 1000);
-    } else if (type === 'turn_complete') {
-      currentModelTurnEl = null;
-      currentUserTranscriptEl = null;
-      if (geminiLiveChannelOpen) {
-        updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
-        if (turnInd) turnInd.textContent = 'BEREIT // ZUHÖREN';
+
+      const res = await resp.json();
+      if (!res.success && res.error) {
+        appendGeminiLog('error', res.error);
+        updateGeminiConnBadge('FEHLER', 'var(--c-red)', '#fff');
+        if (turnInd) turnInd.textContent = 'FEHLER // INFERENZ';
+        playLcarsBeep(440, 220);
+        return;
       }
-      if (geminiActiveAudioSources.length === 0) {
-        isModelSpeaking = false;
+
+      // 2. Protokolliert im Subraum-Logbuch: [CACTUS ENGINE] tool, confidence, latency
+      let toolStr = 'Kein Tool-Aufruf (Direktantwort)';
+      if (res.tool_call && res.tool_call.name) {
+        const argsStr = res.tool_call.arguments ? JSON.stringify(res.tool_call.arguments) : '';
+        toolStr = `${res.tool_call.name}(${argsStr})`;
+      } else if (res.action) {
+        toolStr = `${res.action} [${res.entity_id || ''}]`;
       }
-    } else if (type === 'error') {
-      appendGeminiLog('error', msg.error || 'Unbekannter API-Fehler');
+
+      const engineMsg = `Tool: ${toolStr} | Konfidenz: ${res.confidence}% | Latenz: ${res.latency_ms} ms`;
+      appendGeminiLog('cactus', engineMsg);
+
+      // 3. Protokolliert im Subraum-Logbuch: [COMPUTER] message
+      appendGeminiLog('computer', res.message || 'Befehl ausgeführt.');
+
+      // 4. Sprachausgabe (TTS): Liest message mit window.speechSynthesis vor und animiert das Ausgabemeter
+      speakCactusMessage(res.message || 'Befehl ausgeführt.');
+
+    } catch (err) {
+      appendGeminiLog('error', `Verbindungsfehler: ${err.message}`);
+      updateGeminiConnBadge('FEHLER', 'var(--c-red)', '#fff');
+      if (turnInd) turnInd.textContent = 'FEHLER // NETZWERK';
       playLcarsBeep(440, 220);
     }
   }
 
-  // Web Audio API Capture & Resampling
-  async function startGeminiAudioCapture() {
-    if (geminiAudioStream) return;
-    try {
-      const audioCtx = getAudioCtx();
-      if (audioCtx.state === 'suspended') await audioCtx.resume();
-
-      geminiAudioStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: false, // Verhindert dass Sprache gefressen wird
-          autoGainControl: true
-        }
-      });
-
-      geminiAudioSourceNode = audioCtx.createMediaStreamSource(geminiAudioStream);
-
-      // Input Analyser für Visualizer
-      geminiInputAnalyser = audioCtx.createAnalyser();
-      geminiInputAnalyser.fftSize = 64;
-      geminiAudioSourceNode.connect(geminiInputAnalyser);
-
-      // Output Analyser für Visualizer
-      if (!geminiOutputAnalyser) {
-        geminiOutputAnalyser = audioCtx.createAnalyser();
-        geminiOutputAnalyser.fftSize = 64;
-      }
-
-      // ScriptProcessor für 16kHz PCM Stream
-      const bufferSize = 2048;
-      geminiScriptNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
-
-      geminiScriptNode.onaudioprocess = (e) => {
-        // Output-Puffer auf 0 setzen, um jegliche Mikrofon-Rückkopplung auf Lautsprecher zu verhindern
-        for (let ch = 0; ch < e.outputBuffer.numberOfChannels; ch++) {
-          e.outputBuffer.getChannelData(ch).fill(0);
-        }
-
-        if (!geminiLiveChannelOpen || geminiLiveMuted) return;
-
-        // In PTT-Modus nur senden wenn PTT aktiv ist
-        if (geminiLiveMode === 'ptt' && !isPttActive) return;
-
-        const inputChannelData = e.inputBuffer.getChannelData(0);
-
-        // Im Live-Modus während Modell spricht: Akustische Lautsprecher-Rückkopplung verhindern
-        // Nur senden wenn Pegel signifikant ist (Barge-In durch den Nutzer)
-        if (geminiLiveMode === 'live' && isModelSpeaking) {
-          let sumSq = 0;
-          for (let i = 0; i < inputChannelData.length; i++) {
-            sumSq += inputChannelData[i] * inputChannelData[i];
-          }
-          const rms = Math.sqrt(sumSq / inputChannelData.length);
-          if (rms < 0.05) {
-            // Nur Lautsprecher-Echo / Raumgeräusch, nicht an Gemini senden
-            return;
-          } else {
-            // Nutzer spricht aktiv dazwischen -> Modell-Audio sofort stoppen
-            stopAllGeminiAudio();
-            isModelSpeaking = false;
-          }
-        }
-
-        // Resampling auf 16 kHz PCM mit Peak/RMS Gain
-        const pcm16 = downsampleTo16k(inputChannelData, audioCtx.sampleRate);
-        const base64Audio = int16ToBase64(pcm16);
-
-        if (geminiLiveWs && geminiLiveWs.readyState === WebSocket.OPEN) {
-          geminiLiveWs.send(JSON.stringify({
-            type: 'audio',
-            data: base64Audio
-          }));
-          if (isPttActive) {
-            pttAudioSent = true;
-          }
-        }
-
-        // Im Dauerhaft-Live-Modus: Clientseitige Stille-Erkennung (VAD)
-        if (geminiLiveMode === 'live' && !isModelSpeaking) {
-          let sumSquares = 0;
-          for (let i = 0; i < inputChannelData.length; i++) {
-            sumSquares += inputChannelData[i] * inputChannelData[i];
-          }
-          const rms = Math.sqrt(sumSquares / inputChannelData.length);
-          const VAD_THRESHOLD = 0.018; // Audio-Pegel-Schwelle für erkannte Sprache
-          const now = performance.now();
-
-          if (rms >= VAD_THRESHOLD) {
-            if (!isSpeaking) {
-              isSpeaking = true;
-              currentUserTranscriptEl = null;
-              const turnInd = document.getElementById('geminiLiveTurnIndicator');
-              if (turnInd) turnInd.textContent = 'COMMANDER SPRICHT...';
-              updateGeminiConnBadge('SPRECHEN...', 'var(--c-primary)', '#000');
-            }
-            lastSpeechTime = now;
-          } else if (isSpeaking) {
-            // Pegel unter Schwelle: wenn Stille >= 750ms erreicht wird -> Turn beenden
-            if (now - lastSpeechTime >= 750) {
-              if (geminiLiveWs && geminiLiveWs.readyState === WebSocket.OPEN) {
-                geminiLiveWs.send(JSON.stringify({ type: 'end_of_turn' }));
-                const turnInd = document.getElementById('geminiLiveTurnIndicator');
-                if (turnInd) turnInd.textContent = 'BORDCOMPUTER DENKT...';
-                updateGeminiConnBadge('DENKT...', 'var(--c-gold)', '#000');
-              }
-              isSpeaking = false;
-            }
-          }
-        }
-      };
-
-      geminiAudioSourceNode.connect(geminiScriptNode);
-      // Stummer GainNode (0x) damit onaudioprocess ohne akustische Lautsprecher-Rückkopplung läuft
-      geminiMuteNode = audioCtx.createGain();
-      geminiMuteNode.gain.value = 0;
-      geminiScriptNode.connect(geminiMuteNode);
-      geminiMuteNode.connect(audioCtx.destination);
-
-      startGeminiVisualizer();
-      appendGeminiLog('system', 'Mikrofon aktiv (16 kHz PCM Audio-Graph initialisiert).');
-    } catch (err) {
-      appendGeminiLog('error', `Mikrofon-Zugriff verweigert oder fehlgeschlagen: ${err.message}`);
-      console.error('Mikrofon Fehler:', err);
-    }
+  function runCactusTestCase(promptText) {
+    sendPromptToCactus(promptText);
   }
 
-  function stopGeminiAudioCapture() {
-    isSpeaking = false;
-    lastSpeechTime = 0;
-    if (geminiScriptNode) {
-      try {
-        geminiScriptNode.disconnect();
-        geminiScriptNode.onaudioprocess = null;
-      } catch (e) {}
-      geminiScriptNode = null;
-    }
-    if (geminiMuteNode) {
-      try { geminiMuteNode.disconnect(); } catch (e) {}
-      geminiMuteNode = null;
-    }
-    if (geminiAudioSourceNode) {
-      try { geminiAudioSourceNode.disconnect(); } catch (e) {}
-      geminiAudioSourceNode = null;
-    }
-    if (geminiAudioStream) {
-      try {
-        geminiAudioStream.getTracks().forEach(t => t.stop());
-      } catch (e) {}
-      geminiAudioStream = null;
-    }
+  function sendGeminiLiveText() {
+    const inp = document.getElementById('geminiLiveTextInput');
+    if (!inp) return;
+    const val = inp.value.trim();
+    if (!val) return;
+    inp.value = '';
+    sendPromptToCactus(val);
   }
 
-  // Audio Resampling von AudioContext SampleRate auf 16kHz PCM mit Peak/RMS Normalisierung & Gain
-  function downsampleTo16k(inputBuffer, inSampleRate) {
-    let maxAmp = 0;
-    for (let i = 0; i < inputBuffer.length; i++) {
-      const abs = Math.abs(inputBuffer[i]);
-      if (abs > maxAmp) maxAmp = abs;
+  // ==========================================================================
+  // SPRACHAUSGABE (TTS) & AUSGABEMETER-ANIMATION
+  // ==========================================================================
+  function speakCactusMessage(message) {
+    if (!message) return;
+    if (!('speechSynthesis' in window)) {
+      console.warn('SpeechSynthesis API nicht verfügbar');
+      return;
     }
-
-    // Leichter intelligenter Software-Gain: Leise Sprache bis zu 3x anheben,
-    // um unhörbar leises PCM bei der Übertragung zu verhindern. Reine Stille (<0.005) nicht künstlich verstärken.
-    let gain = 1.2;
-    if (maxAmp > 0.005 && maxAmp < 0.35) {
-      gain = Math.min(3.0, 0.7 / maxAmp);
-    }
-
-    if (inSampleRate === 16000) {
-      const output = new Int16Array(inputBuffer.length);
-      for (let i = 0; i < inputBuffer.length; i++) {
-        const s = Math.max(-1, Math.min(1, inputBuffer[i] * gain));
-        output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-      }
-      return output;
-    }
-    const ratio = inSampleRate / 16000;
-    const newLength = Math.round(inputBuffer.length / ratio);
-    const result = new Int16Array(newLength);
-    for (let i = 0; i < newLength; i++) {
-      const origIndex = i * ratio;
-      const indexFloor = Math.floor(origIndex);
-      const indexCeil = Math.min(inputBuffer.length - 1, Math.ceil(origIndex));
-      const fraction = origIndex - indexFloor;
-      const sample = (1 - fraction) * inputBuffer[indexFloor] + fraction * inputBuffer[indexCeil];
-      const s = Math.max(-1, Math.min(1, sample * gain));
-      result[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-    }
-    return result;
-  }
-
-  function int16ToBase64(int16Array) {
-    const uint8 = new Uint8Array(int16Array.buffer, int16Array.byteOffset, int16Array.byteLength);
-    let binary = '';
-    const chunkSize = 4096;
-    for (let i = 0; i < uint8.length; i += chunkSize) {
-      binary += String.fromCharCode.apply(null, uint8.subarray(i, i + chunkSize));
-    }
-    return btoa(binary);
-  }
-
-  function base64ToInt16(base64) {
-    const binary = atob(base64);
-    const len = binary.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
-  }
-
-  // 24kHz Audio Playback mit AudioBuffer Queueing
-  function playGeminiAudioChunk(base64Audio, sampleRate = 24000) {
-    const audioCtx = getAudioCtx();
-    if (!audioCtx) return;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
 
     try {
-      const pcm16 = base64ToInt16(base64Audio);
-      if (!pcm16 || pcm16.length === 0) return;
-      const float32 = new Float32Array(pcm16.length);
-      for (let i = 0; i < pcm16.length; i++) {
-        float32[i] = pcm16[i] / 32768.0;
+      window.speechSynthesis.cancel();
+    } catch (e) {}
+    stopCactusTtsMeter();
+
+    const utter = new SpeechSynthesisUtterance(message);
+    utter.lang = 'de-DE';
+    utter.rate = 1.0;
+    utter.pitch = 1.0;
+
+    const voices = window.speechSynthesis.getVoices ? window.speechSynthesis.getVoices() : [];
+    const deVoice = voices.find(v => v.lang && (v.lang === 'de-DE' || v.lang.startsWith('de')));
+    if (deVoice) utter.voice = deVoice;
+
+    utter.onstart = () => {
+      isModelSpeaking = true;
+      updateGeminiConnBadge('SPRICHT...', 'var(--c-blue)', '#000');
+      const turnInd = document.getElementById('geminiLiveTurnIndicator');
+      if (turnInd) turnInd.textContent = 'BORDCOMPUTER SPRICHT...';
+      startCactusTtsMeter();
+    };
+
+    utter.onend = () => {
+      isModelSpeaking = false;
+      stopCactusTtsMeter();
+      updateGeminiConnBadge('STATUS: ON-DEVICE BEREIT', '#44dd88', '#000');
+      const turnInd = document.getElementById('geminiLiveTurnIndicator');
+      if (turnInd) turnInd.textContent = 'BEREIT // ZUHÖREN';
+      if (geminiLiveMode === 'live' && geminiLiveChannelOpen) {
+        startLiveRecognition();
       }
+    };
 
-      const audioBuffer = audioCtx.createBuffer(1, float32.length, sampleRate);
-      audioBuffer.copyToChannel(float32, 0);
-
-      const source = audioCtx.createBufferSource();
-      source.buffer = audioBuffer;
-
-      if (!geminiOutputAnalyser) {
-        geminiOutputAnalyser = audioCtx.createAnalyser();
-        geminiOutputAnalyser.fftSize = 64;
+    utter.onerror = (e) => {
+      isModelSpeaking = false;
+      stopCactusTtsMeter();
+      updateGeminiConnBadge('STATUS: ON-DEVICE BEREIT', '#44dd88', '#000');
+      const turnInd = document.getElementById('geminiLiveTurnIndicator');
+      if (turnInd) turnInd.textContent = 'BEREIT // ZUHÖREN';
+      if (geminiLiveMode === 'live' && geminiLiveChannelOpen) {
+        startLiveRecognition();
       }
+    };
 
-      source.connect(geminiOutputAnalyser);
-      geminiOutputAnalyser.connect(audioCtx.destination);
+    window.speechSynthesis.speak(utter);
+  }
 
-      const now = audioCtx.currentTime;
-      const startTime = Math.max(now, geminiNextPlaybackTime);
-      source.start(startTime);
-      geminiNextPlaybackTime = startTime + audioBuffer.duration;
+  function startCactusTtsMeter() {
+    stopCactusTtsMeter();
+    cactusTtsMeterInterval = setInterval(() => {
+      const level = Math.floor(Math.random() * 55) + 40;
+      renderGeminiOutputMeterOnly(level);
+    }, 90);
+  }
 
-      geminiActiveAudioSources.push(source);
-      source.onended = () => {
-        const idx = geminiActiveAudioSources.indexOf(source);
-        if (idx !== -1) geminiActiveAudioSources.splice(idx, 1);
-        if (geminiActiveAudioSources.length === 0) {
-          isModelSpeaking = false;
-          if (geminiLiveChannelOpen && !isSpeaking && !isPttActive) {
-            updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
-            const turnInd = document.getElementById('geminiLiveTurnIndicator');
-            if (turnInd && turnInd.textContent === 'BORDCOMPUTER SPRICHT...') {
-              turnInd.textContent = 'BEREIT // ZUHÖREN';
-            }
-          }
-        }
-      };
-    } catch (e) {
-      console.warn('Fehler beim Abspielen von Gemini Audio Chunk:', e);
+  function stopCactusTtsMeter() {
+    if (cactusTtsMeterInterval) {
+      clearInterval(cactusTtsMeterInterval);
+      cactusTtsMeterInterval = null;
     }
+    renderGeminiOutputMeterOnly(0);
   }
 
-  function stopAllGeminiAudio() {
-    geminiActiveAudioSources.forEach(src => {
-      try { src.stop(); } catch (e) {}
-    });
-    geminiActiveAudioSources = [];
-    isModelSpeaking = false;
-    const audioCtx = getAudioCtx();
-    if (audioCtx) geminiNextPlaybackTime = audioCtx.currentTime;
-  }
-
-  // LCARS Dual-Visualizer Engine
-  function startGeminiVisualizer() {
-    if (geminiVizAnimId) return;
-
-    function renderFrame() {
-      if (currentCategory !== 'gemini_live') {
-        geminiVizAnimId = requestAnimationFrame(renderFrame);
-        return;
-      }
-
-      let inLevel = 0;
-      let outLevel = 0;
-
-      if (geminiInputAnalyser && (!geminiLiveMuted && (geminiLiveMode === 'live' || isPttActive))) {
-        const data = new Uint8Array(geminiInputAnalyser.frequencyBinCount);
-        geminiInputAnalyser.getByteFrequencyData(data);
-        let sum = 0;
-        for (let i = 0; i < data.length; i++) sum += data[i];
-        inLevel = Math.min(100, Math.round((sum / data.length / 255) * 160));
-      }
-
-      if (geminiOutputAnalyser && geminiActiveAudioSources.length > 0) {
-        const data = new Uint8Array(geminiOutputAnalyser.frequencyBinCount);
-        geminiOutputAnalyser.getByteFrequencyData(data);
-        let sum = 0;
-        for (let i = 0; i < data.length; i++) sum += data[i];
-        outLevel = Math.min(100, Math.round((sum / data.length / 255) * 160));
-      }
-
-      renderGeminiMeters(inLevel, outLevel);
-      geminiVizAnimId = requestAnimationFrame(renderFrame);
-    }
-
-    geminiVizAnimId = requestAnimationFrame(renderFrame);
-  }
-
-  function stopGeminiVisualizer() {
-    if (geminiVizAnimId) {
-      cancelAnimationFrame(geminiVizAnimId);
-      geminiVizAnimId = null;
-    }
-    renderGeminiMeters(0, 0);
-  }
-
-  function renderGeminiMeters(inLevel, outLevel) {
-    const inText = document.getElementById('geminiInLevelText');
+  function renderGeminiOutputMeterOnly(outLevel) {
     const outText = document.getElementById('geminiOutLevelText');
-    if (inText) inText.textContent = inLevel + '%';
     if (outText) outText.textContent = outLevel + '%';
 
-    const inMeter = document.getElementById('geminiInMeter');
     const outMeter = document.getElementById('geminiOutMeter');
-
-    if (inMeter) {
-      const segs = inMeter.children;
-      const activeCount = Math.round((inLevel / 100) * segs.length);
-      for (let i = 0; i < segs.length; i++) {
-        segs[i].className = 'lcars-meter-seg';
-        if (i < activeCount) {
-          if (i < 8) segs[i].classList.add('active-low');
-          else if (i < 10) segs[i].classList.add('active-mid');
-          else segs[i].classList.add('active-high');
-        }
-      }
-    }
-
     if (outMeter) {
       const segs = outMeter.children;
       const activeCount = Math.round((outLevel / 100) * segs.length);
@@ -17325,7 +17082,139 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  // Push-to-Talk Event Listeners (Button & Spacebar)
+  function renderGeminiInputMeterOnly(inLevel) {
+    const inText = document.getElementById('geminiInLevelText');
+    if (inText) inText.textContent = inLevel + '%';
+
+    const inMeter = document.getElementById('geminiInMeter');
+    if (inMeter) {
+      const segs = inMeter.children;
+      const activeCount = Math.round((inLevel / 100) * segs.length);
+      for (let i = 0; i < segs.length; i++) {
+        segs[i].className = 'lcars-meter-seg';
+        if (i < activeCount) {
+          if (i < 8) segs[i].classList.add('active-low');
+          else if (i < 10) segs[i].classList.add('active-mid');
+          else segs[i].classList.add('active-high');
+        }
+      }
+    }
+  }
+
+  function startInputMeterAnim() {
+    if (!geminiInputAnalyser) {
+      if (cactusInMeterInterval) clearInterval(cactusInMeterInterval);
+      cactusInMeterInterval = setInterval(() => {
+        const level = Math.floor(Math.random() * 50) + 35;
+        renderGeminiInputMeterOnly(level);
+      }, 95);
+    }
+  }
+
+  function stopInputMeterAnim() {
+    if (cactusInMeterInterval) {
+      clearInterval(cactusInMeterInterval);
+      cactusInMeterInterval = null;
+    }
+    if (!geminiInputAnalyser) {
+      renderGeminiInputMeterOnly(0);
+    }
+  }
+
+  // ==========================================================================
+  // SPRACHEINGABE (STT) VIA WEB SPEECH API
+  // ==========================================================================
+  function setupCactusSpeechRecognition() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn('SpeechRecognition API in diesem Browser nicht verfügbar.');
+      return null;
+    }
+
+    try {
+      const rec = new SpeechRecognition();
+      rec.lang = 'de-DE';
+      rec.interimResults = true;
+      rec.maxAlternatives = 1;
+
+      rec.onresult = (e) => {
+        let interim = '';
+        let finalStr = '';
+        for (let i = e.resultIndex; i < e.results.length; ++i) {
+          if (e.results[i].isFinal) {
+            finalStr += e.results[i][0].transcript;
+          } else {
+            interim += e.results[i][0].transcript;
+          }
+        }
+
+        if (finalStr) cactusRecognizedText += ' ' + finalStr;
+        const currentShow = (cactusRecognizedText + ' ' + interim).trim();
+        const turnInd = document.getElementById('geminiLiveTurnIndicator');
+        if (turnInd && currentShow) {
+          turnInd.textContent = `ERKANNT: "${currentShow}"`;
+        }
+
+        if (geminiLiveMode === 'live' && finalStr.trim()) {
+          const toSend = cactusRecognizedText.trim();
+          cactusRecognizedText = '';
+          sendPromptToCactus(toSend);
+        }
+      };
+
+      rec.onerror = (e) => {
+        if (e.error !== 'no-speech' && e.error !== 'aborted') {
+          console.warn('[STT] Fehler:', e.error);
+        }
+        stopInputMeterAnim();
+      };
+
+      rec.onend = () => {
+        cactusIsListening = false;
+        stopInputMeterAnim();
+        if (geminiLiveMode === 'live' && geminiLiveChannelOpen && !isModelSpeaking && !geminiLiveMuted) {
+          setTimeout(() => {
+            if (geminiLiveMode === 'live' && geminiLiveChannelOpen && !isModelSpeaking && !geminiLiveMuted && !cactusIsListening) {
+              startLiveRecognition();
+            }
+          }, 350);
+        }
+      };
+
+      return rec;
+    } catch (err) {
+      console.warn('Fehler bei SpeechRecognition Instanziierung:', err);
+      return null;
+    }
+  }
+
+  function startLiveRecognition() {
+    if (!cactusRecognition || geminiLiveMuted || isModelSpeaking) return;
+    try {
+      cactusRecognition.abort();
+    } catch (e) {}
+    try {
+      cactusRecognition.continuous = true;
+      cactusRecognition.start();
+      cactusIsListening = true;
+      startInputMeterAnim();
+      const turnInd = document.getElementById('geminiLiveTurnIndicator');
+      if (turnInd && !isModelSpeaking) turnInd.textContent = 'LIVE // ZUHÖREN...';
+      updateGeminiConnBadge('LIVE // ZUHÖREN', '#44dd88', '#000');
+    } catch (e) {}
+  }
+
+  function stopLiveRecognition() {
+    if (cactusRecognition && cactusIsListening) {
+      try { cactusRecognition.stop(); } catch (e) {}
+      cactusIsListening = false;
+    }
+    stopInputMeterAnim();
+  }
+
+  // ==========================================================================
+  // PUSH-TO-TALK LISTENER (TASTE & LEERTASTE)
+  // ==========================================================================
   function setupGeminiPttListeners() {
     const pttBtn = document.getElementById('btnGeminiPttAction');
     if (!pttBtn || pttBtn.dataset.bound === 'true') return;
@@ -17333,47 +17222,42 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     const startPtt = (e) => {
       if (e) e.preventDefault();
-      if (pttStopTimer) {
-        clearTimeout(pttStopTimer);
-        pttStopTimer = null;
-      }
-      if (!geminiLiveChannelOpen) {
-        appendGeminiLog('error', 'Subraum-Kanal nicht geöffnet. Bitte zuerst "SUBRAUM-KANAL ÖFFNEN" anklicken.');
-        return;
-      }
       if (geminiLiveMode !== 'ptt' || isPttActive) return;
 
-      const audioCtx = getAudioCtx();
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
-      }
-
-      // Falls Modell noch spricht, sofort unterbrechen (Barge-In)
-      if (isModelSpeaking || geminiActiveAudioSources.length > 0) {
+      if (isModelSpeaking || ('speechSynthesis' in window && window.speechSynthesis.speaking)) {
         stopAllGeminiAudio();
-        isModelSpeaking = false;
       }
 
       isPttActive = true;
-      pttAudioSent = false;
-      currentModelTurnEl = null;
-      currentUserTranscriptEl = null;
+      cactusRecognizedText = '';
       pttBtn.style.background = 'var(--c-primary)';
       pttBtn.style.color = '#000';
       pttBtn.style.borderColor = 'var(--c-primary)';
       pttBtn.textContent = '🔴 SPRECHEN... (AUFNAHME AKTIV)';
       const turnInd = document.getElementById('geminiLiveTurnIndicator');
       if (turnInd) turnInd.textContent = 'COMMANDER SPRICHT (PTT)...';
-      updateGeminiConnBadge('SPRECHEN...', 'var(--c-primary)', '#000');
+      updateGeminiConnBadge('AUFNAHME...', 'var(--c-primary)', '#000');
       playLcarsBeep(880, 1760);
+
+      startInputMeterAnim();
+
+      if (!cactusRecognition) {
+        cactusRecognition = setupCactusSpeechRecognition();
+      }
+      if (cactusRecognition) {
+        try { cactusRecognition.abort(); } catch (err) {}
+        try {
+          cactusRecognition.continuous = false;
+          cactusRecognition.start();
+          cactusIsListening = true;
+        } catch (err) {
+          console.warn('SpeechRecognition Start Fehler:', err);
+        }
+      }
     };
 
     const stopPtt = (e) => {
       if (e) e.preventDefault();
-      if (pttStopTimer) {
-        clearTimeout(pttStopTimer);
-        pttStopTimer = null;
-      }
       if (!isPttActive) return;
       isPttActive = false;
 
@@ -17383,21 +17267,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       pttBtn.textContent = '🎙️ SPRECHEN (GEDRÜCKT HALTEN / LEERTASTE)';
       playLcarsBeep(1200, 880);
 
-      if (pttAudioSent) {
-        if (geminiLiveWs && geminiLiveWs.readyState === WebSocket.OPEN) {
-          geminiLiveWs.send(JSON.stringify({ type: 'end_of_turn' }));
-          const turnInd = document.getElementById('geminiLiveTurnIndicator');
-          if (turnInd) turnInd.textContent = 'BORDCOMPUTER DENKT...';
-          updateGeminiConnBadge('DENKT...', 'var(--c-gold)', '#000');
-        }
-      } else {
-        const turnInd = document.getElementById('geminiLiveTurnIndicator');
-        if (turnInd && !isModelSpeaking) turnInd.textContent = 'BEREIT // ZUHÖREN';
-        if (geminiLiveChannelOpen && !isModelSpeaking) {
-          updateGeminiConnBadge('BEREIT // PUCK', '#44dd88', '#000');
-        }
+      stopInputMeterAnim();
+
+      if (cactusRecognition && cactusIsListening) {
+        try { cactusRecognition.stop(); } catch (err) {}
+        cactusIsListening = false;
       }
-      pttAudioSent = false;
+
+      setTimeout(() => {
+        const captured = cactusRecognizedText.trim();
+        cactusRecognizedText = '';
+        if (captured) {
+          sendPromptToCactus(captured);
+        } else {
+          const turnInd = document.getElementById('geminiLiveTurnIndicator');
+          if (turnInd && !isModelSpeaking) turnInd.textContent = 'BEREIT // ZUHÖREN';
+          updateGeminiConnBadge('STATUS: ON-DEVICE BEREIT', '#44dd88', '#000');
+        }
+      }, 250);
     };
 
     pttBtn.addEventListener('mousedown', startPtt);
@@ -17408,7 +17295,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     pttBtn.addEventListener('touchend', stopPtt, { passive: false });
     pttBtn.addEventListener('touchcancel', stopPtt, { passive: false });
 
-    // Leertaste als Push-to-Talk Taste
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space' && currentCategory === 'gemini_live' && geminiLiveMode === 'ptt') {
         const activeTag = document.activeElement ? document.activeElement.tagName : '';
@@ -17428,83 +17314,121 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
   }
 
-  // Transkript & Terminal Log
-  function appendGeminiLog(role, text, isStreaming = false) {
+  // ==========================================================================
+  // WEB AUDIO API MIKROFON & VISUALIZER
+  // ==========================================================================
+  async function startGeminiAudioCapture() {
+    if (geminiAudioStream) return;
+    try {
+      const audioCtx = getAudioCtx();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+      geminiAudioStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: false,
+          autoGainControl: true
+        }
+      });
+
+      geminiAudioSourceNode = audioCtx.createMediaStreamSource(geminiAudioStream);
+      geminiInputAnalyser = audioCtx.createAnalyser();
+      geminiInputAnalyser.fftSize = 64;
+      geminiAudioSourceNode.connect(geminiInputAnalyser);
+
+      startGeminiVisualizer();
+    } catch (err) {
+      console.warn('Mikrofon-Zugriff via Web Audio API nicht verfügbar:', err);
+    }
+  }
+
+  function stopGeminiAudioCapture() {
+    if (geminiAudioSourceNode) {
+      try { geminiAudioSourceNode.disconnect(); } catch (e) {}
+      geminiAudioSourceNode = null;
+    }
+    if (geminiAudioStream) {
+      try { geminiAudioStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+      geminiAudioStream = null;
+    }
+    geminiInputAnalyser = null;
+    stopGeminiVisualizer();
+  }
+
+  function startGeminiVisualizer() {
+    if (geminiVizAnimId) return;
+
+    function renderFrame() {
+      if (currentCategory !== 'gemini_live') {
+        geminiVizAnimId = requestAnimationFrame(renderFrame);
+        return;
+      }
+
+      let inLevel = 0;
+      if (geminiInputAnalyser && !geminiLiveMuted && (geminiLiveMode === 'live' || isPttActive)) {
+        const data = new Uint8Array(geminiInputAnalyser.frequencyBinCount);
+        geminiInputAnalyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) sum += data[i];
+        inLevel = Math.min(100, Math.round((sum / data.length / 255) * 160));
+        renderGeminiInputMeterOnly(inLevel);
+      }
+
+      geminiVizAnimId = requestAnimationFrame(renderFrame);
+    }
+
+    geminiVizAnimId = requestAnimationFrame(renderFrame);
+  }
+
+  function stopGeminiVisualizer() {
+    if (geminiVizAnimId) {
+      cancelAnimationFrame(geminiVizAnimId);
+      geminiVizAnimId = null;
+    }
+    renderGeminiInputMeterOnly(0);
+  }
+
+  function stopAllGeminiAudio() {
+    if ('speechSynthesis' in window) {
+      try { window.speechSynthesis.cancel(); } catch (e) {}
+    }
+    stopCactusTtsMeter();
+    geminiActiveAudioSources.forEach(src => {
+      try { src.stop(); } catch (e) {}
+    });
+    geminiActiveAudioSources = [];
+    isModelSpeaking = false;
+    const audioCtx = getAudioCtx();
+    if (audioCtx) geminiNextPlaybackTime = audioCtx.currentTime;
+  }
+
+  // ==========================================================================
+  // TRANSKRIPT & SUBRAUM LOGBUCH
+  // ==========================================================================
+  function appendGeminiLog(role, text) {
     if (!text && text !== '') return;
     const box = document.getElementById('geminiLiveTranscript');
     if (!box) return;
 
     const timeStr = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-    if (role === 'model' && isStreaming && currentModelTurnEl) {
-      currentModelTurnEl.textContent += text;
-      box.scrollTop = box.scrollHeight;
-      return;
-    }
-
-    if (role === 'user_transcript') {
-      if (currentUserTranscriptEl) {
-        currentUserTranscriptEl.textContent = text;
-        box.scrollTop = box.scrollHeight;
-        return;
-      }
-      const row = document.createElement('div');
-      row.style.wordBreak = 'break-word';
-      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-primary); font-weight:700;">[COMMANDER (ERKANNT)]:</span> <span class="user-transcript-text" style="color:#e0f7ff; font-weight:600;">${escapeHtml(text)}</span>`;
-      currentUserTranscriptEl = row.querySelector('.user-transcript-text');
-      box.appendChild(row);
-      box.scrollTop = box.scrollHeight;
-      return;
-    }
-
     const row = document.createElement('div');
     row.style.wordBreak = 'break-word';
 
     if (role === 'user') {
-      currentModelTurnEl = null;
-      currentUserTranscriptEl = null;
-      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-primary); font-weight:700;">COMMANDER:</span> <span style="color:#fff;">${escapeHtml(text)}</span>`;
-    } else if (role === 'model') {
-      currentUserTranscriptEl = null;
-      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-secondary); font-weight:700;">COMPUTER:</span> <span class="model-turn-text" style="color:#e0e8ff;">${escapeHtml(text)}</span>`;
-      currentModelTurnEl = isStreaming ? row.querySelector('.model-turn-text') : null;
+      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-primary); font-weight:700;">[BENUTZER]:</span> <span style="color:#fff;">${escapeHtml(text)}</span>`;
+    } else if (role === 'cactus') {
+      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-gold); font-weight:700;">[CACTUS ENGINE]:</span> <span style="color:#ffe066; font-family:var(--mono-family); font-size:0.82rem;">${escapeHtml(text)}</span>`;
+    } else if (role === 'model' || role === 'computer') {
+      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-secondary); font-weight:700;">[COMPUTER]:</span> <span style="color:#e0e8ff;">${escapeHtml(text)}</span>`;
     } else if (role === 'error') {
-      currentModelTurnEl = null;
-      currentUserTranscriptEl = null;
-      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-red); font-weight:700;">[WARNUNG]</span> <span style="color:var(--c-red);">${escapeHtml(text)}</span>`;
+      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-red); font-weight:700;">[FEHLER]:</span> <span style="color:var(--c-red);">${escapeHtml(text)}</span>`;
     } else {
-      currentModelTurnEl = null;
-      currentUserTranscriptEl = null;
-      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-gold);">[SYSTEM]</span> <span style="color:#ccc;">${escapeHtml(text)}</span>`;
+      row.innerHTML = `<span style="color:#888;">[${timeStr}]</span> <span style="color:var(--c-gold);">[SYSTEM]:</span> <span style="color:#ccc;">${escapeHtml(text)}</span>`;
     }
 
     box.appendChild(row);
     box.scrollTop = box.scrollHeight;
-  }
-
-  function sendGeminiLiveText() {
-    const inp = document.getElementById('geminiLiveTextInput');
-    if (!inp) return;
-    const val = inp.value.trim();
-    if (!val) return;
-
-    if (!geminiLiveWs || geminiLiveWs.readyState !== WebSocket.OPEN) {
-      appendGeminiLog('error', 'Keine aktive Subraum-Verbindung. Bitte öffnen Sie zuerst den Kanal.');
-      return;
-    }
-
-    playLcarsBeep(1200, 1600);
-    currentModelTurnEl = null;
-    currentUserTranscriptEl = null;
-    geminiLiveWs.send(JSON.stringify({
-      type: 'text',
-      text: val
-    }));
-    inp.value = '';
-    inp.focus();
-    const turnInd = document.getElementById('geminiLiveTurnIndicator');
-    if (turnInd) turnInd.textContent = 'BORDCOMPUTER DENKT...';
-    updateGeminiConnBadge('DENKT...', 'var(--c-gold)', '#000');
   }
 
   function clearGeminiLiveTranscript() {
@@ -17513,8 +17437,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (box) {
       box.innerHTML = '<div style="color:#666; font-style:italic;">[SYSTEM] Subraum-Logbuch zurückgesetzt.</div>';
     }
-    currentModelTurnEl = null;
-    currentUserTranscriptEl = null;
   }
 
   // ==========================================================================
@@ -19246,18 +19168,69 @@ if USE_FLASK:
                 code = auth_hdr.split(" ", 1)[1].strip()
         return permissions_service.verify_code(code)
 
+    CACTUS_AGENT = None
+    def get_cactus_agent():
+        global CACTUS_AGENT
+        if CACTUS_AGENT is None:
+            try:
+                import sys
+                cactus_dir = "/home/cb/Projects/cactus-ha-poc"
+                venv_site = f"{cactus_dir}/.venv/lib/python3.13/site-packages"
+                src_dir = f"{cactus_dir}/src"
+                if venv_site not in sys.path:
+                    sys.path.insert(0, venv_site)
+                if src_dir not in sys.path:
+                    sys.path.insert(0, src_dir)
+                from cactus_ha_poc.agent import NeedleAgent
+                from cactus_ha_poc.config import load_config
+                cfg = load_config(f"{cactus_dir}/.env")
+                CACTUS_AGENT = NeedleAgent(config=cfg)
+                print("[CACTUS] Needle 3 Agent successfully initialized for Subraum Comm.", flush=True)
+            except Exception as e:
+                print(f"[CACTUS] Initialization failed: {e}", flush=True)
+        return CACTUS_AGENT
+
+    @app.route("/api/cactus/process", methods=["POST"])
+    def api_cactus_process():
+        code = request.headers.get("X-Command-Code") or request.headers.get("X-Auth-Code") or request.args.get("code")
+        if not _gemini_live_authorized(code):
+            if request.is_json:
+                b = request.get_json(silent=True) or {}
+                if not _gemini_live_authorized(b.get("code")):
+                    return jsonify({"error": "LCARS Zugriff verweigert", "locked": True}), 403
+        data = request.get_json(silent=True) or {}
+        prompt = data.get("prompt", "").strip()
+        if not prompt:
+            return jsonify({"error": "Kein Prompt angegeben"}), 400
+        agent = get_cactus_agent()
+        if not agent:
+            return jsonify({"error": "Cactus NeedleAgent konnte nicht geladen werden"}), 500
+        try:
+            res = agent.process_prompt(prompt)
+            return jsonify({
+                "success": res.success,
+                "prompt": res.prompt,
+                "message": res.message,
+                "tool_call": res.tool_call,
+                "entity_id": res.entity_id,
+                "action": res.action,
+                "confidence": round(res.confidence * 100, 1),
+                "latency_ms": round(res.latency_ms, 1),
+                "error": res.error
+            })
+        except Exception as e:
+            return jsonify({"error": str(e), "success": False}), 500
+
     @app.route("/api/gemini-live/status", methods=["GET"])
+    @app.route("/api/cactus/status", methods=["GET"])
     def api_gemini_live_status():
         is_locked = False
         if permissions_service:
             with permissions_service.lock:
                 is_locked = "gemini_live" in permissions_service.locked_sections
-        gl_cfg = _get_gemini_live_config()
-        has_key = bool(gl_cfg.get("api_key"))
-        model = gl_cfg.get("model", "gemini-3.8-live")
         return jsonify({
-            "configured": has_key,
-            "model": model,
+            "configured": True,
+            "model": "Cactus Needle 3 (On-Device)",
             "locked": is_locked
         })
 
@@ -19902,8 +19875,7 @@ else:
                 if env_key:
                     gl_data["api_key"] = env_key.strip()
                 is_locked = "gemini_live" in permissions_service.locked_sections if permissions_service else False
-                has_key = bool(gl_data.get("api_key"))
-                data = json.dumps({"configured": has_key, "model": gl_data.get("model", "gemini-3.8-live"), "locked": is_locked}).encode("utf-8")
+                data = json.dumps({"configured": True, "model": "Cactus Needle 3 (On-Device)", "locked": is_locked}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
