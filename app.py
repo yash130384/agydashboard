@@ -7733,8 +7733,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <span id="geminiLiveModelBadge" class="lcars-pill-tag" style="background: rgba(255,255,255,0.08); color: var(--c-secondary); font-family: var(--mono-family); font-size: 0.8rem;">
                 MODEL: CACTUS NEEDLE 3
               </span>
-              <span id="geminiLiveModeBadge" class="lcars-pill-tag" style="background: rgba(255,255,255,0.08); color: var(--c-gold); font-family: var(--mono-family); font-size: 0.8rem;">
-                MODUS: PTT
+              <span id="geminiLiveModeBadge" class="lcars-pill-tag" style="background: rgba(255,184,51,0.2); color: var(--c-gold); border: 1px solid var(--c-gold); font-family: var(--mono-family); font-size: 0.8rem; font-weight: 700;">
+                MODUS: 🧪 TEST (SIMULATION)
+              </span>
+              <span id="geminiLiveAudioBadge" class="lcars-pill-tag" style="background: rgba(255,255,255,0.08); color: var(--c-secondary); font-family: var(--mono-family); font-size: 0.8rem;">
+                AUDIO: PTT
               </span>
             </div>
           </div>
@@ -7755,22 +7758,33 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
           <!-- ACTIVE CONTENT -->
           <div id="geminiLiveActiveContent" style="display: none;">
-            <!-- TOOLBAR / CONTROL STRIP -->
-            <div class="lcars-card" style="margin-bottom: 1rem; padding: 0.75rem 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; border-left: 4px solid var(--c-secondary);">
-              <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-                <button type="button" class="lcars-pill-btn active" id="btnGeminiModePtt" onclick="setGeminiLiveMode('ptt')" style="height: 36px; padding: 0 1rem; font-size: 0.82rem; font-weight: 700; background: var(--c-secondary); color: #000;">
-                  🎙️ PUSH-TO-TALK
+            <!-- TOOLBAR / CONTROL STRIP & PROMINENTER MODUS-UMSCHALTER -->
+            <div class="lcars-card" style="margin-bottom: 1rem; padding: 0.85rem 1.25rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; border-left: 4px solid var(--c-gold); background: rgba(0,0,0,0.45);">
+              <!-- Prominenter LCARS Modus-Umschalter -->
+              <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                <span style="font-family: var(--font-family); font-weight: 800; font-size: 0.85rem; color: #aaa; letter-spacing: 0.06em; text-transform: uppercase;">
+                  SCHALTMODUS:
+                </span>
+                <button type="button" class="lcars-pill-btn active" id="btnCactusModeTest" onclick="setCactusExecutionMode('test')" style="height: 38px; padding: 0 1.2rem; font-size: 0.85rem; font-weight: 800; background: var(--c-gold); color: #000; border: 2px solid var(--c-gold); border-radius: 4px; cursor: pointer; transition: all 0.15s ease; box-shadow: 0 0 10px rgba(255,184,51,0.4);">
+                  MODUS: 🧪 TEST (SIMULATION)
                 </button>
-                <button type="button" class="lcars-pill-btn" id="btnGeminiModeLive" onclick="setGeminiLiveMode('live')" style="height: 36px; padding: 0 1rem; font-size: 0.82rem; font-weight: 700; background: rgba(0,0,0,0.5); color: var(--c-gold); border: 1px solid var(--c-gold);">
-                  📡 DAUERHAFT LIVE
+                <button type="button" class="lcars-pill-btn" id="btnCactusModeLive" onclick="setCactusExecutionMode('live')" style="height: 38px; padding: 0 1.2rem; font-size: 0.85rem; font-weight: 800; background: rgba(0,0,0,0.5); color: #44dd88; border: 1px solid #44dd88; border-radius: 4px; cursor: pointer; transition: all 0.15s ease;">
+                  MODUS: ⚡ LIVE (ECHTE SCHALTUNG)
                 </button>
               </div>
 
+              <!-- Audio-Modus & Kanal-Steuerung -->
               <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-                <button type="button" class="left-action-btn" id="btnGeminiToggleChannel" onclick="toggleGeminiLiveChannel()" style="height: 36px; padding: 0 1.2rem; font-size: 0.85rem; font-weight: 700; border-color: #44dd88; color: #44dd88;">
+                <button type="button" class="lcars-pill-btn active" id="btnGeminiModePtt" onclick="setGeminiLiveMode('ptt')" style="height: 36px; padding: 0 0.9rem; font-size: 0.82rem; font-weight: 700; background: var(--c-secondary); color: #000;">
+                  🎙️ PUSH-TO-TALK
+                </button>
+                <button type="button" class="lcars-pill-btn" id="btnGeminiModeLive" onclick="setGeminiLiveMode('live')" style="height: 36px; padding: 0 0.9rem; font-size: 0.82rem; font-weight: 700; background: rgba(0,0,0,0.5); color: var(--c-gold); border: 1px solid var(--c-gold);">
+                  📡 DAUERHAFT LIVE
+                </button>
+                <button type="button" class="left-action-btn" id="btnGeminiToggleChannel" onclick="toggleGeminiLiveChannel()" style="height: 36px; padding: 0 1.1rem; font-size: 0.82rem; font-weight: 700; border-color: #44dd88; color: #44dd88;">
                   ▶ SUBRAUM-KANAL ÖFFNEN
                 </button>
-                <button type="button" class="left-action-btn" id="btnGeminiMute" onclick="toggleGeminiLiveMute()" style="height: 36px; padding: 0 0.9rem; font-size: 0.82rem; border-color: var(--c-gold); color: var(--c-gold);">
+                <button type="button" class="left-action-btn" id="btnGeminiMute" onclick="toggleGeminiLiveMute()" style="height: 36px; padding: 0 0.8rem; font-size: 0.82rem; border-color: var(--c-gold); color: var(--c-gold);">
                   🎤 MIKROFON: AN
                 </button>
                 <button type="button" class="left-action-btn" onclick="clearGeminiLiveTranscript()" style="height: 36px; padding: 0 0.8rem; font-size: 0.82rem; border-color: #888; color: #888;" title="Transkript leeren">
@@ -7779,33 +7793,278 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
             </div>
 
-            <!-- MODELL-TESTFAELLE SCHNELLTESTS -->
+            <!-- MODELL-TESTFAELLE & HOME ASSISTANT LICHT-SCHNELLWAHL -->
             <div class="lcars-card" style="margin-bottom: 1rem; padding: 1rem 1.25rem; border-left: 4px solid var(--c-gold);">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.85rem; flex-wrap: wrap; gap: 0.5rem;">
                 <div style="font-family: var(--font-family); font-size: 0.95rem; font-weight: 700; color: var(--c-gold); letter-spacing: 0.06em; text-transform: uppercase;">
-                  🧪 MODELL-TESTFÄLLE // CACTUS NEEDLE 3 (HOME ASSISTANT)
+                  💡 HOME ASSISTANT LICHT-SCHNELLWAHL &amp; MODELL-TESTFÄLLE
                 </div>
                 <div style="font-size: 0.75rem; color: #888; font-family: var(--mono-family);">
-                  4 Modellfälle zum Testen mit Sprache &amp; Inferenz
+                  Steuerung aller 16 Home Assistant Lichter &amp; Wetter-Tests (Aktiviert im aktuellen Modus)
                 </div>
               </div>
-              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.6rem;">
-                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Schalte das Licht am Esstisch an')" style="text-align: left; padding: 0.6rem 0.9rem; border-color: var(--c-secondary); color: var(--c-secondary); height: auto; line-height: 1.3;">
-                  <span style="font-weight: 700; display: block; font-size: 0.85rem; color: #fff;">💡 Fall 1: Licht an</span>
-                  <span style="font-size: 0.75rem; color: var(--c-secondary); font-family: var(--mono-family);">"Schalte das Licht am Esstisch an"</span>
+
+              <!-- Sammelbefehle & Wetter Schnelltests -->
+              <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; padding-bottom: 0.85rem; border-bottom: 1px solid rgba(255,255,255,0.08);">
+                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Alle Lichter an')" style="padding: 0.45rem 0.9rem; font-size: 0.82rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                  ⚡ Alle Lichter an
                 </button>
-                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Wie wird das Wetter heute in Norderstedt?')" style="text-align: left; padding: 0.6rem 0.9rem; border-color: var(--c-secondary); color: var(--c-secondary); height: auto; line-height: 1.3;">
-                  <span style="font-weight: 700; display: block; font-size: 0.85rem; color: #fff;">🌤️ Fall 2: Wetter</span>
-                  <span style="font-size: 0.75rem; color: var(--c-secondary); font-family: var(--mono-family);">"Wie wird das Wetter heute in Norderstedt?"</span>
+                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Alle Lichter aus')" style="padding: 0.45rem 0.9rem; font-size: 0.82rem; font-weight: 700; border-color: var(--c-red); color: var(--c-red); height: auto;">
+                  🌑 Alle Lichter aus
                 </button>
-                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Brauche ich heute einen Regenschirm?')" style="text-align: left; padding: 0.6rem 0.9rem; border-color: var(--c-secondary); color: var(--c-secondary); height: auto; line-height: 1.3;">
-                  <span style="font-weight: 700; display: block; font-size: 0.85rem; color: #fff;">☔ Fall 3: Regenschirm</span>
-                  <span style="font-size: 0.75rem; color: var(--c-secondary); font-family: var(--mono-family);">"Brauche ich heute einen Regenschirm?"</span>
+                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Wetter Norderstedt')" style="padding: 0.45rem 0.9rem; font-size: 0.82rem; font-weight: 700; border-color: var(--c-blue); color: var(--c-blue); height: auto;">
+                  🌤️ Wetter Norderstedt
                 </button>
-                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Dimme das Licht am Esstisch auf 50 Prozent')" style="text-align: left; padding: 0.6rem 0.9rem; border-color: var(--c-secondary); color: var(--c-secondary); height: auto; line-height: 1.3;">
-                  <span style="font-weight: 700; display: block; font-size: 0.85rem; color: #fff;">🔆 Fall 4: Dimmen</span>
-                  <span style="font-size: 0.75rem; color: var(--c-secondary); font-family: var(--mono-family);">"Dimme das Licht am Esstisch auf 50 Prozent"</span>
+                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Regenschirm-Check')" style="padding: 0.45rem 0.9rem; font-size: 0.82rem; font-weight: 700; border-color: var(--c-secondary); color: var(--c-secondary); height: auto;">
+                  ☔ Regenschirm-Check
                 </button>
+                <button type="button" class="left-action-btn" onclick="runCactusTestCase('Dimme das Licht am Esstisch auf 50 Prozent')" style="padding: 0.45rem 0.9rem; font-size: 0.82rem; font-weight: 700; border-color: var(--c-gold); color: var(--c-gold); height: auto;">
+                  🔆 Esstisch 50% Dimmen
+                </button>
+              </div>
+
+              <!-- Schnellwahl-Raster fuer alle 16 Home Assistant Lichter -->
+              <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 0.6rem;">
+                <!-- Decke 1 -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">💡 Decke 1</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.decke1</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Decke 1 an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Decke 1 an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Decke 1 aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Decke 1 aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Decke 2 -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">💡 Decke 2</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.decke2</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Decke 2 an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Decke 2 an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Decke 2 aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Decke 2 aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Decke 3 -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">💡 Decke 3</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.decke3</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Decke 3 an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Decke 3 an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Decke 3 aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Decke 3 aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Kueche -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">🍳 Küche</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.kuche</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Kueche an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Kueche an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Kueche aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Kueche aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Bodenlampe -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">🛋️ Bodenlampe</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.bodenlampe</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Bodenlampe an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Bodenlampe an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Bodenlampe aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Bodenlampe aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Schlafzimmer -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">🛏️ Schlafzimmer</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.schlafzimmer</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Schlafzimmer an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Schlafzimmer an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Schlafzimmer aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Schlafzimmer aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Flur oben -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">🚪 Flur oben</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.flur_oben</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Flur oben an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Flur oben an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Flur oben aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Flur oben aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Schranklampe -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">👔 Schranklampe</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.schranklampe</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Schranklampe an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Schranklampe an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Schranklampe aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Schranklampe aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Esstisch -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">🍽️ Esstisch</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.esstisch</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Esstisch an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Esstisch an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Esstisch aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Esstisch aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Letos LED -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">🌈 Letos LED</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.letos_led_leiste</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Letos LED an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Letos LED an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Letos LED aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Letos LED aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Schlafzimmer Decke -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">💡 Schlafz. Decke</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.schlafzimmer_decke</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Schlafzimmer Decke an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Decke an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Schlafzimmer Decke aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Decke aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Leto Bett -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">🛏️ Leto Bett</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.leto_bett</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Leto Bett an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Leto Bett an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Leto Bett aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Leto Bett aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Licht 1 -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">💡 Licht 1</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.licht_1</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Licht 1 an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Licht 1 an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Licht 1 aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Licht 1 aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Licht 10 -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">💡 Licht 10</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.licht_10</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Licht 10 an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Licht 10 an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Licht 10 aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Licht 10 aus
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Licht 11 -->
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.5rem 0.75rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <span style="font-weight: 700; font-size: 0.82rem; color: #fff;">💡 Licht 11</span>
+                    <span style="font-size: 0.65rem; color: #777; font-family: var(--mono-family);">light.licht_11</span>
+                  </div>
+                  <div style="display: flex; gap: 0.35rem;">
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Licht 11 an')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #44dd88; color: #44dd88; height: auto;">
+                      Licht 11 an
+                    </button>
+                    <button type="button" class="left-action-btn" onclick="runCactusTestCase('Licht 11 aus')" style="flex: 1; text-align: center; padding: 0.35rem 0.2rem; font-size: 0.75rem; font-weight: 700; border-color: #ff5566; color: #ff5566; height: auto;">
+                      Licht 11 aus
+                    </button>
+                  </div>
+                </div>
+
               </div>
             </div>
 
@@ -16711,6 +16970,70 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let currentUserTranscriptEl = null;
   let pttStopTimer = null;
 
+  // Cactus Execution Mode (Test vs Live)
+  let cactusExecutionMode = 'test';
+
+  function setCactusExecutionMode(mode) {
+    if (mode !== 'test' && mode !== 'live') mode = 'test';
+    cactusExecutionMode = mode;
+
+    if (mode === 'live') {
+      playLcarsBeep(1600, 2000);
+    } else {
+      playLcarsBeep(1200, 800);
+    }
+
+    const btnTest = document.getElementById('btnCactusModeTest');
+    const btnLive = document.getElementById('btnCactusModeLive');
+    const modeBadge = document.getElementById('geminiLiveModeBadge');
+
+    if (mode === 'live') {
+      if (btnLive) {
+        btnLive.classList.add('active');
+        btnLive.style.background = '#ff3344';
+        btnLive.style.color = '#fff';
+        btnLive.style.borderColor = '#ff3344';
+        btnLive.style.boxShadow = '0 0 12px rgba(255, 51, 68, 0.6)';
+      }
+      if (btnTest) {
+        btnTest.classList.remove('active');
+        btnTest.style.background = 'rgba(0,0,0,0.5)';
+        btnTest.style.color = 'var(--c-gold)';
+        btnTest.style.borderColor = 'var(--c-gold)';
+        btnTest.style.boxShadow = 'none';
+      }
+      if (modeBadge) {
+        modeBadge.textContent = 'MODUS: 🔴 LIVE (ECHTE SCHALTUNG)';
+        modeBadge.style.backgroundColor = 'rgba(255, 51, 68, 0.25)';
+        modeBadge.style.color = '#ff5566';
+        modeBadge.style.borderColor = '#ff3344';
+      }
+    } else {
+      if (btnTest) {
+        btnTest.classList.add('active');
+        btnTest.style.background = 'var(--c-gold)';
+        btnTest.style.color = '#000';
+        btnTest.style.borderColor = 'var(--c-gold)';
+        btnTest.style.boxShadow = '0 0 10px rgba(255, 184, 51, 0.4)';
+      }
+      if (btnLive) {
+        btnLive.classList.remove('active');
+        btnLive.style.background = 'rgba(0,0,0,0.5)';
+        btnLive.style.color = '#44dd88';
+        btnLive.style.borderColor = '#44dd88';
+        btnLive.style.boxShadow = 'none';
+      }
+      if (modeBadge) {
+        modeBadge.textContent = 'MODUS: 🧪 TEST (SIMULATION)';
+        modeBadge.style.backgroundColor = 'rgba(255, 184, 51, 0.2)';
+        modeBadge.style.color = 'var(--c-gold)';
+        modeBadge.style.borderColor = 'var(--c-gold)';
+      }
+    }
+
+    appendGeminiLog('system', `Ausführungsmodus gewechselt: ${mode === "live" ? "🔴 LIVE (ECHTE SCHALTUNG)" : "🧪 TEST (SIMULATION)"}`);
+  }
+
   // Cactus STT & TTS State
   let cactusRecognition = null;
   let cactusIsListening = false;
@@ -16756,6 +17079,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     checkGeminiLiveStatus();
     initGeminiMeterDOM();
     updateGeminiLiveModeUI();
+    setCactusExecutionMode(cactusExecutionMode);
     setupGeminiPttListeners();
 
     if (!cactusRecognition) {
@@ -16804,7 +17128,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   function updateGeminiLiveModeUI() {
     const btnPtt = document.getElementById('btnGeminiModePtt');
     const btnLive = document.getElementById('btnGeminiModeLive');
-    const modeBadge = document.getElementById('geminiLiveModeBadge');
+    const audioBadge = document.getElementById('geminiLiveAudioBadge');
     const pttArea = document.getElementById('geminiPttActionArea');
     const liveArea = document.getElementById('geminiLiveStatusArea');
 
@@ -16819,7 +17143,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         btnLive.style.color = 'var(--c-gold)';
         btnLive.style.border = '1px solid var(--c-gold)';
       }
-      if (modeBadge) modeBadge.textContent = 'MODUS: PTT';
+      if (audioBadge) audioBadge.textContent = 'AUDIO: PTT';
       if (pttArea) pttArea.style.display = 'block';
       if (liveArea) liveArea.style.display = 'none';
     } else {
@@ -16833,7 +17157,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         btnLive.style.color = '#000';
         btnLive.style.border = 'none';
       }
-      if (modeBadge) modeBadge.textContent = 'MODUS: DAUERHAFT LIVE';
+      if (audioBadge) audioBadge.textContent = 'AUDIO: DAUERHAFT LIVE';
       if (pttArea) pttArea.style.display = 'none';
       if (liveArea) liveArea.style.display = 'block';
     }
@@ -16916,8 +17240,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (turnInd) turnInd.textContent = 'CACTUS INFERENZ...';
     updateGeminiConnBadge('VERARBEITET...', 'var(--c-gold)', '#000');
 
-    // 1. Protokolliert im Subraum-Logbuch: [BENUTZER] promptText
-    appendGeminiLog('user', promptText);
+    // 1. Protokolliert im Subraum-Logbuch: [BENUTZER] promptText inklusive aktivem Modus
+    const modePrefix = cactusExecutionMode === 'live' ? '[🔴 LIVE]' : '[🧪 TEST]';
+    appendGeminiLog('user', `${modePrefix} ${promptText}`);
 
     const authCode = sessionStorage.getItem('lcars_auth_code') || '0901';
 
@@ -16929,7 +17254,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           'X-Command-Code': authCode,
           'X-Auth-Code': authCode
         },
-        body: JSON.stringify({ prompt: promptText })
+        body: JSON.stringify({
+          prompt: promptText,
+          mode: cactusExecutionMode
+        })
       });
 
       if (!resp.ok) {
@@ -16951,7 +17279,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return;
       }
 
-      // 2. Protokolliert im Subraum-Logbuch: [CACTUS ENGINE] tool, confidence, latency
+      // 2. Protokolliert im Subraum-Logbuch: [CACTUS ENGINE] tool, confidence, latency, mode
       let toolStr = 'Kein Tool-Aufruf (Direktantwort)';
       if (res.tool_call && res.tool_call.name) {
         const argsStr = res.tool_call.arguments ? JSON.stringify(res.tool_call.arguments) : '';
@@ -16960,7 +17288,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         toolStr = `${res.action} [${res.entity_id || ''}]`;
       }
 
-      const engineMsg = `Tool: ${toolStr} | Konfidenz: ${res.confidence}% | Latenz: ${res.latency_ms} ms`;
+      const activeMode = (res.mode || cactusExecutionMode) === 'live' ? '🔴 LIVE' : '🧪 TEST';
+      const engineMsg = `Modus: ${activeMode} | Tool: ${toolStr} | Konfidenz: ${res.confidence}% | Latenz: ${res.latency_ms} ms`;
       appendGeminiLog('cactus', engineMsg);
 
       // 3. Protokolliert im Subraum-Logbuch: [COMPUTER] message
@@ -19184,6 +19513,15 @@ if USE_FLASK:
                 from cactus_ha_poc.agent import NeedleAgent
                 from cactus_ha_poc.config import load_config
                 cfg = load_config(f"{cactus_dir}/.env")
+                if ha_service:
+                    try:
+                        ha_cfg = ha_service.get_config(safe=False)
+                        if ha_cfg.get("token"):
+                            cfg.hass_token = ha_cfg["token"]
+                        if ha_cfg.get("url"):
+                            cfg.hass_url = ha_cfg["url"]
+                    except Exception:
+                        pass
                 CACTUS_AGENT = NeedleAgent(config=cfg)
                 print("[CACTUS] Needle 3 Agent successfully initialized for Subraum Comm.", flush=True)
             except Exception as e:
@@ -19202,11 +19540,19 @@ if USE_FLASK:
         prompt = data.get("prompt", "").strip()
         if not prompt:
             return jsonify({"error": "Kein Prompt angegeben"}), 400
+        mode = data.get("mode", "test").strip().lower()
+        if mode not in ("test", "live"):
+            mode = "test"
+        dry_run = (mode != "live")
         agent = get_cactus_agent()
         if not agent:
             return jsonify({"error": "Cactus NeedleAgent konnte nicht geladen werden"}), 500
         try:
-            res = agent.process_prompt(prompt)
+            res = agent.process_prompt(prompt, dry_run=dry_run)
+            if not res.success and not prompt.lower().startswith("schalte ") and any(prompt.lower().endswith(w) for w in (" an", " aus", " ein", " ab")):
+                res_retry = agent.process_prompt(f"Schalte {prompt}", dry_run=dry_run)
+                if res_retry.success:
+                    res = res_retry
             return jsonify({
                 "success": res.success,
                 "prompt": res.prompt,
@@ -19216,10 +19562,33 @@ if USE_FLASK:
                 "action": res.action,
                 "confidence": round(res.confidence * 100, 1),
                 "latency_ms": round(res.latency_ms, 1),
-                "error": res.error
+                "error": res.error,
+                "mode": mode
             })
         except Exception as e:
-            return jsonify({"error": str(e), "success": False}), 500
+            return jsonify({"error": str(e), "success": False, "mode": mode}), 500
+
+    @app.route("/api/cactus/lights", methods=["GET"])
+    def api_cactus_lights():
+        lights = [
+            {"entity_id": "light.decke1", "friendly_name": "Decke 1"},
+            {"entity_id": "light.decke2", "friendly_name": "Decke 2"},
+            {"entity_id": "light.decke3", "friendly_name": "Decke 3"},
+            {"entity_id": "light.bodenlampe", "friendly_name": "Bodenlampe"},
+            {"entity_id": "light.schlafzimmer", "friendly_name": "Schlafzimmer"},
+            {"entity_id": "light.schlafzimmer_decke", "friendly_name": "Schlafzimmer Decke"},
+            {"entity_id": "light.kuche", "friendly_name": "Küche"},
+            {"entity_id": "light.flur_oben", "friendly_name": "Flur oben"},
+            {"entity_id": "light.schranklampe", "friendly_name": "Schranklampe"},
+            {"entity_id": "light.esstisch", "friendly_name": "Esstisch"},
+            {"entity_id": "light.leto_bett", "friendly_name": "Leto Bett"},
+            {"entity_id": "light.letos_led_leiste", "friendly_name": "Letos LED Leiste"},
+            {"entity_id": "light.licht_1", "friendly_name": "Licht 1"},
+            {"entity_id": "light.licht_10", "friendly_name": "Licht 10"},
+            {"entity_id": "light.licht_11", "friendly_name": "Licht 11"},
+            {"entity_id": "light.all", "friendly_name": "Alle Lichter"},
+        ]
+        return jsonify(lights)
 
     @app.route("/api/gemini-live/status", methods=["GET"])
     @app.route("/api/cactus/status", methods=["GET"])
