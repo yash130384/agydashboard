@@ -7735,6 +7735,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <span id="geminiLiveModelBadge" class="lcars-pill-tag" style="background: rgba(255,255,255,0.08); color: var(--c-secondary); font-family: var(--mono-family); font-size: 0.8rem;">
                 MODEL: CACTUS NEEDLE 3
               </span>
+              <span id="geminiLiveSttBadge" class="lcars-pill-tag" style="background: rgba(68,221,136,0.15); color: #44dd88; border: 1px solid #44dd88; font-family: var(--mono-family); font-size: 0.8rem; font-weight: 700;">
+                STT: FASTER-WHISPER BASE
+              </span>
               <span id="geminiLiveModeBadge" class="lcars-pill-tag" style="background: rgba(255,184,51,0.2); color: var(--c-gold); border: 1px solid var(--c-gold); font-family: var(--mono-family); font-size: 0.8rem; font-weight: 700;">
                 MODUS: 🧪 TEST (SIMULATION)
               </span>
@@ -16961,11 +16964,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   // Cactus STT & TTS State
-  let cactusRecognition = null;
   let cactusIsListening = false;
-  let cactusRecognizedText = '';
   let cactusInMeterInterval = null;
   let cactusTtsMeterInterval = null;
+  let cactusMediaRecorder = null;
+  let cactusAudioChunks = [];
+  let cactusIsRecording = false;
+  let cactusLastVoiceTime = 0;
+  let cactusIsLiveListening = false;
 
   async function checkGeminiLiveStatus() {
     try {
@@ -16975,6 +16981,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const modelBadge = document.getElementById('geminiLiveModelBadge');
       if (modelBadge && data.model) {
         modelBadge.textContent = 'MODEL: ' + data.model.toUpperCase();
+      }
+      const sttBadge = document.getElementById('geminiLiveSttBadge');
+      if (sttBadge && data.stt) {
+        sttBadge.textContent = 'STT: ' + data.stt.toUpperCase();
       }
       const statusBadge = document.getElementById('geminiLiveStatusBadge');
       if (statusBadge) {
@@ -17007,10 +17017,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     updateGeminiLiveModeUI();
     setCactusExecutionMode(cactusExecutionMode);
     setupGeminiPttListeners();
-
-    if (!cactusRecognition) {
-      cactusRecognition = setupCactusSpeechRecognition();
-    }
   }
 
   function initGeminiMeterDOM() {
@@ -17377,99 +17383,200 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   // ==========================================================================
-  // SPRACHEINGABE (STT) VIA WEB SPEECH API
+  // SPRACHEINGABE (STT) VIA LOKALES FASTER-WHISPER & MEDIARECORDER
   // ==========================================================================
-  function setupCactusSpeechRecognition() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      console.warn('SpeechRecognition API in diesem Browser nicht verfügbar.');
-      return null;
+  function getSupportedAudioMimeType() {
+    if (typeof MediaRecorder === 'undefined') return '';
+    const types = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/ogg',
+      'audio/mp4'
+    ];
+    for (const t of types) {
+      if (MediaRecorder.isTypeSupported(t)) return t;
+    }
+    return '';
+  }
+
+  async function sendAudioToWhisper(audioBlob) {
+    if (!audioBlob || audioBlob.size < 500) {
+      const turnInd = document.getElementById('geminiLiveTurnIndicator');
+      if (turnInd && !isModelSpeaking) turnInd.textContent = 'BEREIT // ZUHÖREN';
+      updateGeminiConnBadge('STATUS: ON-DEVICE BEREIT', '#44dd88', '#000');
+      return;
     }
 
+    const turnInd = document.getElementById('geminiLiveTurnIndicator');
+    if (turnInd) turnInd.textContent = 'WHISPER BASE INFERENZ (LOKAL)...';
+    updateGeminiConnBadge('STT INFERENZ...', 'var(--c-gold)', '#000');
+
+    const authCode = sessionStorage.getItem('lcars_auth_code') || '0901';
+    const formData = new FormData();
+    formData.append('audio', audioBlob, 'subraum_speech.webm');
+    formData.append('mode', cactusExecutionMode);
+    formData.append('process', 'true');
+
     try {
-      const rec = new SpeechRecognition();
-      rec.lang = 'de-DE';
-      rec.interimResults = true;
-      rec.maxAlternatives = 1;
+      const resp = await fetch('/api/voice/transcribe', {
+        method: 'POST',
+        headers: {
+          'X-Command-Code': authCode,
+          'X-Auth-Code': authCode
+        },
+        body: formData
+      });
 
-      rec.onresult = (e) => {
-        let interim = '';
-        let finalStr = '';
-        for (let i = e.resultIndex; i < e.results.length; ++i) {
-          if (e.results[i].isFinal) {
-            finalStr += e.results[i][0].transcript;
-          } else {
-            interim += e.results[i][0].transcript;
-          }
-        }
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        const errMsg = errData.error || `HTTP ${resp.status} ${resp.statusText}`;
+        appendGeminiLog('error', `STT Fehler: ${errMsg}`);
+        updateGeminiConnBadge('FEHLER', 'var(--c-red)', '#fff');
+        if (turnInd) turnInd.textContent = 'FEHLER // STT';
+        playLcarsBeep(440, 220);
+        return;
+      }
 
-        if (finalStr) cactusRecognizedText += ' ' + finalStr;
-        const currentShow = (cactusRecognizedText + ' ' + interim).trim();
-        const turnInd = document.getElementById('geminiLiveTurnIndicator');
-        if (turnInd && currentShow) {
-          turnInd.textContent = `ERKANNT: "${currentShow}"`;
-        }
+      const res = await resp.json();
+      if (!res.success && res.error) {
+        appendGeminiLog('error', res.error);
+        updateGeminiConnBadge('FEHLER', 'var(--c-red)', '#fff');
+        if (turnInd) turnInd.textContent = 'FEHLER // INFERENZ';
+        playLcarsBeep(440, 220);
+        return;
+      }
 
-        if (geminiLiveMode === 'live' && finalStr.trim()) {
-          const toSend = cactusRecognizedText.trim();
-          cactusRecognizedText = '';
-          sendPromptToCactus(toSend);
-        }
-      };
+      const recognized = (res.text || '').trim();
+      if (!recognized) {
+        if (turnInd) turnInd.textContent = 'KEINE SPRACHE ERKANNT';
+        updateGeminiConnBadge('STATUS: ON-DEVICE BEREIT', '#44dd88', '#000');
+        return;
+      }
 
-      rec.onerror = (e) => {
-        if (e.error !== 'no-speech' && e.error !== 'aborted') {
-          console.warn('[STT] Fehler:', e.error);
-        }
-        stopInputMeterAnim();
-      };
+      if (turnInd) {
+        turnInd.textContent = `ERKANNT: "${recognized}"`;
+      }
 
-      rec.onend = () => {
-        cactusIsListening = false;
-        stopInputMeterAnim();
-        if (geminiLiveMode === 'live' && geminiLiveChannelOpen && !isModelSpeaking && !geminiLiveMuted) {
-          setTimeout(() => {
-            if (geminiLiveMode === 'live' && geminiLiveChannelOpen && !isModelSpeaking && !geminiLiveMuted && !cactusIsListening) {
-              startLiveRecognition();
-            }
-          }, 350);
-        }
-      };
+      // Log User speech
+      const modePrefix = cactusExecutionMode === 'live' ? '[🔴 LIVE]' : '[🧪 TEST]';
+      appendGeminiLog('user', `${modePrefix} ${recognized}`);
 
-      return rec;
+      // Log Cactus Engine result
+      let toolStr = 'Kein Tool-Aufruf (Direktantwort)';
+      if (res.tool_call && res.tool_call.name) {
+        const argsStr = res.tool_call.arguments ? JSON.stringify(res.tool_call.arguments) : '';
+        toolStr = `${res.tool_call.name}(${argsStr})`;
+      } else if (res.action) {
+        toolStr = `${res.action} [${res.entity_id || ''}]`;
+      }
+      const activeMode = (res.mode || cactusExecutionMode) === 'live' ? '🔴 LIVE' : '🧪 TEST';
+      const engineMsg = `Modus: ${activeMode} | Tool: ${toolStr} | Konfidenz: ${res.confidence}% | Latenz: ${res.latency_ms} ms`;
+      appendGeminiLog('cactus', engineMsg);
+
+      // Log Computer response
+      appendGeminiLog('computer', res.message || 'Befehl ausgeführt.');
+
+      // Update badge & sound
+      updateGeminiConnBadge('STATUS: ON-DEVICE BEREIT', '#44dd88', '#000');
+      playLcarsBeep(1200, 1600);
+
+      // TTS speech output
+      speakCactusMessage(res.message || 'Befehl ausgeführt.');
+
     } catch (err) {
-      console.warn('Fehler bei SpeechRecognition Instanziierung:', err);
-      return null;
+      appendGeminiLog('error', `Verbindungsfehler STT: ${err.message}`);
+      updateGeminiConnBadge('FEHLER', 'var(--c-red)', '#fff');
+      if (turnInd) turnInd.textContent = 'FEHLER // NETZWERK';
+      playLcarsBeep(440, 220);
     }
   }
 
   function startLiveRecognition() {
-    if (!cactusRecognition || geminiLiveMuted || isModelSpeaking) return;
-    try {
-      cactusRecognition.abort();
-    } catch (e) {}
-    try {
-      cactusRecognition.continuous = true;
-      cactusRecognition.start();
-      cactusIsListening = true;
-      startInputMeterAnim();
-      const turnInd = document.getElementById('geminiLiveTurnIndicator');
-      if (turnInd && !isModelSpeaking) turnInd.textContent = 'LIVE // ZUHÖREN...';
-      updateGeminiConnBadge('LIVE // ZUHÖREN', '#44dd88', '#000');
-    } catch (e) {}
+    cactusIsLiveListening = true;
+    startGeminiAudioCapture();
+    const turnInd = document.getElementById('geminiLiveTurnIndicator');
+    if (turnInd && !isModelSpeaking) turnInd.textContent = 'LIVE // ZUHÖREN (WHISPER BASE)...';
+    updateGeminiConnBadge('LIVE // ZUHÖREN', '#44dd88', '#000');
   }
 
   function stopLiveRecognition() {
-    if (cactusRecognition && cactusIsListening) {
-      try { cactusRecognition.stop(); } catch (e) {}
-      cactusIsListening = false;
+    cactusIsLiveListening = false;
+    if (cactusMediaRecorder && cactusMediaRecorder.state !== 'inactive') {
+      try { cactusMediaRecorder.stop(); } catch (e) {}
     }
-    stopInputMeterAnim();
+    cactusIsRecording = false;
   }
 
   // ==========================================================================
-  // PUSH-TO-TALK LISTENER (TASTE & LEERTASTE)
+  // PUSH-TO-TALK LISTENER (TASTE & LEERTASTE) VIA MEDIARECORDER
   // ==========================================================================
+  async function startCactusPttRecording() {
+    if (isPttActive) return;
+    if (isModelSpeaking || ('speechSynthesis' in window && window.speechSynthesis.speaking)) {
+      stopAllGeminiAudio();
+    }
+
+    isPttActive = true;
+    const pttBtn = document.getElementById('btnGeminiPttAction');
+    if (pttBtn) {
+      pttBtn.style.background = 'var(--c-primary)';
+      pttBtn.style.color = '#000';
+      pttBtn.style.borderColor = 'var(--c-primary)';
+      pttBtn.textContent = '🔴 SPRECHEN... (AUFNAHME AKTIV)';
+    }
+    const turnInd = document.getElementById('geminiLiveTurnIndicator');
+    if (turnInd) turnInd.textContent = 'COMMANDER SPRICHT (PTT)...';
+    updateGeminiConnBadge('AUFNAHME...', 'var(--c-primary)', '#000');
+    playLcarsBeep(880, 1760);
+
+    const stream = await startGeminiAudioCapture();
+    if (!stream) {
+      appendGeminiLog('error', 'Mikrofon nicht verfügbar oder Zugriff verweigert.');
+      stopCactusPttRecording();
+      return;
+    }
+
+    try {
+      const mime = getSupportedAudioMimeType();
+      cactusAudioChunks = [];
+      cactusMediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+      cactusMediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) cactusAudioChunks.push(e.data);
+      };
+      cactusMediaRecorder.onstop = () => {
+        const audioBlob = new Blob(cactusAudioChunks, { type: cactusMediaRecorder.mimeType || 'audio/webm' });
+        cactusAudioChunks = [];
+        sendAudioToWhisper(audioBlob);
+      };
+      cactusMediaRecorder.start(100);
+      cactusIsRecording = true;
+    } catch (err) {
+      console.warn('[PTT] MediaRecorder Start Fehler:', err);
+    }
+  }
+
+  function stopCactusPttRecording() {
+    if (!isPttActive) return;
+    isPttActive = false;
+
+    const pttBtn = document.getElementById('btnGeminiPttAction');
+    if (pttBtn) {
+      pttBtn.style.background = 'rgba(186,164,229,0.15)';
+      pttBtn.style.color = 'var(--c-secondary)';
+      pttBtn.style.borderColor = 'var(--c-secondary)';
+      pttBtn.textContent = '🎙️ SPRECHEN (GEDRÜCKT HALTEN / LEERTASTE)';
+    }
+    playLcarsBeep(1200, 880);
+
+    if (cactusMediaRecorder && cactusMediaRecorder.state !== 'inactive') {
+      try {
+        cactusMediaRecorder.stop();
+      } catch (err) {}
+      cactusIsRecording = false;
+    }
+  }
+
   function setupGeminiPttListeners() {
     const pttBtn = document.getElementById('btnGeminiPttAction');
     if (!pttBtn || pttBtn.dataset.bound === 'true') return;
@@ -17478,68 +17585,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const startPtt = (e) => {
       if (e) e.preventDefault();
       if (geminiLiveMode !== 'ptt' || isPttActive) return;
-
-      if (isModelSpeaking || ('speechSynthesis' in window && window.speechSynthesis.speaking)) {
-        stopAllGeminiAudio();
-      }
-
-      isPttActive = true;
-      cactusRecognizedText = '';
-      pttBtn.style.background = 'var(--c-primary)';
-      pttBtn.style.color = '#000';
-      pttBtn.style.borderColor = 'var(--c-primary)';
-      pttBtn.textContent = '🔴 SPRECHEN... (AUFNAHME AKTIV)';
-      const turnInd = document.getElementById('geminiLiveTurnIndicator');
-      if (turnInd) turnInd.textContent = 'COMMANDER SPRICHT (PTT)...';
-      updateGeminiConnBadge('AUFNAHME...', 'var(--c-primary)', '#000');
-      playLcarsBeep(880, 1760);
-
-      startInputMeterAnim();
-
-      if (!cactusRecognition) {
-        cactusRecognition = setupCactusSpeechRecognition();
-      }
-      if (cactusRecognition) {
-        try { cactusRecognition.abort(); } catch (err) {}
-        try {
-          cactusRecognition.continuous = false;
-          cactusRecognition.start();
-          cactusIsListening = true;
-        } catch (err) {
-          console.warn('SpeechRecognition Start Fehler:', err);
-        }
-      }
+      startCactusPttRecording();
     };
 
     const stopPtt = (e) => {
       if (e) e.preventDefault();
       if (!isPttActive) return;
-      isPttActive = false;
-
-      pttBtn.style.background = 'rgba(186,164,229,0.15)';
-      pttBtn.style.color = 'var(--c-secondary)';
-      pttBtn.style.borderColor = 'var(--c-secondary)';
-      pttBtn.textContent = '🎙️ SPRECHEN (GEDRÜCKT HALTEN / LEERTASTE)';
-      playLcarsBeep(1200, 880);
-
-      stopInputMeterAnim();
-
-      if (cactusRecognition && cactusIsListening) {
-        try { cactusRecognition.stop(); } catch (err) {}
-        cactusIsListening = false;
-      }
-
-      setTimeout(() => {
-        const captured = cactusRecognizedText.trim();
-        cactusRecognizedText = '';
-        if (captured) {
-          sendPromptToCactus(captured);
-        } else {
-          const turnInd = document.getElementById('geminiLiveTurnIndicator');
-          if (turnInd && !isModelSpeaking) turnInd.textContent = 'BEREIT // ZUHÖREN';
-          updateGeminiConnBadge('STATUS: ON-DEVICE BEREIT', '#44dd88', '#000');
-        }
-      }, 250);
+      stopCactusPttRecording();
     };
 
     pttBtn.addEventListener('mousedown', startPtt);
@@ -17573,7 +17625,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // WEB AUDIO API MIKROFON & VISUALIZER
   // ==========================================================================
   async function startGeminiAudioCapture() {
-    if (geminiAudioStream) return;
+    if (geminiAudioStream) return geminiAudioStream;
     try {
       const audioCtx = getAudioCtx();
       if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -17593,8 +17645,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       geminiAudioSourceNode.connect(geminiInputAnalyser);
 
       startGeminiVisualizer();
+      return geminiAudioStream;
     } catch (err) {
       console.warn('Mikrofon-Zugriff via Web Audio API nicht verfügbar:', err);
+      return null;
     }
   }
 
@@ -17628,6 +17682,41 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         for (let i = 0; i < data.length; i++) sum += data[i];
         inLevel = Math.min(100, Math.round((sum / data.length / 255) * 160));
         renderGeminiInputMeterOnly(inLevel);
+
+        // VAD handling for Live Mode
+        if (geminiLiveMode === 'live' && cactusIsLiveListening && !isModelSpeaking) {
+          const now = Date.now();
+          if (inLevel > 18) {
+            cactusLastVoiceTime = now;
+            if (!cactusIsRecording && geminiAudioStream) {
+              try {
+                const mime = getSupportedAudioMimeType();
+                cactusAudioChunks = [];
+                cactusMediaRecorder = new MediaRecorder(geminiAudioStream, mime ? { mimeType: mime } : {});
+                cactusMediaRecorder.ondataavailable = (e) => {
+                  if (e.data && e.data.size > 0) cactusAudioChunks.push(e.data);
+                };
+                cactusMediaRecorder.onstop = () => {
+                  const blob = new Blob(cactusAudioChunks, { type: cactusMediaRecorder.mimeType || 'audio/webm' });
+                  cactusAudioChunks = [];
+                  sendAudioToWhisper(blob);
+                };
+                cactusMediaRecorder.start(100);
+                cactusIsRecording = true;
+                const turnInd = document.getElementById('geminiLiveTurnIndicator');
+                if (turnInd) turnInd.textContent = 'SPRACHE ERKANNT // AUFNAHME...';
+                updateGeminiConnBadge('SPRICHT...', 'var(--c-primary)', '#000');
+              } catch (e) {
+                console.warn('[LIVE VAD] Recorder Start Fehler:', e);
+              }
+            }
+          } else if (cactusIsRecording && (now - cactusLastVoiceTime > 1200)) {
+            cactusIsRecording = false;
+            if (cactusMediaRecorder && cactusMediaRecorder.state !== 'inactive') {
+              try { cactusMediaRecorder.stop(); } catch (e) {}
+            }
+          }
+        }
       }
 
       geminiVizAnimId = requestAnimationFrame(renderFrame);
@@ -19206,6 +19295,114 @@ if USE_FLASK:
                 print(f"[CACTUS] Initialization failed: {e}", flush=True)
         return CACTUS_AGENT
 
+    WHISPER_MODEL = None
+    WHISPER_LOCK = threading.Lock()
+
+    def get_whisper_model():
+        global WHISPER_MODEL
+        if WHISPER_MODEL is None:
+            with WHISPER_LOCK:
+                if WHISPER_MODEL is None:
+                    from faster_whisper import WhisperModel
+                    WHISPER_MODEL = WhisperModel("base", device="cpu", compute_type="int8")
+                    print("[STT] Faster-Whisper base model (cpu, int8) initialized.", flush=True)
+        return WHISPER_MODEL
+
+    def _process_cactus_prompt(prompt, mode="test"):
+        dry_run = (mode != "live")
+        agent = get_cactus_agent()
+        if not agent:
+            return {"error": "Cactus NeedleAgent konnte nicht geladen werden", "success": False, "mode": mode}
+        try:
+            res = agent.process_prompt(prompt, dry_run=dry_run)
+            if not res.success and not prompt.lower().startswith("schalte ") and any(prompt.lower().endswith(w) for w in (" an", " aus", " ein", " ab")):
+                res_retry = agent.process_prompt(f"Schalte {prompt}", dry_run=dry_run)
+                if res_retry.success:
+                    res = res_retry
+            return {
+                "success": res.success,
+                "prompt": res.prompt,
+                "message": res.message,
+                "tool_call": res.tool_call,
+                "entity_id": res.entity_id,
+                "action": res.action,
+                "confidence": round(res.confidence * 100, 1),
+                "latency_ms": round(res.latency_ms, 1),
+                "error": res.error,
+                "mode": mode
+            }
+        except Exception as e:
+            return {"error": str(e), "success": False, "mode": mode}
+
+    @app.route("/api/voice/transcribe", methods=["POST"])
+    @app.route("/api/cactus/transcribe", methods=["POST"])
+    def api_voice_transcribe():
+        code = request.headers.get("X-Command-Code") or request.headers.get("X-Auth-Code") or request.args.get("code") or request.form.get("code")
+        if not _gemini_live_authorized(code):
+            return jsonify({"error": "LCARS Zugriff verweigert", "locked": True}), 403
+
+        audio_bytes = None
+        if "audio" in request.files:
+            audio_bytes = request.files["audio"].read()
+        elif "file" in request.files:
+            audio_bytes = request.files["file"].read()
+        else:
+            audio_bytes = request.get_data()
+
+        if not audio_bytes:
+            return jsonify({"error": "Keine Audiodaten übermittelt", "success": False}), 400
+
+        mode = request.form.get("mode") or request.args.get("mode") or "test"
+        mode = mode.strip().lower()
+        if mode not in ("test", "live"):
+            mode = "test"
+
+        process_param = request.form.get("process") or request.args.get("process") or "true"
+        should_process = process_param.lower() in ("true", "1", "yes")
+
+        lang = request.form.get("lang") or request.args.get("lang") or "de"
+
+        try:
+            model = get_whisper_model()
+            text = ""
+            try:
+                import io
+                buf = io.BytesIO(audio_bytes)
+                segments, info = model.transcribe(buf, language=lang, beam_size=1)
+                text = " ".join([s.text for s in segments]).strip()
+            except Exception:
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".webm", delete=True) as tf:
+                    tf.write(audio_bytes)
+                    tf.flush()
+                    segments, info = model.transcribe(tf.name, language=lang, beam_size=1)
+                    text = " ".join([s.text for s in segments]).strip()
+
+            if not text:
+                return jsonify({
+                    "success": True,
+                    "text": "",
+                    "recognized": False,
+                    "message": "Keine Sprache erkannt.",
+                    "mode": mode
+                })
+
+            if not should_process:
+                return jsonify({
+                    "success": True,
+                    "text": text,
+                    "recognized": True,
+                    "mode": mode
+                })
+
+            result = _process_cactus_prompt(text, mode=mode)
+            result["text"] = text
+            result["recognized"] = True
+            return jsonify(result)
+
+        except Exception as e:
+            return jsonify({"error": f"Transkriptionsfehler: {str(e)}", "success": False, "mode": mode}), 500
+
     @app.route("/api/cactus/process", methods=["POST"])
     def api_cactus_process():
         code = request.headers.get("X-Command-Code") or request.headers.get("X-Auth-Code") or request.args.get("code")
@@ -19221,30 +19418,10 @@ if USE_FLASK:
         mode = data.get("mode", "test").strip().lower()
         if mode not in ("test", "live"):
             mode = "test"
-        dry_run = (mode != "live")
-        agent = get_cactus_agent()
-        if not agent:
-            return jsonify({"error": "Cactus NeedleAgent konnte nicht geladen werden"}), 500
-        try:
-            res = agent.process_prompt(prompt, dry_run=dry_run)
-            if not res.success and not prompt.lower().startswith("schalte ") and any(prompt.lower().endswith(w) for w in (" an", " aus", " ein", " ab")):
-                res_retry = agent.process_prompt(f"Schalte {prompt}", dry_run=dry_run)
-                if res_retry.success:
-                    res = res_retry
-            return jsonify({
-                "success": res.success,
-                "prompt": res.prompt,
-                "message": res.message,
-                "tool_call": res.tool_call,
-                "entity_id": res.entity_id,
-                "action": res.action,
-                "confidence": round(res.confidence * 100, 1),
-                "latency_ms": round(res.latency_ms, 1),
-                "error": res.error,
-                "mode": mode
-            })
-        except Exception as e:
-            return jsonify({"error": str(e), "success": False, "mode": mode}), 500
+        result = _process_cactus_prompt(prompt, mode=mode)
+        if not result.get("success") and "nicht geladen" in result.get("error", ""):
+            return jsonify(result), 500
+        return jsonify(result)
 
     @app.route("/api/cactus/lights", methods=["GET"])
     def api_cactus_lights():
@@ -19278,6 +19455,7 @@ if USE_FLASK:
         return jsonify({
             "configured": True,
             "model": "Cactus Needle 3 (On-Device)",
+            "stt": "Faster-Whisper base (CPU int8)",
             "locked": is_locked
         })
 
