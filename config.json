@@ -24,11 +24,11 @@
   "home_assistant": {
     "enabled": true,
     "url": "http://127.0.0.1:8123",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI3Y2Y5NGRjZGJmMzU0ZTU5YTZjNWRkODZiMTkzZjdjZCIsImlhdCI6MTc5MDI4NTgxNiwiZXhwIjoxNzkwMjg3NjE2fQ.rn1WjitgMPKb0Civ8viQ7z_4kCREGkGpnhIcqg1uNsE",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI3Y2Y5NGRjZGJmMzU0ZTU5YTZjNWRkODZiMTkzZjdjZCIsImlhdCI6MTc5MDI4OTMwMSwiZXhwIjoxNzkwMjkxMTAxfQ.WfSsverwRIDramZ9zEonZhUem0Lw1UqxDL4nrLGJ7yc",
     "username": "cb",
     "password": "mymaajen",
     "refresh_token": "e2e1a52cf9bc59f6990f74a1586db8f8e9a5203aef6c462a05f0a7a54816ff7dfe36248ce0aa1a28140e94dfd29b3b694eac6fe8260aa342aef3b2c08dd9d453",
-    "token_expires_at": 1790287556.2817938,
+    "token_expires_at": 1790291041.7639909,
     "name": "Assistant"
   },
   "gemini_live": {
@@ -37,16 +37,6 @@
     "voice": "Puck",
     "system_instruction": "Du bist der LCARS Bordcomputer der USS Antigravity. Du interagierst direkt mit dem Commander \u00fcber Subraum-Audio. Antworte stets pr\u00e4zise, professionell, hilfsbereit und im authentischen Ton eines Starfleet Computer-Terminals auf Deutsch.",
     "temperature": 0.6
-  },
-  "pimmel_node": {
-    "enabled": true,
-    "ssh_host": "pimmel",
-    "ip": "100.88.215.98",
-    "poll_interval_seconds": 10,
-    "sync_interval_seconds": 30,
-    "remote_db_path": "/home/yash/.9router/db/data.sqlite",
-    "remote_log_path": "/home/yash/.pm2/logs/9router-out.log",
-    "cache_db_path": "data_cache/pimmel_9router.sqlite"
   },
   "permissions": {
     "command_code": "0901",

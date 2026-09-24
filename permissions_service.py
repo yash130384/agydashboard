@@ -24,7 +24,6 @@ VALID_SECTIONS = [
     "cycle",
     "pulsecast",
     "gemini_live",
-    "pimmel",
     "devteam",
 ]
 
