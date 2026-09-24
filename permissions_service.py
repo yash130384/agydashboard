@@ -11,7 +11,7 @@ import sys
 import threading
 
 DEFAULT_COMMAND_CODE = "0901"
-DEFAULT_LOCKED_SECTIONS = ["cycle", "pulsecast", "gemini_live"]
+DEFAULT_LOCKED_SECTIONS = ["cycle", "pulsecast", "gemini_live", "devteam"]
 VALID_SECTIONS = [
     "system",
     "services",
@@ -25,6 +25,7 @@ VALID_SECTIONS = [
     "pulsecast",
     "gemini_live",
     "pimmel",
+    "devteam",
 ]
 
 

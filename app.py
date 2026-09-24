@@ -3265,7 +3265,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .pill-pulsecast { background-color: var(--c-butterscotch); color: #000; }
     .pill-gemini-live { background-color: var(--c-secondary); color: #000; font-weight: 700; }
     .pill-pimmel { background-color: #8899ff; color: #000; font-weight: 700; }
+    .pill-devteam { background-color: var(--c-butterscotch); color: #000; font-weight: 700; }
     .pill-auth  { background-color: var(--c-almond); color: #000; }
+
+    .devteam-task-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+      border-color: rgba(255, 255, 255, 0.25) !important;
+    }
 
     /* Gemini 3.8 Live & Audio Visualizer Styling */
     .lcars-meter-seg { flex: 1; border-radius: 2px; background: rgba(255,255,255,0.06); transition: background 0.06s ease; }
@@ -4990,6 +4997,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="lcars-pill-btn pill-pimmel" onclick="switchCategory('pimmel')" id="btn-cat-pimmel">
           PIMMEL
         </button>
+        <button class="lcars-pill-btn pill-devteam" onclick="switchCategory('devteam')" id="btn-cat-devteam" style="display: none;">
+          DEV-TEAM
+        </button>
         <button class="lcars-pill-btn pill-auth" onclick="toggleAuthModal()" id="btn-auth-toggle">
           <span id="authBtnIcon">🔒</span> <span id="authBtnLabel">CODE</span>
         </button>
@@ -6201,6 +6211,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                       <div class="perm-card-info">
                         <span class="perm-name" style="color:#8899ff;">PIMMEL</span>
                         <span class="perm-desc">Remote Node // 9Router Hub (100.88.215.98)</span>
+                      </div>
+                    </label>
+
+                    <!-- DEV-TEAM KANBAN -->
+                    <label class="perm-checkbox-card" style="border-color:var(--c-butterscotch);">
+                      <input type="checkbox" id="permLock_devteam" value="devteam" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name" style="color:var(--c-butterscotch);">DEV-TEAM</span>
+                        <span class="perm-desc">Hermes Kanban Board &amp; Dispatcher</span>
                       </div>
                     </label>
                   </div>
@@ -8444,6 +8463,156 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
+        <!-- KATEGORIE: DEV-TEAM KANBAN BOARD -->
+        <section class="lcars-section" id="section-devteam">
+          <!-- Header Bar -->
+          <div class="lcars-header-bar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+            <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+              <h2>DEV-TEAM KANBAN</h2>
+              <div style="display:flex; align-items:center; gap:4px;">
+                <span style="display:inline-block; width:28px; height:12px; background:var(--c-butterscotch); border-radius:6px 0 0 6px;"></span>
+                <span style="display:inline-block; width:16px; height:12px; background:var(--c-primary);"></span>
+                <span style="display:inline-block; width:36px; height:12px; background:var(--c-gold); border-radius:0 6px 6px 0;"></span>
+              </div>
+              <span class="lcars-pill-tag" style="background:var(--c-butterscotch); color:#000;">HERMES WORKFLOW ENGINE</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
+              <span id="devteamLastSyncText" style="font-family:var(--mono-family); font-size:0.78rem; color:#aaa; margin-right:0.3rem;">SYNC: --:--:--</span>
+              <button type="button" class="left-action-btn" id="btnDevteamNewTask" onclick="openDevteamNewTaskModal()" style="border-color:var(--c-gold); color:var(--c-gold); font-weight:700; padding:0.35rem 0.9rem; font-size:0.82rem;">
+                <span>+</span> <span>NEUER TASK</span>
+              </button>
+              <button type="button" class="left-action-btn" id="btnDevteamDispatch" onclick="triggerDevteamDispatch()" style="border-color:var(--c-butterscotch); color:var(--c-butterscotch); font-weight:700; padding:0.35rem 0.9rem; font-size:0.82rem;">
+                <span id="devteamDispatchSpinner" style="display:none;" class="spin">⟳</span>
+                <span id="devteamDispatchIcon">⚡</span>
+                <span id="devteamDispatchText">DISPATCH</span>
+              </button>
+              <button type="button" class="left-action-btn" onclick="fetchDevteamData(true)" style="border-color:var(--c-blue); color:var(--c-blue); padding:0.35rem 0.8rem; font-size:0.82rem;">
+                <span>⟳</span> <span>REFRESH</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- READOUT GRID: 4 STAT TILES -->
+          <div class="readout-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+            <!-- Total Tasks -->
+            <div class="lcars-card">
+              <div class="card-head">
+                <span class="card-head-title">TOTAL TASKS</span>
+                <span class="card-head-icon">📋</span>
+              </div>
+              <div class="card-metric" id="devteamStatTotal" style="color:#ffcc66;">0</div>
+              <div class="card-metric-sub">Dev-Team Pipeline</div>
+              <div class="badge-status badge-online">BOARD GESAMT</div>
+            </div>
+
+            <!-- Running Tasks -->
+            <div class="lcars-card card-blue">
+              <div class="card-head">
+                <span class="card-head-title">RUNNING</span>
+                <span class="card-head-icon">⚙️</span>
+              </div>
+              <div class="card-metric" id="devteamStatRunning" style="color:#ffcc66;">0</div>
+              <div class="card-metric-sub">Aktive Worker In-Flight</div>
+              <div class="badge-status badge-online" style="background:var(--c-blue); color:#000;">IN ARBEIT</div>
+            </div>
+
+            <!-- Blocked Tasks -->
+            <div class="lcars-card card-red">
+              <div class="card-head">
+                <span class="card-head-title">BLOCKED</span>
+                <span class="card-head-icon">🛑</span>
+              </div>
+              <div class="card-metric" id="devteamStatBlocked" style="color:#ffcc66;">0</div>
+              <div class="card-metric-sub">Eskaliert / Review nötig</div>
+              <div class="badge-status" id="devteamStatBlockedBadge" style="background:rgba(255,255,255,0.08); color:#aaa;">KEINE BLOCKER</div>
+            </div>
+
+            <!-- Done Tasks -->
+            <div class="lcars-card card-almond">
+              <div class="card-head">
+                <span class="card-head-title">DONE</span>
+                <span class="card-head-icon">✅</span>
+              </div>
+              <div class="card-metric" id="devteamStatDone" style="color:#ffcc66;">0</div>
+              <div class="card-metric-sub">Erfolgreich abgeschlossen</div>
+              <div class="badge-status badge-online">NOMINAL</div>
+            </div>
+          </div>
+
+          <!-- KANBAN BOARD VIEW (5 COLUMNS) -->
+          <div class="devteam-board" style="display:flex; gap:0.85rem; overflow-x:auto; padding-bottom:0.75rem; align-items:flex-start;">
+            <!-- Column 1: Triage -->
+            <div class="devteam-col" style="flex:1 1 0; min-width:210px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:12px; padding:0.65rem;">
+              <div class="devteam-col-header" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem; background:rgba(255,255,255,0.04); border-radius:14px 4px 4px 14px; padding:0.25rem 0.6rem 0.25rem 0.25rem;">
+                <div style="background:var(--c-secondary); color:#000; font-weight:700; font-size:0.82rem; padding:0.25rem 0.75rem; border-radius:12px 0 0 12px; letter-spacing:0.06em; min-width:70px; text-align:center;">
+                  TRIAGE
+                </div>
+                <div style="flex:1; height:4px; background:var(--c-secondary); opacity:0.6;"></div>
+                <span id="devteamColCount-triage" style="font-family:var(--mono-family); font-weight:700; font-size:0.85rem; color:var(--c-secondary); padding:0 0.3rem;">0</span>
+              </div>
+              <div id="devteamCol-triage" class="devteam-card-list" style="display:flex; flex-direction:column; gap:0.65rem; min-height:100px;">
+                <div style="text-align:center; padding:1.5rem 0.5rem; color:#666; font-size:0.8rem; font-style:italic;">Keine Tasks</div>
+              </div>
+            </div>
+
+            <!-- Column 2: Ready -->
+            <div class="devteam-col" style="flex:1 1 0; min-width:210px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:12px; padding:0.65rem;">
+              <div class="devteam-col-header" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem; background:rgba(255,255,255,0.04); border-radius:14px 4px 4px 14px; padding:0.25rem 0.6rem 0.25rem 0.25rem;">
+                <div style="background:var(--c-butterscotch); color:#000; font-weight:700; font-size:0.82rem; padding:0.25rem 0.75rem; border-radius:12px 0 0 12px; letter-spacing:0.06em; min-width:70px; text-align:center;">
+                  READY
+                </div>
+                <div style="flex:1; height:4px; background:var(--c-butterscotch); opacity:0.6;"></div>
+                <span id="devteamColCount-ready" style="font-family:var(--mono-family); font-weight:700; font-size:0.85rem; color:var(--c-butterscotch); padding:0 0.3rem;">0</span>
+              </div>
+              <div id="devteamCol-ready" class="devteam-card-list" style="display:flex; flex-direction:column; gap:0.65rem; min-height:100px;">
+                <div style="text-align:center; padding:1.5rem 0.5rem; color:#666; font-size:0.8rem; font-style:italic;">Keine Tasks</div>
+              </div>
+            </div>
+
+            <!-- Column 3: Running -->
+            <div class="devteam-col" style="flex:1 1 0; min-width:210px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:12px; padding:0.65rem;">
+              <div class="devteam-col-header" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem; background:rgba(255,255,255,0.04); border-radius:14px 4px 4px 14px; padding:0.25rem 0.6rem 0.25rem 0.25rem;">
+                <div style="background:var(--c-blue); color:#000; font-weight:700; font-size:0.82rem; padding:0.25rem 0.75rem; border-radius:12px 0 0 12px; letter-spacing:0.06em; min-width:70px; text-align:center;">
+                  RUNNING
+                </div>
+                <div style="flex:1; height:4px; background:var(--c-blue); opacity:0.6;"></div>
+                <span id="devteamColCount-running" style="font-family:var(--mono-family); font-weight:700; font-size:0.85rem; color:var(--c-blue); padding:0 0.3rem;">0</span>
+              </div>
+              <div id="devteamCol-running" class="devteam-card-list" style="display:flex; flex-direction:column; gap:0.65rem; min-height:100px;">
+                <div style="text-align:center; padding:1.5rem 0.5rem; color:#666; font-size:0.8rem; font-style:italic;">Keine Tasks</div>
+              </div>
+            </div>
+
+            <!-- Column 4: Blocked -->
+            <div class="devteam-col" style="flex:1 1 0; min-width:210px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:12px; padding:0.65rem;">
+              <div class="devteam-col-header" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem; background:rgba(255,255,255,0.04); border-radius:14px 4px 4px 14px; padding:0.25rem 0.6rem 0.25rem 0.25rem;">
+                <div style="background:var(--c-red); color:#fff; font-weight:700; font-size:0.82rem; padding:0.25rem 0.75rem; border-radius:12px 0 0 12px; letter-spacing:0.06em; min-width:70px; text-align:center;">
+                  BLOCKED
+                </div>
+                <div style="flex:1; height:4px; background:var(--c-red); opacity:0.6;"></div>
+                <span id="devteamColCount-blocked" style="font-family:var(--mono-family); font-weight:700; font-size:0.85rem; color:var(--c-red); padding:0 0.3rem;">0</span>
+              </div>
+              <div id="devteamCol-blocked" class="devteam-card-list" style="display:flex; flex-direction:column; gap:0.65rem; min-height:100px;">
+                <div style="text-align:center; padding:1.5rem 0.5rem; color:#666; font-size:0.8rem; font-style:italic;">Keine Tasks</div>
+              </div>
+            </div>
+
+            <!-- Column 5: Done -->
+            <div class="devteam-col" style="flex:1 1 0; min-width:210px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:12px; padding:0.65rem;">
+              <div class="devteam-col-header" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem; background:rgba(255,255,255,0.04); border-radius:14px 4px 4px 14px; padding:0.25rem 0.6rem 0.25rem 0.25rem;">
+                <div style="background:#00e676; color:#000; font-weight:700; font-size:0.82rem; padding:0.25rem 0.75rem; border-radius:12px 0 0 12px; letter-spacing:0.06em; min-width:70px; text-align:center;">
+                  DONE
+                </div>
+                <div style="flex:1; height:4px; background:#00e676; opacity:0.6;"></div>
+                <span id="devteamColCount-done" style="font-family:var(--mono-family); font-weight:700; font-size:0.85rem; color:#00e676; padding:0 0.3rem;">0</span>
+              </div>
+              <div id="devteamCol-done" class="devteam-card-list" style="display:flex; flex-direction:column; gap:0.65rem; min-height:100px;">
+                <div style="text-align:center; padding:1.5rem 0.5rem; color:#666; font-size:0.8rem; font-style:italic;">Keine Tasks</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- LCARS PULSECAST SERIES EPISODES MODAL -->
         <div id="pulsecastSeriesModal" class="ha-modal-overlay" style="display:none;" onclick="handlePulsecastSeriesModalBackdropClick(event)">
           <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:820px; width:95%; max-height:90vh; display:flex; flex-direction:column;">
@@ -8886,6 +9055,80 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </div>
 
+        <!-- LCARS DEV-TEAM NEW TASK MODAL -->
+        <div id="devteamNewTaskModal" class="ha-modal-overlay" style="display:none;" onclick="handleDevteamNewTaskModalBackdrop(event)">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:520px; width:95%;">
+            <div class="ha-modal-header" style="background:var(--c-butterscotch); color:#000;">
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <span style="font-size:1.3rem;">📋</span>
+                <div style="font-size:1.15rem; font-weight:700; text-transform:uppercase; font-family:var(--font-family);">
+                  NEUER DEV-TEAM TASK
+                </div>
+              </div>
+              <button type="button" class="ha-modal-close-btn" onclick="closeDevteamNewTaskModal()">✕</button>
+            </div>
+            <div class="ha-modal-body" style="padding:1.25rem;">
+              <form id="devteamNewTaskForm" onsubmit="submitDevteamNewTask(event)">
+                <div class="config-field" style="margin-bottom:1rem;">
+                  <label for="devteamFormTitle" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-butterscotch); margin-bottom:0.35rem;">
+                    📝 TITEL
+                  </label>
+                  <input type="text" id="devteamFormTitle" class="lcars-input" placeholder="z.B. Refactor auth service" required style="width:100%;">
+                </div>
+
+                <div class="config-field" style="margin-bottom:1rem;">
+                  <label for="devteamFormAssignee" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem;">
+                    👤 ASSIGNEE / PROFILE
+                  </label>
+                  <select id="devteamFormAssignee" class="lcars-input" style="width:100%; background:#101018; color:#fff;">
+                    <option value="coder">coder (Entwickler / Code Worker)</option>
+                    <option value="qa">qa (Quality Assurance / Tests)</option>
+                    <option value="reviewer">reviewer (Code Reviewer)</option>
+                    <option value="default">default (Standard Profil)</option>
+                  </select>
+                </div>
+
+                <div class="config-field" style="margin-bottom:1.25rem;">
+                  <label for="devteamFormBody" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-secondary); margin-bottom:0.35rem;">
+                    📄 BESCHREIBUNG / BODY
+                  </label>
+                  <textarea id="devteamFormBody" class="lcars-input" rows="5" placeholder="Detaillierte Aufgabenbeschreibung..." style="width:100%; resize:vertical; font-family:var(--mono-family); font-size:0.85rem;"></textarea>
+                </div>
+
+                <div style="display:flex; justify-content:flex-end; gap:0.6rem;">
+                  <button type="button" class="left-action-btn" onclick="closeDevteamNewTaskModal()" style="border-color:#888; color:#888; padding:0.4rem 1rem;">
+                    ABBRECHEN
+                  </button>
+                  <button type="submit" class="left-action-btn" id="btnDevteamSubmitTask" style="border-color:var(--c-butterscotch); color:var(--c-butterscotch); font-weight:700; padding:0.4rem 1.25rem;">
+                    <span id="devteamSubmitTaskSpinner" style="display:none;" class="spin">⟳</span>
+                    <span>TASK ERSTELLEN</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- LCARS DEV-TEAM TASK DETAIL MODAL -->
+        <div id="devteamDetailModal" class="ha-modal-overlay" style="display:none;" onclick="handleDevteamDetailModalBackdrop(event)">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:780px; width:95%; max-height:85vh; display:flex; flex-direction:column;">
+            <div class="ha-modal-header" style="background:var(--c-butterscotch); color:#000;">
+              <div style="display:flex; align-items:center; gap:0.6rem; min-width:0;">
+                <span style="font-size:1.3rem;">📋</span>
+                <div style="min-width:0;">
+                  <div id="devteamDetailModalTitle" style="font-size:1.15rem; font-weight:700; text-transform:uppercase; font-family:var(--font-family); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    TASK DETAIL
+                  </div>
+                </div>
+              </div>
+              <button type="button" class="ha-modal-close-btn" onclick="closeDevteamDetailModal()">✕</button>
+            </div>
+            <div class="ha-modal-body" style="padding:1.25rem; overflow-y:auto; flex:1;" id="devteamDetailModalBody">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+
       </main>
     </div>
   </div>
@@ -9147,7 +9390,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     'cycle': 'LCARS BIO-TELEMETRIE // PARTNERINNEN-ZYKLUS',
     'pulsecast': 'LCARS PULSECAST // MEDIA & DOWNLOAD HUB',
     'gemini_live': 'LCARS SUBRAUM COMM // CACTUS NEEDLE 3',
-    'pimmel': 'REMOTE NODE // PIMMEL ODN-HUB (100.88.215.98)'
+    'pimmel': 'REMOTE NODE // PIMMEL ODN-HUB (100.88.215.98)',
+    'devteam': 'DEV-TEAM // KANBAN WORKFLOW ENGINE'
   };
 
   function switchCategory(catId) {
@@ -9258,6 +9502,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (pimmelTimelineChart) pimmelTimelineChart.resize();
         initPimmelCharts();
       }, 60);
+    }
+    if (catId === 'devteam') {
+      fetchDevteamData(true);
     }
   }
 
@@ -13892,7 +14139,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function applyPermissionsVisibility() {
     const isUnlocked = (sessionStorage.getItem('lcars_auth_unlocked') === 'true');
-    const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'pimmel'];
+    const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'pimmel', 'devteam'];
 
     allSections.forEach(secId => {
       const btn = document.getElementById('btn-cat-' + secId);
@@ -13950,7 +14197,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (icon) icon.textContent = '🔓';
 
       // Check the checkboxes for currentLockedSections
-      const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'pimmel'];
+      const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'pimmel', 'devteam'];
       allSections.forEach(secId => {
         const cb = document.getElementById('permLock_' + secId);
         if (cb) {
@@ -18439,6 +18686,428 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
+  // ==========================================================================
+  // DEV-TEAM KANBAN WORKFLOW CONTROLLER
+  // ==========================================================================
+  var lastDevteamTasksFingerprint = '';
+  var lastDevteamStatsFingerprint = '';
+  var devteamRefreshInterval = null;
+  var isDevteamDispatching = false;
+  var isDevteamCreatingTask = false;
+
+  function getDevteamAssigneeColor(assignee) {
+    if (!assignee) return 'var(--c-primary)';
+    const a = String(assignee).toLowerCase();
+    if (a === 'coder') return 'var(--c-blue)';
+    if (a === 'qa') return 'var(--c-gold)';
+    if (a === 'reviewer') return 'var(--c-red)';
+    return 'var(--c-secondary)';
+  }
+
+  function getDevteamAssigneeBg(assignee) {
+    if (!assignee) return 'rgba(235, 148, 58, 0.15)';
+    const a = String(assignee).toLowerCase();
+    if (a === 'coder') return 'rgba(136, 153, 255, 0.18)';
+    if (a === 'qa') return 'rgba(255, 204, 102, 0.18)';
+    if (a === 'reviewer') return 'rgba(207, 79, 79, 0.18)';
+    return 'rgba(186, 164, 229, 0.18)';
+  }
+
+  function getDevteamStatusDotColor(status) {
+    if (!status) return '#888888';
+    const s = String(status).toLowerCase();
+    if (s === 'done' || s === 'completed') return '#00e676';
+    if (s === 'running') return '#00d2ff';
+    if (s === 'blocked') return '#ff5252';
+    if (s === 'ready') return '#ea9c72';
+    if (s === 'triage') return '#baa4e5';
+    return '#888888';
+  }
+
+  function formatDevteamTimestamp(ts) {
+    if (!ts) return '--';
+    try {
+      const d = new Date(Number(ts) * 1000);
+      if (isNaN(d.getTime())) return String(ts);
+      return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' +
+             d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch (e) {
+      return String(ts);
+    }
+  }
+
+  async function fetchDevteamData(force) {
+    try {
+      const [tasksRes, statsRes] = await Promise.all([
+        fetch('/api/devteam/tasks'),
+        fetch('/api/devteam/stats')
+      ]);
+
+      if (statsRes.ok) {
+        const stats = await statsRes.json();
+        const statsFp = `${stats.total}:${stats.running}:${stats.blocked}:${stats.done}`;
+        if (statsFp !== lastDevteamStatsFingerprint || force) {
+          lastDevteamStatsFingerprint = statsFp;
+          renderDevteamStats(stats);
+        }
+      }
+
+      if (tasksRes.ok) {
+        const tasks = await tasksRes.json();
+        const tasksFp = Array.isArray(tasks) ? tasks.map(t => `${t.id}:${t.status}:${t.assignee}:${t.title}:${t.started_at || ''}:${t.completed_at || ''}`).join('|') : '';
+        if (tasksFp !== lastDevteamTasksFingerprint || force) {
+          lastDevteamTasksFingerprint = tasksFp;
+          renderDevteamBoard(Array.isArray(tasks) ? tasks : []);
+        }
+      }
+
+      const syncEl = document.getElementById('devteamLastSyncText');
+      if (syncEl) {
+        const now = new Date();
+        syncEl.textContent = 'SYNC: ' + now.toLocaleTimeString('de-DE');
+      }
+    } catch (e) {
+      console.warn('Fehler beim Laden der DEV-TEAM Daten:', e);
+    }
+  }
+
+  function renderDevteamStats(stats) {
+    const totalEl = document.getElementById('devteamStatTotal');
+    const runningEl = document.getElementById('devteamStatRunning');
+    const blockedEl = document.getElementById('devteamStatBlocked');
+    const doneEl = document.getElementById('devteamStatDone');
+    const blockedBadge = document.getElementById('devteamStatBlockedBadge');
+
+    if (totalEl) totalEl.textContent = stats.total ?? 0;
+    if (runningEl) runningEl.textContent = stats.running ?? 0;
+    if (blockedEl) blockedEl.textContent = stats.blocked ?? 0;
+    if (doneEl) doneEl.textContent = stats.done ?? 0;
+
+    if (blockedBadge) {
+      if ((stats.blocked || 0) > 0) {
+        blockedBadge.textContent = '⚠️ ' + stats.blocked + ' BLOCKIERT';
+        blockedBadge.style.background = 'var(--c-red)';
+        blockedBadge.style.color = '#ffffff';
+      } else {
+        blockedBadge.textContent = 'KEINE BLOCKER';
+        blockedBadge.style.background = 'rgba(255,255,255,0.08)';
+        blockedBadge.style.color = '#aaaaaa';
+      }
+    }
+  }
+
+  function renderDevteamBoard(tasks) {
+    const columns = {
+      'triage': document.getElementById('devteamCol-triage'),
+      'ready': document.getElementById('devteamCol-ready'),
+      'running': document.getElementById('devteamCol-running'),
+      'blocked': document.getElementById('devteamCol-blocked'),
+      'done': document.getElementById('devteamCol-done')
+    };
+
+    const counts = { 'triage': 0, 'ready': 0, 'running': 0, 'blocked': 0, 'done': 0 };
+    const htmls = { 'triage': '', 'ready': '', 'running': '', 'blocked': '', 'done': '' };
+
+    tasks.forEach(task => {
+      let colKey = (task.status || '').toLowerCase();
+      if (colKey === 'todo' || colKey === 'scheduled') {
+        colKey = 'triage';
+      }
+      if (!columns[colKey]) {
+        colKey = 'triage';
+      }
+
+      counts[colKey] = (counts[colKey] || 0) + 1;
+
+      const aColor = getDevteamAssigneeColor(task.assignee);
+      const aBg = getDevteamAssigneeBg(task.assignee);
+      const dotColor = getDevteamStatusDotColor(task.status);
+      const isRunning = (task.status === 'running');
+
+      htmls[colKey] += `
+        <div class="devteam-task-card" onclick="openDevteamTaskModal('${escapeHtml(task.id)}')"
+             style="background:#1a1a2e; border:1px solid rgba(255,255,255,0.08); border-left:5px solid ${aColor}; border-radius:0 8px 8px 0; padding:0.75rem; cursor:pointer; transition:transform 0.15s, border-color 0.15s; display:flex; flex-direction:column; gap:0.4rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-family:var(--mono-family); font-size:0.75rem; color:#888; font-weight:700;">#${escapeHtml(task.id)}</span>
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${dotColor}; box-shadow:0 0 6px ${dotColor}; ${isRunning ? 'animation:lcarsPulse 1.2s infinite ease-in-out;' : ''}"></span>
+              <span style="font-size:0.72rem; font-family:var(--mono-family); color:#aaa; text-transform:uppercase;">${escapeHtml(task.status)}</span>
+            </div>
+          </div>
+          <div style="font-weight:700; font-size:0.88rem; color:#fff; line-height:1.3; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">
+            ${escapeHtml(task.title)}
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.25rem;">
+            <span style="display:inline-block; font-size:0.72rem; font-weight:700; font-family:var(--mono-family); text-transform:uppercase; padding:0.15rem 0.5rem; border-radius:4px; background:${aBg}; color:${aColor}; border:1px solid ${aColor}44;">
+              ${escapeHtml(task.assignee || 'UNASSIGNED')}
+            </span>
+            ${task.completed_at ? `<span style="font-size:0.7rem; font-family:var(--mono-family); color:#00e676;">✓ DONE</span>` : (task.started_at ? `<span style="font-size:0.7rem; font-family:var(--mono-family); color:var(--c-blue);">⚡ AKTIV</span>` : '')}
+          </div>
+        </div>
+      `;
+    });
+
+    Object.keys(columns).forEach(key => {
+      const colEl = columns[key];
+      const countEl = document.getElementById('devteamColCount-' + key);
+      if (countEl) countEl.textContent = counts[key] || 0;
+      if (colEl) {
+        if (counts[key] === 0) {
+          colEl.innerHTML = '<div style="text-align:center; padding:1.5rem 0.5rem; color:#666; font-size:0.8rem; font-style:italic;">Keine Tasks</div>';
+        } else {
+          colEl.innerHTML = htmls[key];
+        }
+      }
+    });
+  }
+
+  async function openDevteamTaskModal(taskId) {
+    playLcarsBeep(880, 1400);
+    const modal = document.getElementById('devteamDetailModal');
+    const modalTitle = document.getElementById('devteamDetailModalTitle');
+    const modalBody = document.getElementById('devteamDetailModalBody');
+    if (!modal || !modalBody) return;
+
+    if (modalTitle) modalTitle.textContent = 'TASK DETAIL // #' + taskId;
+    modalBody.innerHTML = '<div style="padding:2rem; text-align:center; color:#aaa; font-family:var(--mono-family);">Lade Task Details...</div>';
+    modal.style.display = 'flex';
+
+    try {
+      const resp = await fetch('/api/devteam/task/' + encodeURIComponent(taskId));
+      if (!resp.ok) {
+        modalBody.innerHTML = '<div style="padding:2rem; color:var(--c-red); font-family:var(--mono-family);">Fehler beim Laden des Tasks (Status ' + resp.status + ')</div>';
+        return;
+      }
+      const t = await resp.json();
+      const aColor = getDevteamAssigneeColor(t.assignee);
+      const aBg = getDevteamAssigneeBg(t.assignee);
+      const dotColor = getDevteamStatusDotColor(t.status);
+
+      let eventsHtml = '<div style="color:#777; font-size:0.8rem; font-style:italic;">Keine Events vorhanden</div>';
+      if (Array.isArray(t.events) && t.events.length > 0) {
+        eventsHtml = '<div style="display:flex; flex-direction:column; gap:0.4rem;">';
+        t.events.forEach(ev => {
+          let payloadStr = '';
+          if (ev.payload) {
+            try {
+              const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
+              if (p.summary) payloadStr = p.summary;
+              else if (p.error) payloadStr = 'Fehler: ' + p.error;
+              else payloadStr = JSON.stringify(p);
+            } catch (e) {
+              payloadStr = String(ev.payload);
+            }
+          }
+          eventsHtml += `
+            <div style="background:rgba(255,255,255,0.03); border-left:3px solid var(--c-primary); border-radius:0 4px 4px 0; padding:0.4rem 0.6rem; font-family:var(--mono-family); font-size:0.78rem;">
+              <div style="display:flex; justify-content:space-between; color:#aaa; margin-bottom:2px;">
+                <span style="font-weight:700; color:var(--c-gold); text-transform:uppercase;">${escapeHtml(ev.kind || 'EVENT')}</span>
+                <span>${formatDevteamTimestamp(ev.created_at)}</span>
+              </div>
+              ${payloadStr ? `<div style="color:#e0e0e0; word-break:break-word;">${escapeHtml(payloadStr)}</div>` : ''}
+            </div>
+          `;
+        });
+        eventsHtml += '</div>';
+      }
+
+      let commentsHtml = '<div style="color:#777; font-size:0.8rem; font-style:italic;">Keine Kommentare vorhanden</div>';
+      if (Array.isArray(t.comments) && t.comments.length > 0) {
+        commentsHtml = '<div style="display:flex; flex-direction:column; gap:0.5rem;">';
+        t.comments.forEach(cm => {
+          commentsHtml += `
+            <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:4px; padding:0.6rem;">
+              <div style="display:flex; justify-content:space-between; margin-bottom:0.3rem; font-family:var(--mono-family); font-size:0.78rem; color:var(--c-blue);">
+                <span style="font-weight:700;">${escapeHtml(cm.author || 'ANONYM')}</span>
+                <span style="color:#888;">${formatDevteamTimestamp(cm.created_at)}</span>
+              </div>
+              <div style="font-size:0.85rem; color:#e0e0e0; white-space:pre-wrap; word-break:break-word;">${escapeHtml(cm.body || '')}</div>
+            </div>
+          `;
+        });
+        commentsHtml += '</div>';
+      }
+
+      modalBody.innerHTML = `
+        <div style="margin-bottom:1.25rem;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.75rem;">
+            <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+              <span style="display:inline-block; font-size:0.8rem; font-weight:700; font-family:var(--mono-family); text-transform:uppercase; padding:0.2rem 0.6rem; border-radius:4px; background:${aBg}; color:${aColor}; border:1px solid ${aColor}44;">
+                ${escapeHtml(t.assignee || 'UNASSIGNED')}
+              </span>
+              <span style="display:inline-flex; align-items:center; gap:6px; font-size:0.8rem; font-family:var(--mono-family); text-transform:uppercase; padding:0.2rem 0.6rem; border-radius:4px; background:rgba(255,255,255,0.06); color:#fff;">
+                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${dotColor};"></span>
+                ${escapeHtml(t.status)}
+              </span>
+              <span style="font-size:0.8rem; font-family:var(--mono-family); color:#888;">PRIO: ${t.priority ?? 0}</span>
+            </div>
+            <span style="font-family:var(--mono-family); font-size:0.8rem; color:#888;">ID: #${escapeHtml(t.id)}</span>
+          </div>
+
+          <h3 style="color:#fff; font-size:1.25rem; font-weight:700; margin:0.5rem 0 1rem 0; line-height:1.35;">
+            ${escapeHtml(t.title)}
+          </h3>
+
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:0.6rem; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.75rem; margin-bottom:1.25rem; font-family:var(--mono-family); font-size:0.78rem;">
+            <div><span style="color:#888;">Erstellt:</span> <span style="color:#ddd;">${formatDevteamTimestamp(t.created_at)}</span></div>
+            <div><span style="color:#888;">Gestartet:</span> <span style="color:#ddd;">${formatDevteamTimestamp(t.started_at)}</span></div>
+            <div><span style="color:#888;">Beendet:</span> <span style="color:#ddd;">${formatDevteamTimestamp(t.completed_at)}</span></div>
+            <div style="grid-column:1 / -1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(t.workspace || '')}">
+              <span style="color:#888;">Workspace:</span> <span style="color:var(--c-blue);">${escapeHtml(t.workspace || '--')}</span>
+            </div>
+          </div>
+
+          <div style="margin-bottom:1.25rem;">
+            <div style="font-size:0.85rem; font-weight:700; color:var(--c-secondary); margin-bottom:0.4rem; letter-spacing:0.05em;">BESCHREIBUNG</div>
+            <div style="background:#07070b; border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:0.85rem; font-family:var(--mono-family); font-size:0.82rem; line-height:1.55; white-space:pre-wrap; word-break:break-word; color:#e0e0e0; max-height:220px; overflow-y:auto;">
+              ${escapeHtml(t.body || 'Keine Beschreibung vorhanden.')}
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:1rem;">
+            <div>
+              <div style="font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.4rem; letter-spacing:0.05em;">TIMELINE // EVENTS (LETZTE 10)</div>
+              <div style="max-height:240px; overflow-y:auto; padding-right:4px;">
+                ${eventsHtml}
+              </div>
+            </div>
+            <div>
+              <div style="font-size:0.85rem; font-weight:700; color:var(--c-blue); margin-bottom:0.4rem; letter-spacing:0.05em;">KOMMENTARE</div>
+              <div style="max-height:240px; overflow-y:auto; padding-right:4px;">
+                ${commentsHtml}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    } catch (e) {
+      modalBody.innerHTML = '<div style="padding:2rem; color:var(--c-red); font-family:var(--mono-family);">Fehler beim Laden: ' + escapeHtml(String(e)) + '</div>';
+    }
+  }
+
+  function closeDevteamDetailModal() {
+    playLcarsBeep(660, 440);
+    const modal = document.getElementById('devteamDetailModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function handleDevteamDetailModalBackdrop(e) {
+    if (e.target && e.target.id === 'devteamDetailModal') {
+      closeDevteamDetailModal();
+    }
+  }
+
+  function openDevteamNewTaskModal() {
+    playLcarsBeep(880, 1400);
+    const form = document.getElementById('devteamNewTaskForm');
+    if (form) form.reset();
+    const modal = document.getElementById('devteamNewTaskModal');
+    if (modal) modal.style.display = 'flex';
+    const titleInput = document.getElementById('devteamFormTitle');
+    if (titleInput) titleInput.focus();
+  }
+
+  function closeDevteamNewTaskModal() {
+    playLcarsBeep(660, 440);
+    const modal = document.getElementById('devteamNewTaskModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function handleDevteamNewTaskModalBackdrop(e) {
+    if (e.target && e.target.id === 'devteamNewTaskModal') {
+      closeDevteamNewTaskModal();
+    }
+  }
+
+  async function submitDevteamNewTask(e) {
+    if (e) e.preventDefault();
+    if (isDevteamCreatingTask) return;
+
+    const titleEl = document.getElementById('devteamFormTitle');
+    const bodyEl = document.getElementById('devteamFormBody');
+    const assigneeEl = document.getElementById('devteamFormAssignee');
+    const submitBtn = document.getElementById('btnDevteamSubmitTask');
+    const spinner = document.getElementById('devteamSubmitTaskSpinner');
+
+    const title = titleEl ? titleEl.value.trim() : '';
+    if (!title) {
+      alert('Bitte geben Sie einen Task-Titel ein.');
+      return;
+    }
+    const body = bodyEl ? bodyEl.value.trim() : '';
+    const assignee = assigneeEl ? assigneeEl.value.trim() : 'coder';
+
+    isDevteamCreatingTask = true;
+    if (submitBtn) submitBtn.disabled = true;
+    if (spinner) spinner.style.display = 'inline-block';
+
+    try {
+      const resp = await fetch('/api/devteam/task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, body, assignee })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        playLcarsBeep(1200, 1600);
+        closeDevteamNewTaskModal();
+        await fetchDevteamData(true);
+      } else {
+        alert('Fehler beim Erstellen des Tasks: ' + (data.error || 'Unbekannter Fehler'));
+      }
+    } catch (err) {
+      alert('Netzwerkfehler beim Erstellen: ' + err);
+    } finally {
+      isDevteamCreatingTask = false;
+      if (submitBtn) submitBtn.disabled = false;
+      if (spinner) spinner.style.display = 'none';
+    }
+  }
+
+  async function triggerDevteamDispatch() {
+    if (isDevteamDispatching) return;
+    playLcarsBeep(980, 1400);
+
+    const btn = document.getElementById('btnDevteamDispatch');
+    const spinner = document.getElementById('devteamDispatchSpinner');
+    const icon = document.getElementById('devteamDispatchIcon');
+    const text = document.getElementById('devteamDispatchText');
+
+    isDevteamDispatching = true;
+    if (btn) btn.disabled = true;
+    if (spinner) spinner.style.display = 'inline-block';
+    if (icon) icon.style.display = 'none';
+    if (text) text.textContent = 'DISPATCHING...';
+
+    try {
+      const resp = await fetch('/api/devteam/dispatch', { method: 'POST' });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        playLcarsBeep(1200, 1600);
+      } else {
+        alert('Dispatch Fehler: ' + (data.error || 'Unbekannter Fehler'));
+      }
+      await fetchDevteamData(true);
+    } catch (e) {
+      alert('Fehler beim Dispatch: ' + e);
+    } finally {
+      isDevteamDispatching = false;
+      if (btn) btn.disabled = false;
+      if (spinner) spinner.style.display = 'none';
+      if (icon) icon.style.display = 'inline-block';
+      if (text) text.textContent = 'DISPATCH';
+    }
+  }
+
+  function startDevteamAutoRefresh() {
+    if (devteamRefreshInterval) clearInterval(devteamRefreshInterval);
+    devteamRefreshInterval = setInterval(() => {
+      if (currentCategory === 'devteam') {
+        fetchDevteamData(false);
+      }
+    }, 30000);
+  }
+
   // Initialer Boot-Ablauf
   function bootDashboard() {
     renderStats(initialStats);
@@ -18463,6 +19132,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     loadCycleData();
     checkPulsecastStatus();
     checkGeminiLiveStatus();
+    startDevteamAutoRefresh();
   }
 
   if (document.readyState === 'loading') {
@@ -20000,6 +20670,163 @@ if USE_FLASK:
         if not pimmel_service:
             return jsonify({"success": False, "error": "pimmel_service nicht geladen"}), 503
         return jsonify(pimmel_service.trigger_sync())
+
+    # -----------------------------------------------------------------------
+    # DEV-TEAM Kanban Board Endpoints
+    # -----------------------------------------------------------------------
+    DEVTEAM_DB_PATH = "/home/cb/.hermes/kanban/boards/dev-team/kanban.db"
+
+    @app.route("/api/devteam/tasks", methods=["GET"])
+    def api_devteam_tasks():
+        if not os.path.exists(DEVTEAM_DB_PATH):
+            return jsonify([])
+        try:
+            conn = sqlite3.connect(f"file:{DEVTEAM_DB_PATH}?mode=ro", uri=True, timeout=2)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, title, status, assignee, "
+                "COALESCE(workspace_path, workspace_kind, '') AS workspace, "
+                "created_at, started_at, completed_at, body "
+                "FROM tasks WHERE status != 'archived' "
+                "ORDER BY created_at DESC"
+            ).fetchall()
+            tasks = []
+            for r in rows:
+                b = r["body"] or ""
+                tasks.append({
+                    "id": r["id"],
+                    "title": r["title"],
+                    "status": r["status"],
+                    "assignee": r["assignee"] or "",
+                    "workspace": r["workspace"] or "",
+                    "created_at": r["created_at"],
+                    "started_at": r["started_at"],
+                    "completed_at": r["completed_at"],
+                    "body": b[:200]
+                })
+            conn.close()
+            return jsonify(tasks)
+        except Exception as e:
+            print(f"[WARN] api_devteam_tasks Fehler: {e}", file=sys.stderr)
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/devteam/stats", methods=["GET"])
+    def api_devteam_stats():
+        if not os.path.exists(DEVTEAM_DB_PATH):
+            return jsonify({
+                "by_status": {},
+                "by_assignee": {},
+                "total": 0,
+                "running": 0,
+                "blocked": 0,
+                "done": 0,
+                "ready": 0,
+                "triage": 0
+            })
+        try:
+            conn = sqlite3.connect(f"file:{DEVTEAM_DB_PATH}?mode=ro", uri=True, timeout=2)
+            conn.row_factory = sqlite3.Row
+
+            by_status = {}
+            for r in conn.execute("SELECT status, COUNT(*) AS n FROM tasks WHERE status != 'archived' GROUP BY status"):
+                by_status[r["status"]] = int(r["n"])
+
+            by_assignee = {}
+            for r in conn.execute("SELECT assignee, status, COUNT(*) AS n FROM tasks WHERE status != 'archived' AND assignee IS NOT NULL GROUP BY assignee, status"):
+                by_assignee.setdefault(r["assignee"], {})[r["status"]] = int(r["n"])
+
+            conn.close()
+            total = sum(by_status.values())
+            return jsonify({
+                "by_status": by_status,
+                "by_assignee": by_assignee,
+                "total": total,
+                "running": by_status.get("running", 0),
+                "blocked": by_status.get("blocked", 0),
+                "done": by_status.get("done", 0),
+                "ready": by_status.get("ready", 0),
+                "triage": by_status.get("triage", 0)
+            })
+        except Exception as e:
+            print(f"[WARN] api_devteam_stats Fehler: {e}", file=sys.stderr)
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/devteam/task/<task_id>", methods=["GET"])
+    def api_devteam_task_detail(task_id):
+        if not os.path.exists(DEVTEAM_DB_PATH):
+            return jsonify({"error": "Datenbank nicht gefunden"}), 404
+        try:
+            conn = sqlite3.connect(f"file:{DEVTEAM_DB_PATH}?mode=ro", uri=True, timeout=2)
+            conn.row_factory = sqlite3.Row
+
+            t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if not t_row:
+                conn.close()
+                return jsonify({"error": "Task nicht gefunden"}), 404
+
+            comments = [dict(c) for c in conn.execute(
+                "SELECT id, author, body, created_at FROM task_comments WHERE task_id = ? ORDER BY created_at ASC",
+                (task_id,)
+            ).fetchall()]
+
+            events = [dict(e) for e in conn.execute(
+                "SELECT id, run_id, kind, payload, created_at FROM task_events WHERE task_id = ? ORDER BY created_at DESC LIMIT 10",
+                (task_id,)
+            ).fetchall()]
+
+            conn.close()
+            task_data = dict(t_row)
+            task_data["workspace"] = task_data.get("workspace_path") or task_data.get("workspace_kind") or ""
+            task_data["comments"] = comments
+            task_data["events"] = events
+            return jsonify(task_data)
+        except Exception as e:
+            print(f"[WARN] api_devteam_task_detail Fehler: {e}", file=sys.stderr)
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/devteam/task", methods=["POST"])
+    def api_devteam_create_task():
+        data = request.get_json(silent=True) or {}
+        title = (data.get("title") or "").strip()
+        if not title:
+            return jsonify({"success": False, "error": "Task-Titel ist erforderlich"}), 400
+        body = data.get("body") or ""
+        assignee = (data.get("assignee") or "").strip()
+
+        hermes_bin = shutil.which("hermes") or "/home/cb/.local/share/mise/installs/pipx-hermes-agent/0.19.0/hermes-agent/bin/hermes"
+        cmd = [hermes_bin, "kanban", "--board", "dev-team", "create", title]
+        if body:
+            cmd.extend(["--body", body])
+        if assignee:
+            cmd.extend(["--assignee", assignee])
+
+        try:
+            env = os.environ.copy()
+            env["HERMES_KANBAN_BOARD"] = "dev-team"
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+            if res.returncode == 0:
+                return jsonify({"success": True, "output": res.stdout.strip()})
+            else:
+                return jsonify({"success": False, "error": res.stderr.strip() or res.stdout.strip() or "Fehler beim Erstellen des Tasks"}), 500
+        except Exception as e:
+            print(f"[WARN] api_devteam_create_task Fehler: {e}", file=sys.stderr)
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @app.route("/api/devteam/dispatch", methods=["POST"])
+    def api_devteam_dispatch():
+        hermes_bin = shutil.which("hermes") or "/home/cb/.local/share/mise/installs/pipx-hermes-agent/0.19.0/hermes-agent/bin/hermes"
+        cmd = [hermes_bin, "kanban", "--board", "dev-team", "dispatch"]
+        try:
+            env = os.environ.copy()
+            env["HERMES_KANBAN_BOARD"] = "dev-team"
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=45, env=env)
+            if res.returncode == 0:
+                return jsonify({"success": True, "output": res.stdout.strip()})
+            else:
+                return jsonify({"success": False, "error": res.stderr.strip() or res.stdout.strip() or "Fehler beim Ausführen von Dispatch"}), 500
+        except Exception as e:
+            print(f"[WARN] api_devteam_dispatch Fehler: {e}", file=sys.stderr)
+            return jsonify({"success": False, "error": str(e)}), 500
 
     def run_server():
         print("[START] Starte System Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)
