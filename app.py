@@ -8863,6 +8863,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   var currentHistorySamples = initialStats?.history_samples || [];
   var visibleDatasets = [true, true, true, false]; // 0: Temp, 1: CPU, 2: Throttle, 3: RAM
   var currentCategory = 'system';
+  var categoryHistory = ['system'];
+  var categoryHistoryIndex = 0;
+
+  function navigateCategoryHistory(delta) {
+    const targetIndex = categoryHistoryIndex + delta;
+    if (targetIndex >= 0 && targetIndex < categoryHistory.length) {
+      categoryHistoryIndex = targetIndex;
+      const catId = categoryHistory[categoryHistoryIndex];
+      switchCategory(catId, true);
+      return true;
+    }
+    return false;
+  }
   var lastServicesFingerprint = '';
   var lastNrConnFingerprint = '';
   var lastNrHistoryFingerprint = '';
@@ -9089,7 +9102,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     'devteam': 'DEV-TEAM // KANBAN WORKFLOW ENGINE'
   };
 
-  function switchCategory(catId) {
+  function switchCategory(catId, skipHistory = false) {
     if (typeof isCategoryLocked === 'function' && isCategoryLocked(catId)) {
       pendingUnlockCategory = catId;
       openAuthModal();
@@ -9102,6 +9115,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     playLcarsBeep(980, 1400);
     currentCategory = catId;
+
+    if (!skipHistory) {
+      if (typeof categoryHistory !== 'undefined' && typeof categoryHistoryIndex !== 'undefined') {
+        if (categoryHistory[categoryHistoryIndex] !== catId) {
+          categoryHistory = categoryHistory.slice(0, categoryHistoryIndex + 1);
+          categoryHistory.push(catId);
+          categoryHistoryIndex = categoryHistory.length - 1;
+        }
+      }
+    }
 
     document.querySelectorAll('.lcars-pill-btn').forEach(btn => btn.classList.remove('active'));
     const activeBtn = document.getElementById('btn-cat-' + catId);
@@ -17161,6 +17184,198 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   // ==========================================================================
+  // DASHBOARD UI CONTEXT & NAVIGATION ENGINE FÜR CACTUS
+  // ==========================================================================
+  function getDashboardUiContext() {
+    const activeSection = currentCategory || 'system';
+    const activeSectionTitle = CATEGORY_NAMES[activeSection] || activeSection;
+
+    const visibleNav = [];
+    document.querySelectorAll('.lcars-pill-btn').forEach(btn => {
+      const isVisible = window.getComputedStyle(btn).display !== 'none';
+      const id = btn.id ? btn.id.replace('btn-cat-', '') : '';
+      const text = (btn.innerText || btn.textContent || '').trim().replace(/\\s+/g, ' ');
+      if (isVisible && id) {
+        visibleNav.push({
+          id: id,
+          label: text,
+          active: id === activeSection
+        });
+      }
+    });
+
+    let pagination = {
+      has_pagination: false,
+      scope: null,
+      current_page: 1,
+      total_pages: 1,
+      has_next: false,
+      has_prev: false
+    };
+
+    if (activeSection === 'pulsecast') {
+      if (typeof pulsecastActiveSubtab !== 'undefined' && pulsecastActiveSubtab === 'local') {
+        const cur = typeof pulsecastLocalPage === 'number' ? pulsecastLocalPage : 1;
+        const tot = typeof pulsecastLocalTotalPages === 'number' ? pulsecastLocalTotalPages : 1;
+        pagination = {
+          has_pagination: true,
+          scope: 'pulsecast_local',
+          current_page: cur,
+          total_pages: tot,
+          has_next: cur < tot,
+          has_prev: cur > 1
+        };
+      } else {
+        const cur = typeof pulsecastCatalogPage === 'number' ? pulsecastCatalogPage : 1;
+        const tot = typeof pulsecastCatalogTotalPages === 'number' ? pulsecastCatalogTotalPages : 1;
+        pagination = {
+          has_pagination: true,
+          scope: 'pulsecast_catalog',
+          current_page: cur,
+          total_pages: tot,
+          has_next: cur < tot,
+          has_prev: cur > 1
+        };
+      }
+    }
+
+    const canGoBack = typeof categoryHistoryIndex !== 'undefined' && categoryHistoryIndex > 0;
+    const canGoForward = typeof categoryHistoryIndex !== 'undefined' && typeof categoryHistory !== 'undefined' && categoryHistoryIndex < categoryHistory.length - 1;
+
+    return {
+      active_section: activeSection,
+      active_section_title: activeSectionTitle,
+      visible_navigation: visibleNav,
+      pagination: pagination,
+      can_go_back: canGoBack,
+      can_go_forward: canGoForward
+    };
+  }
+
+  function normalizeCategoryTarget(target) {
+    if (!target) return null;
+    target = target.toLowerCase().trim();
+    if (CATEGORY_NAMES[target]) return target;
+    const map = {
+      'system': 'system', 'hardware': 'system', 'terminal': 'system', 'sensor': 'system', 'sensoren': 'system', 'cpu': 'system', 'ram': 'system', 'agy-pi': 'system', 'agypi': 'system',
+      'services': 'services', 'service': 'services', 'prozesse': 'services', 'scanner': 'services', 'prozess-scanner': 'services', 'server': 'services', 'dienste': 'services',
+      'agents': 'agents', 'agenten': 'agents', 'chat': 'agents', '9router': 'agents', 'hermes': 'agents', 'ki-agenten': 'agents', 'ki agenten': 'agents',
+      'ai-info': 'ai-info', 'ai_info': 'ai-info', 'ki-info': 'ai-info', 'ki_info': 'ai-info', 'telemetrie': 'ai-info', 'neural': 'ai-info',
+      'config': 'config', 'konfiguration': 'config', 'einstellungen': 'config', 'settings': 'config', 'farbmodi': 'config', 'farbmodus': 'config', 'theme': 'config',
+      'fantasy': 'fantasy', 'espn': 'fantasy', 'football': 'fantasy', 'incomplete pass': 'fantasy',
+      'solar': 'solar', 'balkonsolar': 'solar', 'energie': 'solar', 'photovoltaik': 'solar', 'pv': 'solar', 'akku': 'solar', 'strom': 'solar', 'hausverbrauch': 'solar',
+      'homeassistant': 'homeassistant', 'ha': 'homeassistant', 'haussteuerung': 'homeassistant', 'smart home': 'homeassistant', 'smarthome': 'homeassistant',
+      'cycle': 'cycle', 'zyklus': 'cycle', 'bio': 'cycle', 'bio-telemetrie': 'cycle', 'partnerin': 'cycle',
+      'pulsecast': 'pulsecast', 'mediathek': 'pulsecast', 'downloads': 'pulsecast', 'katalog': 'pulsecast', 'media': 'pulsecast', 'filme': 'pulsecast', 'serien': 'pulsecast',
+      'gemini_live': 'gemini_live', 'gemini-live': 'gemini_live', 'subraum': 'gemini_live', 'subraum comm': 'gemini_live', 'cactus': 'gemini_live', 'sprachsteuerung': 'gemini_live',
+      'devteam': 'devteam', 'dev-team': 'devteam', 'kanban': 'devteam', 'tasks': 'devteam', 'workflow engine': 'devteam'
+    };
+    return map[target] || null;
+  }
+
+  function refreshCurrentView() {
+    playLcarsBeep(880, 1760);
+    if (typeof fetchLiveStats === 'function') fetchLiveStats(false);
+    if (currentCategory === 'system') {
+      if (typeof initHistoryChart === 'function') initHistoryChart();
+    } else if (currentCategory === 'fantasy') {
+      if (typeof loadFantasyData === 'function') loadFantasyData(false);
+    } else if (currentCategory === 'homeassistant') {
+      if (typeof loadHomeAssistantData === 'function') loadHomeAssistantData(false);
+    } else if (currentCategory === 'solar') {
+      if (typeof loadSolarData === 'function') loadSolarData(false);
+    } else if (currentCategory === 'pulsecast') {
+      if (typeof pulsecastActiveSubtab !== 'undefined') {
+        if (pulsecastActiveSubtab === 'catalog' && typeof loadPulsecastCatalog === 'function') {
+          loadPulsecastCatalog(pulsecastCatalogPage || 1);
+        } else if (pulsecastActiveSubtab === 'local' && typeof loadPulsecastLocal === 'function') {
+          loadPulsecastLocal(pulsecastLocalPage || 1);
+        } else if (typeof fetchPulsecastDownloads === 'function') {
+          fetchPulsecastDownloads();
+        }
+      }
+    } else if (currentCategory === 'devteam') {
+      if (typeof fetchDevteamData === 'function') fetchDevteamData(true);
+    }
+  }
+
+  function executeDashboardUiAction(res) {
+    if (!res) return;
+    const toolCall = res.tool_call || {};
+    const toolName = toolCall.name || (res.ui_action ? res.ui_action.type : null);
+    const args = toolCall.arguments || {};
+    const uiAct = res.ui_action || {};
+
+    // 1. Sektions-Navigation (navigate_section)
+    if (toolName === 'navigate_section' || uiAct.type === 'navigate') {
+      const target = (args.target || uiAct.target || uiAct.section || '').trim().toLowerCase();
+      const normalizedTarget = normalizeCategoryTarget(target);
+      if (normalizedTarget && CATEGORY_NAMES[normalizedTarget]) {
+        playLcarsBeep(980, 1400);
+        switchCategory(normalizedTarget);
+        appendGeminiLog('computer', `[UI-AKTION] Zu Sektion '${CATEGORY_NAMES[normalizedTarget]}' gewechselt.`);
+      } else {
+        console.warn('Unbekannte Zielkategorie für Navigation:', target);
+      }
+      return;
+    }
+
+    // 2. Paginierung in Tabellen/Listen (paginate)
+    if (toolName === 'paginate' || uiAct.type === 'paginate') {
+      const dir = (args.direction || uiAct.direction || '').toLowerCase();
+      const delta = typeof uiAct.delta === 'number' ? uiAct.delta : (dir === 'next' || dir === 'weiter' || dir === 'vor' ? 1 : -1);
+
+      if (currentCategory === 'pulsecast') {
+        if (typeof pulsecastActiveSubtab !== 'undefined' && pulsecastActiveSubtab === 'local') {
+          if (typeof pulsecastLocalChangePage === 'function') {
+            pulsecastLocalChangePage(delta);
+            appendGeminiLog('computer', `[UI-AKTION] PulseCast Lokale Medien Seite ${delta > 0 ? 'vor' : 'zurück'} geblättert.`);
+          }
+        } else {
+          if (typeof pulsecastChangePage === 'function') {
+            pulsecastChangePage(delta);
+            appendGeminiLog('computer', `[UI-AKTION] PulseCast Katalog Seite ${delta > 0 ? 'vor' : 'zurück'} geblättert.`);
+          }
+        }
+      } else {
+        appendGeminiLog('computer', `[UI-AKTION] Paginierung in Sektion '${currentCategory}' nicht verfügbar.`);
+      }
+      return;
+    }
+
+    // 3. UI-Aktionen: Verlauf vor/zurück, Refresh, Vollbild (ui_action)
+    if (toolName === 'ui_action' || uiAct.type === 'ui_action') {
+      const act = (args.action || uiAct.action || '').toLowerCase();
+      if (act === 'back' || act === 'zurueck' || act === 'zurück') {
+        const moved = navigateCategoryHistory(-1);
+        if (moved) {
+          appendGeminiLog('computer', `[UI-AKTION] Zurück zu Sektion '${CATEGORY_NAMES[currentCategory] || currentCategory}' navigiert.`);
+        } else {
+          playLcarsBeep(440, 220);
+          appendGeminiLog('computer', '[UI-AKTION] Kein vorheriger Verlauf vorhanden.');
+        }
+      } else if (act === 'forward' || act === 'vor') {
+        const moved = navigateCategoryHistory(1);
+        if (moved) {
+          appendGeminiLog('computer', `[UI-AKTION] Vorwärts zu Sektion '${CATEGORY_NAMES[currentCategory] || currentCategory}' navigiert.`);
+        } else {
+          playLcarsBeep(440, 220);
+          appendGeminiLog('computer', '[UI-AKTION] Kein weiterer Vorwärts-Verlauf vorhanden.');
+        }
+      } else if (act === 'refresh' || act === 'reload' || act === 'aktualisieren') {
+        refreshCurrentView();
+        appendGeminiLog('computer', `[UI-AKTION] Sektion '${CATEGORY_NAMES[currentCategory] || currentCategory}' aktualisiert.`);
+      } else if (act === 'fullscreen' || act === 'vollbild') {
+        if (typeof toggleFullscreen === 'function') {
+          toggleFullscreen();
+          appendGeminiLog('computer', '[UI-AKTION] Vollbildmodus umgeschaltet.');
+        }
+      }
+      return;
+    }
+  }
+
+  // ==========================================================================
   // CACTUS NEEDLE 3 INFERENZ & PROMPT ENGINE
   // ==========================================================================
   async function sendPromptToCactus(promptText) {
@@ -17188,7 +17403,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         },
         body: JSON.stringify({
           prompt: promptText,
-          mode: cactusExecutionMode
+          mode: cactusExecutionMode,
+          context: getDashboardUiContext()
         })
       });
 
@@ -17229,6 +17445,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       // 4. Sprachausgabe (TTS): Liest message mit window.speechSynthesis vor und animiert das Ausgabemeter
       speakCactusMessage(res.message || 'Befehl ausgeführt.');
+
+      // 5. UI-Aktionen im Dashboard ausführen (Kategorie-Umschaltung, Vor-/Zurück, Paginierung)
+      if (res.ui_action || (res.tool_call && ['navigate_section', 'paginate', 'ui_action'].includes(res.tool_call.name))) {
+        executeDashboardUiAction(res);
+      }
 
     } catch (err) {
       appendGeminiLog('error', `Verbindungsfehler: ${err.message}`);
@@ -17417,6 +17638,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     formData.append('audio', audioBlob, 'subraum_speech.webm');
     formData.append('mode', cactusExecutionMode);
     formData.append('process', 'true');
+    formData.append('context', JSON.stringify(getDashboardUiContext()));
 
     try {
       const resp = await fetch('/api/voice/transcribe', {
@@ -17483,6 +17705,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       // TTS speech output
       speakCactusMessage(res.message || 'Befehl ausgeführt.');
+
+      // 5. UI-Aktionen im Dashboard ausführen (Kategorie-Umschaltung, Vor-/Zurück, Paginierung)
+      if (res.ui_action || (res.tool_call && ['navigate_section', 'paginate', 'ui_action'].includes(res.tool_call.name))) {
+        executeDashboardUiAction(res);
+      }
 
     } catch (err) {
       appendGeminiLog('error', `Verbindungsfehler STT: ${err.message}`);
@@ -19308,8 +19535,246 @@ if USE_FLASK:
                     print("[STT] Faster-Whisper base model (cpu, int8) initialized.", flush=True)
         return WHISPER_MODEL
 
-    def _process_cactus_prompt(prompt, mode="test"):
+    CACTUS_UI_TOOLS = [
+        {
+            "name": "navigate_section",
+            "description": "Wechsle zu einer LCARS Dashboard Sektion oder Kategorie.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Zielkategorie (system, services, agents, ai-info, config, fantasy, solar, homeassistant, cycle, pulsecast, gemini_live, devteam)"
+                    }
+                },
+                "required": ["target"]
+            }
+        },
+        {
+            "name": "paginate",
+            "description": "Blättere in Listen, Katalogen oder Tabellen seitenweise weiter oder zurück.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["next", "prev"],
+                        "description": "Paginierungsrichtung ('next' = nächste Seite, 'prev' = vorherige Seite)"
+                    }
+                },
+                "required": ["direction"]
+            }
+        },
+        {
+            "name": "ui_action",
+            "description": "Führe globale UI-Aktionen im Dashboard aus (Verlauf vor/zurück, Ansicht aktualisieren, Vollbild).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["back", "forward", "refresh", "fullscreen"],
+                        "description": "Aktion: 'back' (Zurück), 'forward' (Vor), 'refresh' (Aktualisieren), 'fullscreen' (Vollbild)"
+                    }
+                },
+                "required": ["action"]
+            }
+        }
+    ]
+
+    CATEGORY_NAMES_MAP = {
+        "system": "SYSTEM & SENSOR VERLAUF",
+        "services": "SERVICES & PROZESS-SCANNER",
+        "agents": "LCARS SUBRAUM COMM-LINK // KI-AGENTEN",
+        "ai-info": "KI-INFO // 9ROUTER & NEURAL TELEMETRIE",
+        "config": "SYSTEM CONFIG & FARBMODI",
+        "fantasy": "ESPN FANTASY FOOTBALL // INCOMPLETE PASS",
+        "solar": "LCARS ENERGIE-MANAGEMENT // BALKONSOLAR",
+        "homeassistant": "LCARS HAUSSTEUERUNG // HOME ASSISTANT",
+        "cycle": "LCARS BIO-TELEMETRIE // PARTNERINNEN-ZYKLUS",
+        "pulsecast": "LCARS PULSECAST // MEDIA & DOWNLOAD HUB",
+        "gemini_live": "LCARS SUBRAUM COMM // CACTUS NEEDLE 3",
+        "devteam": "DEV-TEAM // KANBAN WORKFLOW ENGINE"
+    }
+
+    SECTION_SYNONYMS = {
+        "system": ["system", "systeme", "sensor", "sensoren", "sensor verlauf", "hardware", "cpu", "ram", "terminal 47", "terminal", "agy-pi", "agypi", "pi"],
+        "services": ["services", "service", "prozesse", "prozess", "scanner", "prozess-scanner", "dienste", "ports", "server", "webserver"],
+        "agents": ["agents", "agenten", "ki agenten", "ki-agenten", "subraum comm-link", "chat", "9router", "hermes", "assistent", "bot", "ai agents"],
+        "ai-info": ["ai-info", "ai_info", "ai info", "ki-info", "ki_info", "ki info", "neural telemetrie", "telemetrie", "benchmarks", "neural", "router telemetrie"],
+        "config": ["config", "konfiguration", "einstellungen", "farbmodi", "farbmodus", "settings", "theme", "farben", "lcars farben"],
+        "fantasy": ["fantasy", "espn", "espn fantasy", "football", "incomplete pass", "fantasy football", "liga"],
+        "solar": ["solar", "balkonsolar", "energie", "energie-management", "photovoltaik", "pv", "akku", "batterie", "strom", "hausverbrauch", "stromverbrauch", "solaranlage"],
+        "homeassistant": ["homeassistant", "home assistant", "ha", "haussteuerung", "smart home", "smarthome"],
+        "cycle": ["cycle", "zyklus", "bio-telemetrie", "bio telemetrie", "partnerin"],
+        "pulsecast": ["pulsecast", "mediathek", "media", "download hub", "downloads", "katalog", "filme", "serien"],
+        "gemini_live": ["gemini_live", "gemini-live", "gemini live", "subraum comm", "subraum", "cactus", "needle", "sprachsteuerung", "needle 3"],
+        "devteam": ["devteam", "dev-team", "dev team", "kanban", "workflow engine", "tasks", "board", "entwickler", "dev team kanban"]
+    }
+
+    def resolve_ui_command(prompt, context=None, mode="test"):
+        p = (prompt or "").strip().lower()
+        p_clean = re.sub(r"[^\w\s\-\_]", " ", p)
+        p_clean = re.sub(r"\s+", " ", p_clean).strip()
+        if not p_clean:
+            return None
+
+        # Exclusions: Home Assistant light or weather
+        if any(p_clean.startswith(w) for w in ("schalte ", "schalt ", "mache ", "mach ", "dimme ", "dimm ", "stelle ", "stell ")) and any(p_clean.endswith(w) for w in (" an", " aus", " ein", " ab", "%")):
+            return None
+        if any(w in p_clean for w in ("wetter", "temperatur", "regen", "regenschirm", "wind", "grad")):
+            return None
+
+        # 1. Paginierung
+        next_patterns = [
+            "nächste seite", "naechste seite", "seite vor", "seite weiter", "seite vorwärts",
+            "eine seite vor", "eine seite weiter", "blättere vor", "blättere weiter", "vorblättern",
+            "weiterblättern", "next page", "page forward", "forward page", "seite danach"
+        ]
+        prev_patterns = [
+            "vorherige seite", "vorige seite", "seite zurück", "seite zurueck", "eine seite zurück",
+            "eine seite zurueck", "blättere zurück", "blättere zurueck", "zurückblättern", "zurueckblaettern",
+            "previous page", "prev page", "page back", "back page", "seite davor"
+        ]
+
+        is_next = any(pattern in p_clean for pattern in next_patterns) or p_clean in ("weiter", "nächste", "naechste", "next")
+        is_prev = any(pattern in p_clean for pattern in prev_patterns) or p_clean in ("vorherige", "vorige", "prev")
+
+        if is_next or is_prev:
+            direction = "next" if is_next else "prev"
+            delta = 1 if is_next else -1
+            msg = "Blättere zur nächsten Seite." if is_next else "Blättere zur vorherigen Seite."
+            if context and isinstance(context.get("pagination"), dict) and context["pagination"].get("has_pagination"):
+                pg = context["pagination"]
+                cur = pg.get("current_page", 1)
+                tot = pg.get("total_pages", 1)
+                if is_next and not pg.get("has_next", True):
+                    msg = f"Bereits auf der letzten Seite (Seite {cur} von {tot})."
+                elif is_prev and not pg.get("has_prev", True):
+                    msg = f"Bereits auf der ersten Seite (Seite {cur})."
+                else:
+                    next_p = cur + delta
+                    msg = f"Blättere zu Seite {next_p} von {tot}."
+
+            return {
+                "success": True,
+                "prompt": prompt,
+                "message": msg,
+                "tool_call": {"name": "paginate", "arguments": {"direction": direction}},
+                "action": "paginate",
+                "entity_id": f"pagination.{direction}",
+                "ui_action": {"type": "paginate", "direction": direction, "delta": delta},
+                "confidence": 100.0,
+                "error": None,
+                "mode": mode
+            }
+
+        # 2. UI Actions (History, Refresh, Fullscreen)
+        back_patterns = ["zurück", "zurueck", "gehe zurück", "geh zurück", "navigiere zurück", "back", "go back", "vorherige ansicht"]
+        fwd_patterns = ["vor", "vorwärts", "vorwaerts", "gehe vor", "geh vor", "navigiere vor", "forward", "go forward", "nächste ansicht"]
+        refresh_patterns = ["aktualisieren", "aktualisiere", "aktualisiere ansicht", "dashboard aktualisieren", "neu laden", "refresh", "reload", "ansicht aktualisieren", "aktualisiere die ansicht", "daten aktualisieren"]
+        fs_patterns = ["vollbild", "fullscreen", "vollbildmodus", "ganzer bildschirm"]
+
+        if p_clean in back_patterns:
+            return {
+                "success": True,
+                "prompt": prompt,
+                "message": "Navigiere zurück zur vorherigen Ansicht.",
+                "tool_call": {"name": "ui_action", "arguments": {"action": "back"}},
+                "action": "ui_back",
+                "entity_id": "ui.back",
+                "ui_action": {"type": "ui_action", "action": "back"},
+                "confidence": 100.0,
+                "error": None,
+                "mode": mode
+            }
+        if p_clean in fwd_patterns:
+            return {
+                "success": True,
+                "prompt": prompt,
+                "message": "Navigiere vorwärts zur nächsten Ansicht.",
+                "tool_call": {"name": "ui_action", "arguments": {"action": "forward"}},
+                "action": "ui_forward",
+                "entity_id": "ui.forward",
+                "ui_action": {"type": "ui_action", "action": "forward"},
+                "confidence": 100.0,
+                "error": None,
+                "mode": mode
+            }
+        if p_clean in refresh_patterns:
+            sec_title = context.get("active_section_title") if context else None
+            msg = f"Aktualisiere Ansicht '{sec_title}'." if sec_title else "Aktualisiere Dashboard-Ansicht."
+            return {
+                "success": True,
+                "prompt": prompt,
+                "message": msg,
+                "tool_call": {"name": "ui_action", "arguments": {"action": "refresh"}},
+                "action": "ui_refresh",
+                "entity_id": "ui.refresh",
+                "ui_action": {"type": "ui_action", "action": "refresh"},
+                "confidence": 100.0,
+                "error": None,
+                "mode": mode
+            }
+        if p_clean in fs_patterns:
+            return {
+                "success": True,
+                "prompt": prompt,
+                "message": "Schalte Vollbildmodus um.",
+                "tool_call": {"name": "ui_action", "arguments": {"action": "fullscreen"}},
+                "action": "ui_fullscreen",
+                "entity_id": "ui.fullscreen",
+                "ui_action": {"type": "ui_action", "action": "fullscreen"},
+                "confidence": 100.0,
+                "error": None,
+                "mode": mode
+            }
+
+        # 3. Section Navigation
+        nav_prefix_regex = r"^(?:geh(?:e)?(?:\s+(?:zu|in|auf|nach))?|öffne(?:n)?|zeige(?:n)?|wechsle(?:\s+(?:zu|in|auf|nach))?|navigiere(?:\s+(?:zu|in|auf|nach))?|schalte(?:\s+(?:auf|zu|in))|springe(?:\s+(?:zu|in|auf|nach))?|open|go\s+to|show|switch\s+to|navigate\s+to|sektion|kategorie|ansicht)\s+"
+        candidate = re.sub(nav_prefix_regex, "", p_clean).strip()
+        candidate = re.sub(r"\s+(?:anzeigen|öffnen|oeffnen|sektion|ansicht|kategorie|dashboard|menü|menu)$", "", candidate).strip()
+
+        target_sec = None
+        for sec_id, synonyms in SECTION_SYNONYMS.items():
+            if candidate == sec_id or candidate in synonyms or p_clean == sec_id or p_clean in synonyms:
+                target_sec = sec_id
+                break
+
+        if not target_sec and context and isinstance(context.get("visible_navigation"), list):
+            for nav in context["visible_navigation"]:
+                nid = str(nav.get("id", "")).lower()
+                lbl = str(nav.get("label", "")).lower()
+                if candidate and (candidate == nid or candidate in lbl or nid in candidate):
+                    target_sec = nid
+                    break
+
+        if target_sec:
+            title = CATEGORY_NAMES_MAP.get(target_sec, target_sec.upper())
+            return {
+                "success": True,
+                "prompt": prompt,
+                "message": f"Navigiere zur Sektion '{title}'.",
+                "tool_call": {"name": "navigate_section", "arguments": {"target": target_sec}},
+                "action": "navigate_section",
+                "entity_id": f"section.{target_sec}",
+                "ui_action": {"type": "navigate", "target": target_sec, "section": target_sec, "title": title},
+                "confidence": 100.0,
+                "error": None,
+                "mode": mode
+            }
+
+        return None
+
+    def _process_cactus_prompt(prompt, mode="test", context=None):
         dry_run = (mode != "live")
+        start_time = time.perf_counter()
+
+        ui_res = resolve_ui_command(prompt, context=context, mode=mode)
+        if ui_res:
+            ui_res["latency_ms"] = round((time.perf_counter() - start_time) * 1000.0, 1)
+            return ui_res
+
         agent = get_cactus_agent()
         if not agent:
             return {"error": "Cactus NeedleAgent konnte nicht geladen werden", "success": False, "mode": mode}
@@ -19395,7 +19860,15 @@ if USE_FLASK:
                     "mode": mode
                 })
 
-            result = _process_cactus_prompt(text, mode=mode)
+            context = None
+            raw_ctx = request.form.get("context") or request.args.get("context")
+            if raw_ctx:
+                try:
+                    context = json.loads(raw_ctx)
+                except Exception:
+                    context = None
+
+            result = _process_cactus_prompt(text, mode=mode, context=context)
             result["text"] = text
             result["recognized"] = True
             return jsonify(result)
@@ -19418,10 +19891,42 @@ if USE_FLASK:
         mode = data.get("mode", "test").strip().lower()
         if mode not in ("test", "live"):
             mode = "test"
-        result = _process_cactus_prompt(prompt, mode=mode)
+        context = data.get("context")
+        result = _process_cactus_prompt(prompt, mode=mode, context=context)
         if not result.get("success") and "nicht geladen" in result.get("error", ""):
             return jsonify(result), 500
         return jsonify(result)
+
+    @app.route("/api/cactus/tools", methods=["GET"])
+    def api_cactus_tools():
+        return jsonify({
+            "tools": CACTUS_UI_TOOLS + [
+                {
+                    "name": "control_light",
+                    "description": "Steuert Lichter und Lampen im Home Assistant.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "Name der Lampe oder des Raums"},
+                            "action": {"type": "string", "enum": ["on", "off", "dim"], "description": "Schaltaktion"},
+                            "brightness": {"type": "integer", "description": "Helligkeit in Prozent (0-100)"}
+                        },
+                        "required": ["name", "action"]
+                    }
+                },
+                {
+                    "name": "get_weather",
+                    "description": "Ruft Wetter- und Temperaturinformationen ab.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string", "description": "Standort oder Stadt"},
+                            "query_type": {"type": "string", "enum": ["all", "temperature", "rain", "wind"], "description": "Art der Wetterabfrage"}
+                        }
+                    }
+                }
+            ]
+        })
 
     @app.route("/api/cactus/lights", methods=["GET"])
     def api_cactus_lights():
@@ -19456,6 +19961,13 @@ if USE_FLASK:
             "configured": True,
             "model": "Cactus Needle 3 (On-Device)",
             "stt": "Faster-Whisper base (CPU int8)",
+            "tools": [
+                "control_light",
+                "get_weather",
+                "navigate_section",
+                "paginate",
+                "ui_action"
+            ],
             "locked": is_locked
         })
 
