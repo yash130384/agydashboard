@@ -28,6 +28,9 @@ KNOWN_SERVICES = {
     "matter": {"name": "Matter Server", "subdomain": "mat", "port": 5580, "desc": "Smart Home Matter Gateway"},
     "headroom": {"name": "Headroom AI", "subdomain": "head", "port": 8787, "desc": "AI Context Compression Engine"},
     "cups": {"name": "CUPS Druckerdienst", "subdomain": "port", "port": 631, "desc": "Netzwerkdrucker Verwaltung"},
+    "9router": {"name": "9Router", "subdomain": "ai", "port": 20128, "desc": "FREE AI Router & Token Saver"},
+    "homeassistant": {"name": "Home Assistant", "subdomain": "ha", "port": 8123, "desc": "Open Source Home Automation"},
+    "dashboard": {"name": "System Dashboard", "subdomain": "dash", "port": 5000, "desc": "LCARS System Dashboard"},
 }
 
 
@@ -87,12 +90,30 @@ class UserService:
                         details TEXT
                     );
 
+                    CREATE TABLE IF NOT EXISTS registered_services (
+                        key TEXT PRIMARY KEY COLLATE NOCASE,
+                        name TEXT NOT NULL,
+                        subdomain TEXT,
+                        port INTEGER,
+                        desc TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
                     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
                     CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
                     CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON auth_audit_log(timestamp);
                     """
                 )
+                for k, v in KNOWN_SERVICES.items():
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO registered_services (key, name, subdomain, port, desc)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (k, v.get("name", k), v.get("subdomain"), v.get("port"), v.get("desc", "")),
+                    )
                 conn.commit()
+        self.ensure_default_admins()
 
     @staticmethod
     def hash_password(password: str, salt: bytes = None) -> tuple[str, str]:
@@ -395,10 +416,102 @@ class UserService:
             conn.commit()
             return cur.rowcount
 
-    def check_service_permission(self, user_info: dict, service_key: str) -> bool:
-        """Prüft, ob der Benutzer Zugriff auf den gegebenen Service hat."""
+    def ensure_default_admins(self):
+        """Stellt sicher, dass 'admin' und 'cb' existieren und als Super Admin voll berechtigt sind."""
+        for uname in ("admin", "cb"):
+            u = self.get_user_by_username(uname)
+            if not u:
+                self.create_user(
+                    username=uname,
+                    password="09010901",
+                    display_name="cb (Super Admin)" if uname == "cb" else "Master Administrator",
+                    allowed_services=["*"],
+                    notes="Super Admin" if uname == "cb" else "Master Admin",
+                )
+            else:
+                svcs = u.get("allowed_services", [])
+                if "*" not in svcs and "all" not in svcs:
+                    svcs.append("*")
+                    self.update_user(u["id"], allowed_services=svcs)
+
+    def register_service(self, key: str, name: str | None = None, subdomain: str | None = None, port: int | None = None, desc: str = "") -> bool:
+        """Registriert einen Dienst dynamisch in users.db."""
+        if not key:
+            return False
+        key = key.strip().lower()
+        name = (name or key).strip()
+        with self._lock:
+            try:
+                with self._get_connection() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO registered_services (key, name, subdomain, port, desc)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(key) DO UPDATE SET
+                            name=excluded.name,
+                            subdomain=COALESCE(excluded.subdomain, registered_services.subdomain),
+                            port=COALESCE(excluded.port, registered_services.port),
+                            desc=CASE WHEN excluded.desc != '' THEN excluded.desc ELSE registered_services.desc END
+                        """,
+                        (key, name, subdomain, port, desc),
+                    )
+                    conn.commit()
+                return True
+            except Exception as e:
+                print(f"[WARN] UserService.register_service Fehler: {e}", file=sys.stderr)
+                return False
+
+    def list_services(self) -> list[dict]:
+        """Gibt alle registrierten Dienste sortiert zurück."""
+        with self._lock:
+            try:
+                with self._get_connection() as conn:
+                    rows = conn.execute(
+                        "SELECT key, name, subdomain, port, desc FROM registered_services ORDER BY name ASC"
+                    ).fetchall()
+                    return [
+                        {
+                            "key": r["key"],
+                            "name": r["name"],
+                            "subdomain": r["subdomain"] or "",
+                            "port": r["port"],
+                            "desc": r["desc"] or "",
+                        }
+                        for r in rows
+                    ]
+            except Exception as e:
+                print(f"[WARN] UserService.list_services Fehler: {e}", file=sys.stderr)
+                return [
+                    {"key": k, "name": v["name"], "subdomain": v.get("subdomain", ""), "port": v.get("port"), "desc": v.get("desc", "")}
+                    for k, v in KNOWN_SERVICES.items()
+                ]
+
+    def get_services(self) -> dict[str, dict]:
+        """Gibt registrierte Dienste als Dictionary gemappt auf Service-Key zurück."""
+        return {s["key"]: s for s in self.list_services()}
+
+    @staticmethod
+    def is_super_admin(user_info: dict | None) -> bool:
+        """Prüft, ob der Benutzer Super Admin oder cb ist."""
         if not user_info:
             return False
+        uname = (user_info.get("username") or "").strip().lower()
+        if uname in ("admin", "cb", "superadmin", "super_admin"):
+            return True
+        dname = (user_info.get("display_name") or "").lower()
+        notes = (user_info.get("notes") or "").lower()
+        if "super admin" in dname or "master admin" in dname or "super admin" in notes or "master admin" in notes:
+            return True
+        return False
+
+    def check_service_permission(self, user_info: dict | None, service_key: str) -> bool:
+        """Prüft, ob der Benutzer Zugriff auf den gegebenen Service hat.
+        cb und Super Admin sind automatisch für alle Bereiche berechtigt.
+        """
+        if not user_info:
+            return False
+        if self.is_super_admin(user_info):
+            return True
         services = user_info.get("allowed_services", [])
         if "*" in services or "all" in services:
             return True

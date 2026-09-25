@@ -104,8 +104,8 @@ except Exception as _cycle_err:
 # LCARS Central User & Session Service Import
 try:
     from user_service import user_service
-    if user_service and not user_service.get_user_by_username("admin"):
-        user_service.create_user("admin", "09010901", display_name="Master Administrator", allowed_services=["*"], notes="Master Admin")
+    if user_service:
+        user_service.ensure_default_admins()
 except Exception as _user_err:
     user_service = None
     print(f"[WARN] user_service konnte nicht importiert werden: {_user_err}", file=sys.stderr)
@@ -643,6 +643,34 @@ STATIC_PORT_SUBDOMAINS = {
 DIRECT_AUTH_PORTS = {5000, 8123, 20128}
 
 
+def sync_service_registry_to_user_service():
+    if user_service and hasattr(user_service, "register_service"):
+        for reg_k, reg_v in SERVICE_REGISTRY.items():
+            port = reg_v.get("port")
+            s_key = reg_k
+            if port == 3000:
+                s_key = "pulsecast"
+            elif port == 8000:
+                s_key = "telemetryvault"
+            elif port == 5580:
+                s_key = "matter"
+            elif port == 8787:
+                s_key = "headroom"
+            elif port == 631:
+                s_key = "cups"
+            sub = STATIC_PORT_SUBDOMAINS.get(port) if isinstance(port, int) else None
+            user_service.register_service(
+                key=s_key,
+                name=reg_v.get("title") or reg_v.get("name") or reg_k,
+                subdomain=sub,
+                port=port,
+                desc=reg_v.get("description", ""),
+            )
+
+
+sync_service_registry_to_user_service()
+
+
 class CloudflaredNamedTunnelManager:
     """Verwaltet Cloudflare Named Tunnel (pimmel-tunnel) für entdeckte Webdienste.
     Konfiguriert Ingress-Regeln in /home/cb/.cloudflared/config.yml und registriert
@@ -1129,6 +1157,39 @@ class WebserverDiscoveryScanner:
                         reg_val["tailscale_url"] = f"http://{ts_host}:{port}"
                     if cf_url:
                         reg_val["cf_url"] = cf_url
+
+            if user_service and hasattr(user_service, "register_service"):
+                svc_key = None
+                for reg_k, reg_v in SERVICE_REGISTRY.items():
+                    if reg_v.get("port") == port:
+                        svc_key = reg_k
+                        break
+                if port == 3000:
+                    svc_key = "pulsecast"
+                elif port == 8000:
+                    svc_key = "telemetryvault"
+                elif port == 5580:
+                    svc_key = "matter"
+                elif port == 8787:
+                    svc_key = "headroom"
+                elif port == 631:
+                    svc_key = "cups"
+                elif not svc_key:
+                    svc_key = STATIC_PORT_SUBDOMAINS.get(port) or pname.lower().replace(" ", "_")
+
+                sub_cand = STATIC_PORT_SUBDOMAINS.get(port)
+                if not sub_cand and cf_url:
+                    m_sub = re.search(r"https?://([a-z0-9-]+)\.", cf_url)
+                    if m_sub:
+                        sub_cand = m_sub.group(1)
+
+                user_service.register_service(
+                    key=str(svc_key),
+                    name=title,
+                    subdomain=sub_cand,
+                    port=port,
+                    desc=f"{pname} (Port {port})",
+                )
 
             discovered.append({
                 "port": port,
@@ -9338,7 +9399,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                   <div style="font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.5rem; text-transform:uppercase;">
                     🛡️ ZUGRIFFSBERECHTIGUNGEN (*.PIMMEL.SITE)
                   </div>
-                  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:0.5rem;">
+                  <div id="userServicesGrid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:0.5rem;">
                     <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
                       <input type="checkbox" id="userSvc_all" value="*" class="user-svc-cb" onchange="handleUserSvcAllToggle()">
                       <span style="font-family:var(--mono-family); font-size:0.85rem; color:var(--c-primary); font-weight:700;">★ Alle Dienste (*)</span>
@@ -15429,6 +15490,45 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // LCARS CENTRAL USER & ACCESS MANAGEMENT CONTROLLER (*.PIMMEL.SITE)
   // ==========================================================================
   var lcarsUsersList = [];
+  var lcarsAvailableServices = [
+    { key: 'pulsecast', name: 'PulseCast', subdomain: 'cast' },
+    { key: 'telemetryvault', name: 'TelemetryVault', subdomain: 'tele' },
+    { key: 'matter', name: 'Matter Server', subdomain: 'mat' },
+    { key: 'headroom', name: 'Headroom AI', subdomain: 'head' },
+    { key: 'cups', name: 'CUPS Drucker', subdomain: 'port' }
+  ];
+
+  function renderUserServicesCheckboxes(services) {
+    const grid = document.getElementById('userServicesGrid');
+    if (!grid) return;
+    if (Array.isArray(services) && services.length > 0) {
+      lcarsAvailableServices = services;
+    }
+    const svcs = (lcarsAvailableServices && lcarsAvailableServices.length > 0)
+      ? lcarsAvailableServices
+      : [
+          { key: 'pulsecast', name: 'PulseCast', subdomain: 'cast' },
+          { key: 'telemetryvault', name: 'TelemetryVault', subdomain: 'tele' },
+          { key: 'matter', name: 'Matter Server', subdomain: 'mat' },
+          { key: 'headroom', name: 'Headroom AI', subdomain: 'head' },
+          { key: 'cups', name: 'CUPS Drucker', subdomain: 'port' }
+        ];
+
+    let html = '<label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">' +
+      '<input type="checkbox" id="userSvc_all" value="*" class="user-svc-cb" onchange="handleUserSvcAllToggle()">' +
+      '<span style="font-family:var(--mono-family); font-size:0.85rem; color:var(--c-primary); font-weight:700;">★ Alle Dienste (*)</span>' +
+      '</label>';
+
+    svcs.forEach(s => {
+      const subLabel = s.subdomain ? ' (' + escapeHtml(s.subdomain) + ')' : '';
+      html += '<label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">' +
+        '<input type="checkbox" id="userSvc_' + escapeHtml(s.key) + '" value="' + escapeHtml(s.key) + '" class="user-svc-cb">' +
+        '<span style="font-family:var(--mono-family); font-size:0.82rem;">' + escapeHtml(s.name) + subLabel + '</span>' +
+        '</label>';
+    });
+
+    grid.innerHTML = html;
+  }
 
   function getLcarsAuthHeader() {
     const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '0901');
@@ -15446,6 +15546,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (resp.ok) {
         const data = await resp.json();
         lcarsUsersList = data.users || [];
+        if (data.services) {
+          renderUserServicesCheckboxes(data.services);
+        }
         renderLcarsUsersTable(lcarsUsersList);
       } else if (resp.status === 403) {
         tbody.innerHTML = '<tr><td colspan="6" style="padding:1.5rem; text-align:center; color:var(--c-red); font-family:var(--mono-family);">AUTORISIERUNG FEHLGESCHLAGEN // COMMAND CODE 0901 ERFORDERLICH</td></tr>';
@@ -15475,6 +15578,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       'headroom': 'HEADROOM',
       'cups': 'CUPS'
     };
+    (lcarsAvailableServices || []).forEach(s => {
+      serviceLabels[s.key] = (s.name || s.key).toUpperCase();
+    });
 
     let html = '';
     users.forEach(u => {
@@ -15541,6 +15647,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const aInput = document.getElementById('formUserIsActive');
     if (aInput) aInput.checked = true;
 
+    renderUserServicesCheckboxes(lcarsAvailableServices);
     document.querySelectorAll('.user-svc-cb').forEach(cb => { cb.checked = false; });
     const allCb = document.getElementById('userSvc_all');
     if (allCb) allCb.checked = true;
@@ -15575,13 +15682,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const aInput = document.getElementById('formUserIsActive');
     if (aInput) aInput.checked = user.is_active;
 
+    renderUserServicesCheckboxes(lcarsAvailableServices);
     const svcs = user.allowed_services || [];
     const isAll = svcs.includes('*') || svcs.includes('all');
     const allCb = document.getElementById('userSvc_all');
     if (allCb) allCb.checked = isAll;
-    ['pulsecast', 'telemetryvault', 'matter', 'headroom', 'cups'].forEach(s => {
-      const cb = document.getElementById('userSvc_' + s);
-      if (cb) cb.checked = isAll || svcs.includes(s);
+    document.querySelectorAll('.user-svc-cb').forEach(cb => {
+      if (cb.id !== 'userSvc_all') {
+        cb.checked = isAll || svcs.includes(cb.value);
+      }
     });
 
     const modal = document.getElementById('userFormModal');
@@ -15618,9 +15727,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (allCb && allCb.checked) {
       services = ['*'];
     } else {
-      ['pulsecast', 'telemetryvault', 'matter', 'headroom', 'cups'].forEach(s => {
-        const cb = document.getElementById('userSvc_' + s);
-        if (cb && cb.checked) services.push(s);
+      document.querySelectorAll('.user-svc-cb').forEach(cb => {
+        if (cb.id !== 'userSvc_all' && cb.checked) {
+          services.push(cb.value);
+        }
       });
     }
 
@@ -20658,6 +20768,13 @@ if USE_FLASK:
             return jsonify({"authenticated": False, "user": None})
         return jsonify({"authenticated": True, "user": session_data})
 
+    @app.route("/api/user-services", methods=["GET"])
+    def api_user_services():
+        if not user_service:
+            return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
+        services = user_service.list_services() if hasattr(user_service, "list_services") else []
+        return jsonify({"success": True, "services": services})
+
     @app.route("/api/users", methods=["GET", "POST"])
     def api_users():
         if not user_service:
@@ -20667,7 +20784,8 @@ if USE_FLASK:
 
         if request.method == "GET":
             users = user_service.list_users()
-            return jsonify({"success": True, "users": users})
+            services = user_service.list_services() if hasattr(user_service, "list_services") else []
+            return jsonify({"success": True, "users": users, "services": services})
 
         # POST: Neuer Benutzer anlegen
         data = request.get_json(silent=True) or {}

@@ -42,14 +42,31 @@ class LcarsAuthProxy:
         self.subdomain_map = dict(DEFAULT_SUBDOMAIN_MAP)
         self.server = None
         self._running = False
+        if self.user_service and hasattr(self.user_service, "register_service"):
+            for sub, info in self.subdomain_map.items():
+                self.user_service.register_service(
+                    key=info.get("service", sub),
+                    name=info.get("name", sub.upper()),
+                    subdomain=sub,
+                    port=info.get("port"),
+                )
 
     def register_subdomain(self, subdomain: str, target_port: int, service_key: str = None, name: str = None):
         subdomain = subdomain.strip().lower()
+        key = (service_key or subdomain).strip().lower()
+        svc_name = name or subdomain.upper()
         self.subdomain_map[subdomain] = {
             "port": target_port,
-            "service": service_key or subdomain,
-            "name": name or subdomain.upper(),
+            "service": key,
+            "name": svc_name,
         }
+        if self.user_service and hasattr(self.user_service, "register_service"):
+            self.user_service.register_service(
+                key=key,
+                name=svc_name,
+                subdomain=subdomain,
+                port=target_port,
+            )
 
     def resolve_subdomain(self, host_header: str) -> tuple[str, dict] | tuple[None, None]:
         if not host_header:
