@@ -34,6 +34,8 @@ class TestCactusUiNavigation(unittest.TestCase):
             ("Zeige Dev-Team", "devteam"),
             ("Öffne Home Assistant", "homeassistant"),
             ("Gehe zu Fantasy", "fantasy"),
+            ("Gehe zu Persönlich", "personal"),
+            ("Öffne persönlichen Bereich", "personal"),
         ]
         for prompt, expected_sec in prompts:
             with self.subTest(prompt=prompt):
@@ -173,6 +175,22 @@ class TestCactusUiNavigation(unittest.TestCase):
         self.assertIn("mode", res)
         self.assertEqual(res.get("tool_call", {}).get("name"), "control_light")
         self.assertEqual(res.get("entity_id"), "light.decke2")
+
+    def test_unknown_section_navigation_fails_gracefully(self):
+        # Explicit navigation intent to an invalid section should fail deterministically
+        # and NOT fall back to Home Assistant light control
+        invalid_prompts = [
+            "Gehe zu Holodeck",
+            "Öffne UnbekannteSektion",
+            "Wechsle zu Matrix"
+        ]
+        for prompt in invalid_prompts:
+            with self.subTest(prompt=prompt):
+                res = _process_cactus_prompt(prompt, mode="test")
+                self.assertFalse(res.get("success"))
+                self.assertIn("nicht im LCARS Dashboard gefunden", res.get("message", ""))
+                self.assertNotEqual((res.get("tool_call") or {}).get("name"), "control_light")
+                self.assertEqual(res.get("action"), "navigate_failed")
 
 
 if __name__ == "__main__":

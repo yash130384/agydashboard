@@ -6239,6 +6239,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                       </div>
                     </label>
 
+                    <!-- PERSÖNLICHER BEREICH -->
+                    <label class="perm-checkbox-card" style="border-color:var(--c-gold);">
+                      <input type="checkbox" id="permLock_personal" value="personal" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name" style="color:var(--c-gold);">PERSÖNLICH</span>
+                        <span class="perm-desc">Persönlicher Bereich Gesamt</span>
+                      </div>
+                    </label>
+
                     <!-- SOLAR -->
                     <label class="perm-checkbox-card">
                       <input type="checkbox" id="permLock_solar" value="solar" class="perm-lock-cb">
@@ -9375,6 +9384,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     'ai-info': 'KI-INFO // 9ROUTER & NEURAL TELEMETRIE',
     'config': 'SYSTEM CONFIG & FARBMODI',
     'fantasy': 'ESPN FANTASY FOOTBALL // INCOMPLETE PASS',
+    'personal': 'LCARS PERSÖNLICHER BEREICH // ÜBERSICHT',
     'solar': 'LCARS ENERGIE-MANAGEMENT // BALKONSOLAR',
     'homeassistant': 'LCARS HAUSSTEUERUNG // HOME ASSISTANT',
     'cycle': 'LCARS BIO-TELEMETRIE // PARTNERINNEN-ZYKLUS',
@@ -9382,6 +9392,101 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     'gemini_live': 'LCARS SUBRAUM COMM // CACTUS NEEDLE 3',
     'devteam': 'DEV-TEAM // KANBAN WORKFLOW ENGINE'
   };
+
+  let personalNavExpanded = false;
+
+  function togglePersonalNav(forceState = null) {
+    personalNavExpanded = (forceState !== null) ? forceState : !personalNavExpanded;
+    const subpillar = document.getElementById('personal-subpillar');
+    const icon = document.getElementById('personalFoldIcon');
+    if (subpillar) {
+      subpillar.style.display = personalNavExpanded ? 'flex' : 'none';
+    }
+    if (icon) {
+      icon.textContent = personalNavExpanded ? '▼' : '▶';
+    }
+  }
+
+  function handlePersonalPillClick() {
+    if (currentCategory === 'personal') {
+      togglePersonalNav();
+    } else {
+      togglePersonalNav(true);
+      switchCategory('personal');
+    }
+  }
+
+  async function initPersonalOverview() {
+    try {
+      const resp = await fetch('/api/solar/data');
+      if (resp.ok) {
+        const d = await resp.json();
+        const pv = d.pv_power !== undefined ? d.pv_power : (d.production !== undefined ? d.production : '--');
+        const bat = d.battery_soc !== undefined ? d.battery_soc : (d.soc !== undefined ? d.soc : '--');
+        const house = d.house_consumption !== undefined ? d.house_consumption : (d.consumption !== undefined ? d.consumption : '--');
+        const pvEl = document.getElementById('personalSolarPv');
+        const batEl = document.getElementById('personalSolarBat');
+        const houseEl = document.getElementById('personalSolarHouse');
+        if (pvEl) pvEl.textContent = (pv !== '--' ? Math.round(pv) + ' W' : '-- W');
+        if (batEl) batEl.textContent = (bat !== '--' ? Math.round(bat) + ' %' : '-- %');
+        if (houseEl) houseEl.textContent = (house !== '--' ? Math.round(house) + ' W' : '-- W');
+      }
+    } catch (e) {
+      console.warn('Personal Solar overview error:', e);
+    }
+
+    try {
+      const resp = await fetch('/api/homeassistant/config');
+      if (resp.ok) {
+        const d = await resp.json();
+        const stEl = document.getElementById('personalHaStatus');
+        const entEl = document.getElementById('personalHaEntities');
+        if (stEl) {
+          stEl.textContent = (d.configured && d.enabled) ? 'ONLINE' : 'INAKTIV';
+          stEl.style.color = (d.configured && d.enabled) ? '#44dd88' : '#888';
+        }
+        if (entEl) {
+          entEl.textContent = d.configured ? (d.name || 'Assistant') : 'Nicht konfiguriert';
+        }
+      }
+    } catch (e) {
+      console.warn('Personal HA overview error:', e);
+    }
+
+    try {
+      const resp = await fetch('/api/cycle/partners');
+      if (resp.ok) {
+        const partners = await resp.json();
+        const partner = Array.isArray(partners) && partners.length > 0 ? partners[0] : null;
+        const pEl = document.getElementById('personalCyclePartner');
+        const dEl = document.getElementById('personalCycleDay');
+        const phEl = document.getElementById('personalCyclePhase');
+        if (partner) {
+          if (pEl) pEl.textContent = partner.name || '--';
+          if (dEl) dEl.textContent = (partner.current_cycle_day ? 'Tag ' + partner.current_cycle_day : '--');
+          if (phEl) phEl.textContent = partner.current_phase || '--';
+        } else {
+          if (pEl) pEl.textContent = 'Keine Partnerin';
+          if (dEl) dEl.textContent = '--';
+          if (phEl) phEl.textContent = 'Nicht konfiguriert';
+        }
+      }
+    } catch (e) {
+      console.warn('Personal Cycle overview error:', e);
+    }
+
+    try {
+      const resp = await fetch('/api/pulsecast/downloads');
+      if (resp.ok) {
+        const d = await resp.json();
+        const active = (d.downloads || []).filter(dl => dl.status === 'downloading' || dl.status === 'running').length;
+        const dlEl = document.getElementById('personalPulsecastDownloads');
+        if (dlEl) dlEl.textContent = active + ' aktiv (' + (d.downloads || []).length + ' gesamt)';
+      }
+    } catch (e) {
+      console.warn('Personal PulseCast overview error:', e);
+    }
+  }
 
   function switchCategory(catId, skipHistory = false) {
     if (typeof isCategoryLocked === 'function' && isCategoryLocked(catId)) {
@@ -9396,6 +9501,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     playLcarsBeep(980, 1400);
     currentCategory = catId;
+
+    const personalCategories = ['personal', 'solar', 'homeassistant', 'cycle', 'pulsecast'];
+    const personalBtn = document.getElementById('btn-cat-personal');
+    if (personalCategories.includes(catId)) {
+      togglePersonalNav(true);
+      if (personalBtn) {
+        if (catId === 'personal') {
+          personalBtn.classList.add('active');
+          personalBtn.classList.remove('active-parent');
+        } else {
+          personalBtn.classList.remove('active');
+          personalBtn.classList.add('active-parent');
+        }
+      }
+    } else {
+      togglePersonalNav(false);
+      if (personalBtn) {
+        personalBtn.classList.remove('active', 'active-parent');
+      }
+    }
 
     if (!skipHistory) {
       if (typeof categoryHistory !== 'undefined' && typeof categoryHistoryIndex !== 'undefined') {
@@ -9462,6 +9587,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         fantasyCountdownSeconds = 30;
         updateFantasyCountdownUI();
         loadFantasyData(false);
+      }, 60);
+    }
+    if (catId === 'personal') {
+      setTimeout(() => {
+        initPersonalOverview();
       }, 60);
     }
     if (catId === 'solar') {
@@ -14139,7 +14269,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function applyPermissionsVisibility() {
     const isUnlocked = (sessionStorage.getItem('lcars_auth_unlocked') === 'true');
-    const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'devteam'];
+    const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'personal', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'devteam'];
 
     allSections.forEach(secId => {
       const btn = document.getElementById('btn-cat-' + secId);
@@ -14197,7 +14327,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (icon) icon.textContent = '🔓';
 
       // Check the checkboxes for currentLockedSections
-      const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'devteam'];
+      const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'personal', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'devteam'];
       allSections.forEach(secId => {
         const cb = document.getElementById('permLock_' + secId);
         if (cb) {
@@ -17558,6 +17688,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       'ai-info': 'ai-info', 'ai_info': 'ai-info', 'ki-info': 'ai-info', 'ki_info': 'ai-info', 'telemetrie': 'ai-info', 'neural': 'ai-info',
       'config': 'config', 'konfiguration': 'config', 'einstellungen': 'config', 'settings': 'config', 'farbmodi': 'config', 'farbmodus': 'config', 'theme': 'config',
       'fantasy': 'fantasy', 'espn': 'fantasy', 'football': 'fantasy', 'incomplete pass': 'fantasy',
+      'personal': 'personal', 'persönlich': 'personal', 'persoenlich': 'personal', 'persönlicher bereich': 'personal', 'persoenlicher bereich': 'personal', 'privat': 'personal',
       'solar': 'solar', 'balkonsolar': 'solar', 'energie': 'solar', 'photovoltaik': 'solar', 'pv': 'solar', 'akku': 'solar', 'strom': 'solar', 'hausverbrauch': 'solar',
       'homeassistant': 'homeassistant', 'ha': 'homeassistant', 'haussteuerung': 'homeassistant', 'smart home': 'homeassistant', 'smarthome': 'homeassistant',
       'cycle': 'cycle', 'zyklus': 'cycle', 'bio': 'cycle', 'bio-telemetrie': 'cycle', 'partnerin': 'cycle',
@@ -17573,6 +17704,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (typeof fetchLiveStats === 'function') fetchLiveStats(false);
     if (currentCategory === 'system') {
       if (typeof initHistoryChart === 'function') initHistoryChart();
+    } else if (currentCategory === 'personal') {
+      if (typeof initPersonalOverview === 'function') initPersonalOverview();
     } else if (currentCategory === 'fantasy') {
       if (typeof loadFantasyData === 'function') loadFantasyData(false);
     } else if (currentCategory === 'homeassistant') {
@@ -19893,6 +20026,7 @@ if USE_FLASK:
         "ai-info": "KI-INFO // 9ROUTER & NEURAL TELEMETRIE",
         "config": "SYSTEM CONFIG & FARBMODI",
         "fantasy": "ESPN FANTASY FOOTBALL // INCOMPLETE PASS",
+        "personal": "LCARS PERSÖNLICHER BEREICH // ÜBERSICHT",
         "solar": "LCARS ENERGIE-MANAGEMENT // BALKONSOLAR",
         "homeassistant": "LCARS HAUSSTEUERUNG // HOME ASSISTANT",
         "cycle": "LCARS BIO-TELEMETRIE // PARTNERINNEN-ZYKLUS",
@@ -19908,6 +20042,7 @@ if USE_FLASK:
         "ai-info": ["ai-info", "ai_info", "ai info", "ki-info", "ki_info", "ki info", "neural telemetrie", "telemetrie", "benchmarks", "neural", "router telemetrie"],
         "config": ["config", "konfiguration", "einstellungen", "farbmodi", "farbmodus", "settings", "theme", "farben", "lcars farben"],
         "fantasy": ["fantasy", "espn", "espn fantasy", "football", "incomplete pass", "fantasy football", "liga"],
+        "personal": ["personal", "persönlich", "persoenlich", "persönlicher bereich", "persoenlicher bereich", "persönlichen bereich", "persoenlichen bereich", "persönlichen", "persönliche", "persoenliche", "privat", "home", "eigene", "persönliche themen"],
         "solar": ["solar", "balkonsolar", "energie", "energie-management", "photovoltaik", "pv", "akku", "batterie", "strom", "hausverbrauch", "stromverbrauch", "solaranlage"],
         "homeassistant": ["homeassistant", "home assistant", "ha", "haussteuerung", "smart home", "smarthome"],
         "cycle": ["cycle", "zyklus", "bio-telemetrie", "bio telemetrie", "partnerin"],
@@ -20039,7 +20174,7 @@ if USE_FLASK:
         has_nav_prefix = bool(re.search(nav_prefix_regex, p_clean))
         candidate = re.sub(nav_prefix_regex, "", p_clean).strip()
         candidate = re.sub(r"^(?:das|die|der|dem|den|mir|uns)\s+", "", candidate).strip()
-        candidate = re.sub(r"\s+(?:anzeigen|öffnen|oeffnen|sektion|ansicht|kategorie|dashboard|menü|menu|seite)$", "", candidate).strip()
+        candidate = re.sub(r"\s+(?:anzeigen|öffnen|oeffnen|sektion|ansicht|kategorie|dashboard|menü|menu|seite|bereich)$", "", candidate).strip()
 
         target_sec = None
         for sec_id, synonyms in SECTION_SYNONYMS.items():

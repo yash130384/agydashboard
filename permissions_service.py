@@ -19,6 +19,7 @@ VALID_SECTIONS = [
     "ai-info",
     "config",
     "fantasy",
+    "personal",
     "solar",
     "homeassistant",
     "cycle",
