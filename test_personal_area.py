@@ -21,6 +21,7 @@ class TestPersonalArea(unittest.TestCase):
 
     def test_permissions_valid_sections(self):
         self.assertIn("personal", VALID_SECTIONS)
+        self.assertTrue({"ai", "9router", "hermes", "ide", "ai-info", "gemini_live"}.issubset(VALID_SECTIONS))
         perm = PermissionsService()
         status = perm.get_public_status()
         self.assertIsInstance(status.get("locked_sections"), list)
@@ -50,6 +51,14 @@ class TestPersonalArea(unittest.TestCase):
         self.assertIn('id="btn-cat-personal"', html)
         self.assertIn('handlePersonalPillClick()', html)
         self.assertIn('id="personal-subpillar"', html)
+
+        # AI sections are grouped under one accordion with direct child navigation.
+        self.assertIn('id="btn-cat-ai"', html)
+        self.assertIn('id="ai-subpillar"', html)
+        for section in ("9router", "hermes", "ide", "ai-info", "gemini_live"):
+            with self.subTest(section=section):
+                self.assertIn(f'id="btn-cat-{section}"', html)
+                self.assertIn(f'id="section-{section}"', html)
 
         # Check grouped children remain present with their original IDs
         self.assertIn('id="btn-cat-fantasy"', html)

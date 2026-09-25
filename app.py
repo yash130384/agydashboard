@@ -3323,7 +3323,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .pill-sys   { background-color: var(--c-primary); }
     .pill-srv   { background-color: var(--c-blue); }
-    .pill-ai    { background-color: var(--c-secondary); }
+    .pill-ai    { background-color: var(--c-secondary); color: #000; font-weight: 700; border-left: 6px solid var(--c-primary); }
+    .pill-ai.active-parent { background-color: var(--c-secondary) !important; color: #000 !important; border-left: 6px solid var(--c-gold) !important; box-shadow: inset 0 0 12px rgba(186, 164, 229, 0.45); }
+    .nav-ai-group { display: flex; flex-direction: column; width: 100%; }
+    .nav-ai-subpillar { display: flex; flex-direction: column; gap: 3px; padding: 4px 0 4px 6px; background: rgba(0, 0, 0, 0.45); border-left: 3px solid var(--c-secondary); }
+    .pill-9router { background-color: var(--c-primary); color: #000; }
+    .pill-hermes { background-color: var(--c-secondary); color: #000; }
+    .pill-ide { background-color: var(--c-gold); color: #000; }
     .pill-info  { background-color: var(--c-butterscotch); }
     .pill-cfg   { background-color: var(--c-gold); }
     .pill-fantasy { background-color: var(--c-almond); color: #000; }
@@ -5039,12 +5045,30 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="lcars-pill-btn pill-srv" onclick="switchCategory('services')" id="btn-cat-services">
           SERVICES
         </button>
-        <button class="lcars-pill-btn pill-ai" onclick="switchCategory('agents')" id="btn-cat-agents">
-          KI-AGENTEN
-        </button>
-        <button class="lcars-pill-btn pill-info" onclick="switchCategory('ai-info')" id="btn-cat-ai-info">
-          KI-INFO
-        </button>
+        <!-- KI BEREICH -->
+        <div class="nav-ai-group" id="nav-ai-group">
+          <button class="lcars-pill-btn pill-ai" onclick="handleAiPillClick()" id="btn-cat-ai">
+            <span id="aiFoldIcon" style="font-size:0.75rem; margin-right:0.35rem; transition:transform 0.2s;">▶</span> KI
+          </button>
+          <div class="nav-ai-subpillar" id="ai-subpillar" style="display: none;">
+            <button class="lcars-pill-btn lcars-sub-pill pill-9router" onclick="switchCategory('9router')" id="btn-cat-9router">
+              9ROUTER
+            </button>
+            <button class="lcars-pill-btn lcars-sub-pill pill-hermes" onclick="switchCategory('hermes')" id="btn-cat-hermes">
+              HERMES
+            </button>
+            <button class="lcars-pill-btn lcars-sub-pill pill-ide" onclick="switchCategory('ide')" id="btn-cat-ide">
+              ANTIGRAVITY IDE
+            </button>
+            <button class="lcars-pill-btn lcars-sub-pill pill-info" onclick="switchCategory('ai-info')" id="btn-cat-ai-info">
+              KI-INFO
+            </button>
+            <button class="lcars-pill-btn lcars-sub-pill pill-gemini-live" onclick="switchCategory('gemini_live')" id="btn-cat-gemini_live" style="display: none;">
+              SUBRAUM COMM
+            </button>
+          </div>
+          <button id="btn-cat-agents" onclick="switchCategory('9router')" style="display: none;"></button>
+        </div>
         <button class="lcars-pill-btn pill-cfg" onclick="switchCategory('config')" id="btn-cat-config">
           CONFIG
         </button>
@@ -5071,9 +5095,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </button>
           </div>
         </div>
-        <button class="lcars-pill-btn pill-gemini-live" onclick="switchCategory('gemini_live')" id="btn-cat-gemini_live" style="display: none;">
-          SUBRAUM COMM
-        </button>
         <!-- DEV-TEAM KANBAN -->
         <button class="lcars-pill-btn pill-devteam" onclick="switchCategory('devteam')" id="btn-cat-devteam" style="display: none;">
           DEV-TEAM
@@ -5311,28 +5332,178 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
-        <!-- KATEGORIE 3: KI-AGENTEN (3 UNTERGRUPPEN: 9ROUTER, HERMES, ANTIGRAVITY IDE) -->
-        <section class="lcars-section" id="section-agents">
+        <!-- KATEGORIE: KI ÜBERSICHT -->
+        <section class="lcars-section" id="section-ai">
           <div class="lcars-header-bar">
-            <h2>LCARS SUBRAUM COMM-LINK // KI-AGENTEN MATRIX</h2>
+            <h2>LCARS KÜNSTLICHE INTELLIGENZ // BEREICHSÜBERSICHT</h2>
+            <span class="lcars-pill-tag" style="background-color: var(--c-secondary); color: #000;">NEURAL OPERATIONS</span>
+          </div>
+
+          <!-- KI BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('ai')">
+              <span>🧠</span> 1. ÜBERSICHT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('9router')">
+              <span>⚡</span> 2. 9ROUTER
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('hermes')">
+              <span>🤖</span> 3. HERMES
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ide')">
+              <span>🚀</span> 4. IDE
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ai-info')">
+              <span>📊</span> 5. KI-INFO
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('gemini_live')">
+              <span>📡</span> 6. SUBRAUM COMM
+            </button>
+          </div>
+
+          <!-- AI OVERVIEW GRID -->
+          <div class="ai-overview-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; margin-top: 1rem;">
+            <!-- 9ROUTER CARD -->
+            <div class="lcars-card" style="border-color: var(--c-primary);">
+              <div class="card-head" style="border-bottom: 2px solid var(--c-primary); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <span class="card-head-title" style="color: var(--c-primary);">⚡ 9ROUTER COMM-LINK</span>
+                <button class="left-action-btn" onclick="switchCategory('9router')" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; border-color: var(--c-primary); color: var(--c-primary);">ÖFFNEN ▶</button>
+              </div>
+              <div style="padding: 0.8rem 0; display: flex; flex-direction: column; gap: 0.6rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Status / Port:</span>
+                  <span style="color: var(--c-green, #44dd88); font-size: 0.95rem; font-weight: 700;">BEREIT :20128</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Standard-Modell:</span>
+                  <span style="color: var(--c-gold); font-size: 0.95rem; font-weight: 700;">ag/gemini-3-flash</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Kanal:</span>
+                  <span style="color: var(--c-blue); font-size: 0.95rem; font-weight: 700;">ODN Transceiver</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- HERMES CARD -->
+            <div class="lcars-card" style="border-color: var(--c-secondary);">
+              <div class="card-head" style="border-bottom: 2px solid var(--c-secondary); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <span class="card-head-title" style="color: var(--c-secondary);">🤖 HERMES SYSTEM-AGENTEN</span>
+                <button class="left-action-btn" onclick="switchCategory('hermes')" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; border-color: var(--c-secondary); color: var(--c-secondary);">ÖFFNEN ▶</button>
+              </div>
+              <div style="padding: 0.8rem 0; display: flex; flex-direction: column; gap: 0.6rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Runtime-Status:</span>
+                  <span style="color: var(--c-green, #44dd88); font-size: 0.95rem; font-weight: 700;">AKTIV</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Profile:</span>
+                  <span id="aiHermesCount" style="color: var(--c-secondary); font-size: 1.1rem; font-weight: 700;">--</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Pfad:</span>
+                  <span style="color: #ccc; font-size: 0.85rem; font-family: var(--mono-family);">~/.hermes</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- ANTIGRAVITY IDE CARD -->
+            <div class="lcars-card" style="border-color: var(--c-gold);">
+              <div class="card-head" style="border-bottom: 2px solid var(--c-gold); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <span class="card-head-title" style="color: var(--c-gold);">🚀 ANTIGRAVITY IDE</span>
+                <button class="left-action-btn" onclick="switchCategory('ide')" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; border-color: var(--c-gold); color: var(--c-gold);">ÖFFNEN ▶</button>
+              </div>
+              <div style="padding: 0.8rem 0; display: flex; flex-direction: column; gap: 0.6rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Entwicklung:</span>
+                  <span style="color: var(--c-gold); font-size: 0.95rem; font-weight: 700;">Cloud IDE Web</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Status:</span>
+                  <span style="color: var(--c-green, #44dd88); font-size: 0.95rem; font-weight: 700;">LINK BEREIT</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Projekt:</span>
+                  <span style="color: #ccc; font-size: 0.85rem; font-family: var(--mono-family);">agydashboard</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- KI-INFO CARD -->
+            <div class="lcars-card" style="border-color: var(--c-butterscotch);">
+              <div class="card-head" style="border-bottom: 2px solid var(--c-butterscotch); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <span class="card-head-title" style="color: var(--c-butterscotch);">📊 KI-INFO &amp; TELEMETRIE</span>
+                <button class="left-action-btn" onclick="switchCategory('ai-info')" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; border-color: var(--c-butterscotch); color: var(--c-butterscotch);">ÖFFNEN ▶</button>
+              </div>
+              <div style="padding: 0.8rem 0; display: flex; flex-direction: column; gap: 0.6rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">9Router Requests:</span>
+                  <span id="aiOverviewRequests" style="color: var(--c-butterscotch); font-size: 1.2rem; font-weight: 700;">{{ (stats.nine_router.totals.requests if stats.nine_router else 0) }}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span id="aiOverviewStatus" style="color: var(--c-green, #44dd88); font-size: 0.95rem; font-weight: 700;">{{ (stats.nine_router.status if stats.nine_router else 'OFFLINE')|upper }}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Telemetrie:</span>
+                  <span style="color: #ccc; font-size: 0.85rem;">Charts &amp; Token-Logs</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- SUBRAUM COMM CARD -->
+            <div class="lcars-card" style="border-color: var(--c-secondary);">
+              <div class="card-head" style="border-bottom: 2px solid var(--c-secondary); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <span class="card-head-title" style="color: var(--c-secondary);">📡 SUBRAUM COMM (CACTUS)</span>
+                <button class="left-action-btn" onclick="switchCategory('gemini_live')" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; border-color: var(--c-secondary); color: var(--c-secondary);">ÖFFNEN ▶</button>
+              </div>
+              <div style="padding: 0.8rem 0; display: flex; flex-direction: column; gap: 0.6rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Sprach-Engine:</span>
+                  <span style="color: var(--c-green, #44dd88); font-size: 0.95rem; font-weight: 700;">CACTUS NEEDLE 3</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Spracherkennung:</span>
+                  <span style="color: var(--c-gold); font-size: 0.95rem; font-weight: 700;">FASTER-WHISPER</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: var(--c-blue); font-size: 0.95rem; font-weight: 700;">PTT / LIVE AUDIO</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- KATEGORIE: 9ROUTER COMM-LINK -->
+        <section class="lcars-section" id="section-9router">
+          <div class="lcars-header-bar">
+            <h2>LCARS SUBRAUM COMM-LINK // 9ROUTER MATRIX</h2>
             <span class="lcars-pill-tag">ODN MULTI-AGENT TRANSCEIVER</span>
           </div>
 
-          <!-- SUBGRUPPEN NAVIGATION -->
-          <div class="lcars-subnav-bar">
-            <button type="button" class="lcars-subnav-pill active" id="subtab-btn-9router" onclick="switchAgentSubgroup('9router')">
-              <span>⚡</span> 1. 9ROUTER COMM-LINK
+          <!-- KI BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ai')">
+              <span>🧠</span> 1. ÜBERSICHT
             </button>
-            <button type="button" class="lcars-subnav-pill" id="subtab-btn-hermes" onclick="switchAgentSubgroup('hermes')">
-              <span>🤖</span> 2. HERMES SYSTEM-AGENTEN
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('9router')">
+              <span>⚡</span> 2. 9ROUTER
             </button>
-            <button type="button" class="lcars-subnav-pill" id="subtab-btn-ide" onclick="switchAgentSubgroup('ide')">
-              <span>🚀</span> 3. ANTIGRAVITY IDE
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('hermes')">
+              <span>🤖</span> 3. HERMES
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ide')">
+              <span>🚀</span> 4. IDE
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ai-info')">
+              <span>📊</span> 5. KI-INFO
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('gemini_live')">
+              <span>📡</span> 6. SUBRAUM COMM
             </button>
           </div>
 
           <!-- UNTERGRUPPE 1: 9ROUTER COMM-LINK (AKTUELLES CHAT-TERMINAL) -->
-          <div class="agent-subview active-subview" id="agent-subview-9router">
+          <div id="agent-subview-9router">
             <div class="lcars-card lcars-chat-card" style="margin-top: 0.2rem;">
               <!-- Header-Leiste des Chat Terminals -->
               <div class="card-head" style="flex-wrap: wrap; gap: 0.6rem; border-bottom: 2px solid var(--c-primary); padding-bottom: 0.6rem; margin-bottom: 0.8rem;">
@@ -5444,9 +5615,39 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
             </div>
           </div>
+        </section>
+
+        <!-- KATEGORIE: HERMES SYSTEM-AGENTEN -->
+        <section class="lcars-section" id="section-hermes">
+          <div class="lcars-header-bar">
+            <h2>HERMES AUTONOMOUS RUNTIME // SYSTEM-AGENTEN</h2>
+            <span class="lcars-pill-tag">ODN MULTI-AGENT MATRIX</span>
+          </div>
+
+          <!-- KI BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ai')">
+              <span>🧠</span> 1. ÜBERSICHT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('9router')">
+              <span>⚡</span> 2. 9ROUTER
+            </button>
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('hermes')">
+              <span>🤖</span> 3. HERMES
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ide')">
+              <span>🚀</span> 4. IDE
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ai-info')">
+              <span>📊</span> 5. KI-INFO
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('gemini_live')">
+              <span>📡</span> 6. SUBRAUM COMM
+            </button>
+          </div>
 
           <!-- UNTERGRUPPE 2: HERMES SYSTEM-AGENTEN -->
-          <div class="agent-subview" id="agent-subview-hermes">
+          <div id="agent-subview-hermes">
             <!-- Kopfzeile mit Steuerknöpfen -->
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.2rem; margin-bottom: 0.85rem;">
               <div>
@@ -5607,9 +5808,39 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
             </div>
           </div>
+        </section>
+
+        <!-- KATEGORIE: ANTIGRAVITY IDE -->
+        <section class="lcars-section" id="section-ide">
+          <div class="lcars-header-bar">
+            <h2>GOOGLE ANTIGRAVITY // WEBBASIERTE ENTWICKLUNGSUMGEBUNG</h2>
+            <span class="lcars-pill-tag">DEVELOPMENT ENVIRONMENT</span>
+          </div>
+
+          <!-- KI BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ai')">
+              <span>🧠</span> 1. ÜBERSICHT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('9router')">
+              <span>⚡</span> 2. 9ROUTER
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('hermes')">
+              <span>🤖</span> 3. HERMES
+            </button>
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('ide')">
+              <span>🚀</span> 4. IDE
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ai-info')">
+              <span>📊</span> 5. KI-INFO
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('gemini_live')">
+              <span>📡</span> 6. SUBRAUM COMM
+            </button>
+          </div>
 
           <!-- UNTERGRUPPE 3: ANTIGRAVITY IDE (ENTWICKLUNGSUMGEBUNG) -->
-          <div class="agent-subview" id="agent-subview-ide">
+          <div id="agent-subview-ide">
             <div class="ide-hero-card">
               <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
                 <div>
@@ -5697,11 +5928,33 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
-        <!-- KATEGORIE 4: KI-INFO (9ROUTER TELEMETRIE, AGENTEN-STATISTIKEN & ARCHIV) -->
+        <!-- KATEGORIE: KI-INFO (9ROUTER TELEMETRIE, AGENTEN-STATISTIKEN & ARCHIV) -->
         <section class="lcars-section" id="section-ai-info">
           <div class="lcars-header-bar">
             <h2>KI-INFO // 9ROUTER & NEURAL-STATISTIKEN</h2>
             <span class="lcars-pill-tag">ODN TELEMETRIE // 9ROUTER PROXY</span>
+          </div>
+
+          <!-- KI BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ai')">
+              <span>🧠</span> 1. ÜBERSICHT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('9router')">
+              <span>⚡</span> 2. 9ROUTER
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('hermes')">
+              <span>🤖</span> 3. HERMES
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ide')">
+              <span>🚀</span> 4. IDE
+            </button>
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('ai-info')">
+              <span>📊</span> 5. KI-INFO
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('gemini_live')">
+              <span>📡</span> 6. SUBRAUM COMM
+            </button>
           </div>
 
           <!-- 9ROUTER HAUPT-METRIKEN (DATA TILES) -->
@@ -6203,8 +6456,44 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                       </div>
                     </label>
 
-                    <!-- KI-AGENTEN -->
+                    <!-- KI BEREICH GESAMT -->
+                    <label class="perm-checkbox-card" style="border-color:var(--c-secondary);">
+                      <input type="checkbox" id="permLock_ai" value="ai" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name" style="color:var(--c-secondary);">KI BEREICH</span>
+                        <span class="perm-desc">Künstliche Intelligenz Gesamt</span>
+                      </div>
+                    </label>
+
+                    <!-- 9ROUTER -->
                     <label class="perm-checkbox-card">
+                      <input type="checkbox" id="permLock_9router" value="9router" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name">9ROUTER</span>
+                        <span class="perm-desc">9Router Comm-Link Chat</span>
+                      </div>
+                    </label>
+
+                    <!-- HERMES -->
+                    <label class="perm-checkbox-card">
+                      <input type="checkbox" id="permLock_hermes" value="hermes" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name">HERMES</span>
+                        <span class="perm-desc">Hermes System-Agenten</span>
+                      </div>
+                    </label>
+
+                    <!-- ANTIGRAVITY IDE -->
+                    <label class="perm-checkbox-card">
+                      <input type="checkbox" id="permLock_ide" value="ide" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name">ANTIGRAVITY IDE</span>
+                        <span class="perm-desc">Webbasierte Entwicklung</span>
+                      </div>
+                    </label>
+
+                    <!-- KI-AGENTEN (LEGACY) -->
+                    <label class="perm-checkbox-card" style="display:none;">
                       <input type="checkbox" id="permLock_agents" value="agents" class="perm-lock-cb">
                       <div class="perm-card-info">
                         <span class="perm-name">KI-AGENTEN</span>
@@ -8175,6 +8464,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </div>
           </div>
 
+          <!-- KI BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem; margin-bottom: 1rem;">
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ai')">
+              <span>🧠</span> 1. ÜBERSICHT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('9router')">
+              <span>⚡</span> 2. 9ROUTER
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('hermes')">
+              <span>🤖</span> 3. HERMES
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ide')">
+              <span>🚀</span> 4. IDE
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('ai-info')">
+              <span>📊</span> 5. KI-INFO
+            </button>
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('gemini_live')">
+              <span>📡</span> 6. SUBRAUM COMM
+            </button>
+          </div>
+
           <!-- GATE VIEW (GESPERRT DURCH COMMAND CODE) -->
           <div id="geminiLiveGateView" class="lcars-card" style="text-align: center; padding: 3rem 1.5rem; display: none; border-top: 4px solid var(--c-secondary);">
             <div style="font-size: 2.5rem; margin-bottom: 1rem;">🔒</div>
@@ -9518,6 +9829,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   const CATEGORY_NAMES = {
     'system': 'SYSTEM & SENSOR VERLAUF',
     'services': 'SERVICES & PROZESS-SCANNER',
+    'ai': 'LCARS KÜNSTLICHE INTELLIGENZ // BEREICHSÜBERSICHT',
+    '9router': '9ROUTER COMM-LINK // SUBRAUM CHAT',
+    'hermes': 'HERMES AUTONOMOUS RUNTIME // SYSTEM-AGENTEN',
+    'ide': 'GOOGLE ANTIGRAVITY // ENTWICKLUNGSUMGEBUNG',
     'agents': 'LCARS SUBRAUM COMM-LINK // KI-AGENTEN',
     'ai-info': 'KI-INFO // 9ROUTER & NEURAL TELEMETRIE',
     'config': 'SYSTEM CONFIG & FARBMODI',
@@ -9530,6 +9845,59 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     'gemini_live': 'LCARS SUBRAUM COMM // CACTUS NEEDLE 3',
     'devteam': 'DEV-TEAM // KANBAN WORKFLOW ENGINE'
   };
+
+  let aiNavExpanded = false;
+
+  function toggleAiNav(forceState = null) {
+    aiNavExpanded = (forceState !== null) ? forceState : !aiNavExpanded;
+    const subpillar = document.getElementById('ai-subpillar');
+    const icon = document.getElementById('aiFoldIcon');
+    if (subpillar) {
+      subpillar.style.display = aiNavExpanded ? 'flex' : 'none';
+    }
+    if (icon) {
+      icon.textContent = aiNavExpanded ? '▼' : '▶';
+    }
+  }
+
+  function handleAiPillClick() {
+    if (currentCategory === 'ai') {
+      toggleAiNav();
+    } else {
+      toggleAiNav(true);
+      switchCategory('ai');
+    }
+  }
+
+  async function initAiOverview() {
+    try {
+      const resp = await fetch('/api/status');
+      if (resp.ok) {
+        const d = await resp.json();
+        const nr = d.nine_router;
+        const reqEl = document.getElementById('aiOverviewRequests');
+        const stEl = document.getElementById('aiOverviewStatus');
+        if (nr) {
+          if (reqEl && nr.totals) reqEl.textContent = nr.totals.requests !== undefined ? nr.totals.requests : 0;
+          if (stEl) stEl.textContent = (nr.status || 'ONLINE').toUpperCase();
+        }
+      }
+    } catch (e) {
+      console.warn('AI Overview status error:', e);
+    }
+    try {
+      const resp = await fetch('/api/hermes/profiles');
+      if (resp.ok) {
+        const d = await resp.json();
+        const countEl = document.getElementById('aiHermesCount');
+        if (countEl && d.profiles) {
+          countEl.textContent = d.profiles.length + ' Profile aktiv';
+        }
+      }
+    } catch (e) {
+      console.warn('AI Overview hermes error:', e);
+    }
+  }
 
   let personalNavExpanded = false;
 
@@ -9654,6 +10022,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function switchCategory(catId, skipHistory = false) {
+    if (catId === 'agents') {
+      catId = '9router';
+    }
+
     if (typeof isCategoryLocked === 'function' && isCategoryLocked(catId)) {
       pendingUnlockCategory = catId;
       openAuthModal();
@@ -9666,6 +10038,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     playLcarsBeep(980, 1400);
     currentCategory = catId;
+
+    const aiCategories = ['ai', '9router', 'hermes', 'ide', 'agents', 'ai-info', 'gemini_live'];
+    const aiBtn = document.getElementById('btn-cat-ai');
+    if (aiCategories.includes(catId)) {
+      toggleAiNav(true);
+      if (aiBtn) {
+        if (catId === 'ai') {
+          aiBtn.classList.add('active');
+          aiBtn.classList.remove('active-parent');
+        } else {
+          aiBtn.classList.remove('active');
+          aiBtn.classList.add('active-parent');
+        }
+      }
+    } else {
+      toggleAiNav(false);
+      if (aiBtn) {
+        aiBtn.classList.remove('active', 'active-parent');
+      }
+    }
 
     const personalCategories = ['personal', 'fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast'];
     const personalBtn = document.getElementById('btn-cat-personal');
@@ -9726,19 +10118,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         updateServicesCards(latestDiscoveredServers);
       }
     }
-    if (catId === 'agents') {
+    if (catId === 'ai') {
       setTimeout(() => {
-        if (activeAgentSubgroup === '9router') {
-          loadChatModels();
-          const inp = document.getElementById('lcarsChatInput');
-          if (inp) inp.focus();
-        } else if (activeAgentSubgroup === 'hermes') {
-          loadHermesProfiles();
-          const inp = document.getElementById('hermesChatInput');
-          if (inp) inp.focus();
-        } else if (activeAgentSubgroup === 'ide') {
-          loadIdeConfig();
-        }
+        initAiOverview();
+      }, 60);
+    }
+    if (catId === '9router') {
+      activeAgentSubgroup = '9router';
+      setTimeout(() => {
+        loadChatModels();
+        const inp = document.getElementById('lcarsChatInput');
+        if (inp) inp.focus();
+      }, 60);
+    }
+    if (catId === 'hermes') {
+      activeAgentSubgroup = 'hermes';
+      setTimeout(() => {
+        loadHermesProfiles();
+        const inp = document.getElementById('hermesChatInput');
+        if (inp) inp.focus();
+      }, 60);
+    }
+    if (catId === 'ide') {
+      activeAgentSubgroup = 'ide';
+      setTimeout(() => {
+        loadIdeConfig();
       }, 60);
     }
     if (catId === 'ai-info') {
@@ -12889,8 +13293,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       provListEl.textContent = nrData.connections.map(c => (c.provider ? c.provider.toUpperCase() : '')).join(' • ');
     }
 
-    // Only do heavy DOM table/list updates and chart updates if 'ai-info' or 'agents' is visible
-    if (currentCategory !== 'ai-info' && currentCategory !== 'agents') {
+    // Only do heavy DOM table/list updates and chart updates if 'ai-info', 'ai', '9router', 'hermes' or 'agents' is visible
+    if (currentCategory !== 'ai-info' && currentCategory !== 'agents' && currentCategory !== '9router' && currentCategory !== 'hermes' && currentCategory !== 'ide' && currentCategory !== 'ai') {
       return;
     }
 
@@ -14165,14 +14569,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     // 9. Weiterleitung an KI-Agenten (Hermes oder 9Router)
     if (activeAgentSubgroup === 'hermes') {
-      switchCategory('agents');
+      switchCategory('hermes');
       const inp = document.getElementById('hermesChatInput');
       if (inp) {
         inp.value = cleanText;
         await handleHermesChatSubmit(null, true);
       }
     } else {
-      switchCategory('agents');
+      switchCategory('9router');
       const inp = document.getElementById('lcarsChatInput');
       if (inp) {
         inp.value = cleanText;
@@ -14253,28 +14657,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   function switchAgentSubgroup(subgroup) {
     playLcarsBeep(1100, 1600);
     activeAgentSubgroup = subgroup;
-
-    // Subnav Pills
-    document.querySelectorAll('.lcars-subnav-pill').forEach(btn => btn.classList.remove('active'));
-    const activeBtn = document.getElementById('subtab-btn-' + subgroup);
-    if (activeBtn) activeBtn.classList.add('active');
-
-    // Views
-    document.querySelectorAll('.agent-subview').forEach(view => view.classList.remove('active-subview'));
-    const activeView = document.getElementById('agent-subview-' + subgroup);
-    if (activeView) activeView.classList.add('active-subview');
-
-    if (subgroup === '9router') {
-      loadChatModels();
-      const inp = document.getElementById('lcarsChatInput');
-      if (inp) inp.focus();
-    } else if (subgroup === 'hermes') {
-      loadHermesProfiles();
-      const inp = document.getElementById('hermesChatInput');
-      if (inp) inp.focus();
-    } else if (subgroup === 'ide') {
-      loadIdeConfig();
-    }
+    switchCategory(subgroup);
   }
 
   // --- HERMES AGENTEN VERWALTUNG & CHAT ---
@@ -14745,11 +15128,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function applyPermissionsVisibility() {
     const isUnlocked = (sessionStorage.getItem('lcars_auth_unlocked') === 'true');
-    const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'personal', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'devteam'];
+    const allSections = ['system', 'services', 'ai', '9router', 'hermes', 'ide', 'agents', 'ai-info', 'config', 'fantasy', 'personal', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'devteam'];
 
     allSections.forEach(secId => {
       const btn = document.getElementById('btn-cat-' + secId);
       if (!btn) return;
+
+      if (secId === 'agents') {
+        btn.style.display = 'none';
+        return;
+      }
 
       const isLocked = currentLockedSections.includes(secId);
       if (isLocked && !isUnlocked) {
@@ -14803,7 +15191,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (icon) icon.textContent = '🔓';
 
       // Check the checkboxes for currentLockedSections
-      const allSections = ['system', 'services', 'agents', 'ai-info', 'config', 'fantasy', 'personal', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'devteam'];
+      const allSections = ['system', 'services', 'ai', '9router', 'hermes', 'ide', 'agents', 'ai-info', 'config', 'fantasy', 'personal', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'devteam'];
       allSections.forEach(secId => {
         const cb = document.getElementById('permLock_' + secId);
         if (cb) {
@@ -18160,7 +18548,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const map = {
       'system': 'system', 'hardware': 'system', 'terminal': 'system', 'sensor': 'system', 'sensoren': 'system', 'cpu': 'system', 'ram': 'system', 'agy-pi': 'system', 'agypi': 'system',
       'services': 'services', 'service': 'services', 'prozesse': 'services', 'scanner': 'services', 'prozess-scanner': 'services', 'server': 'services', 'dienste': 'services',
-      'agents': 'agents', 'agenten': 'agents', 'chat': 'agents', '9router': 'agents', 'hermes': 'agents', 'ki-agenten': 'agents', 'ki agenten': 'agents',
+      'ai': 'ai', 'ki': 'ai', 'ki-bereich': 'ai', 'ki bereich': 'ai', 'künstliche intelligenz': 'ai', 'kuenstliche intelligenz': 'ai', 'ki themen': 'ai', 'ai themen': 'ai',
+      '9router': '9router', '9 router': '9router', 'router': '9router', '9router comm': '9router', 'router comm': '9router',
+      'hermes': 'hermes', 'hermes agenten': 'hermes', 'system-agenten': 'hermes', 'system agenten': 'hermes',
+      'ide': 'ide', 'antigravity': 'ide', 'antigravity ide': 'ide', 'entwicklungsumgebung': 'ide',
+      'agents': '9router', 'agenten': '9router', 'chat': '9router', 'ki-agenten': 'ai', 'ki agenten': 'ai',
       'ai-info': 'ai-info', 'ai_info': 'ai-info', 'ki-info': 'ai-info', 'ki_info': 'ai-info', 'telemetrie': 'ai-info', 'neural': 'ai-info',
       'config': 'config', 'konfiguration': 'config', 'einstellungen': 'config', 'settings': 'config', 'farbmodi': 'config', 'farbmodus': 'config', 'theme': 'config',
       'fantasy': 'fantasy', 'espn': 'fantasy', 'football': 'fantasy', 'incomplete pass': 'fantasy',
@@ -18180,6 +18572,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (typeof fetchLiveStats === 'function') fetchLiveStats(false);
     if (currentCategory === 'system') {
       if (typeof initHistoryChart === 'function') initHistoryChart();
+    } else if (currentCategory === 'ai') {
+      if (typeof initAiOverview === 'function') initAiOverview();
     } else if (currentCategory === 'personal') {
       if (typeof initPersonalOverview === 'function') initPersonalOverview();
     } else if (currentCategory === 'fantasy') {
@@ -20459,7 +20853,7 @@ if USE_FLASK:
                 "properties": {
                     "target": {
                         "type": "string",
-                        "description": "Zielkategorie (system, services, agents, ai-info, config, fantasy, solar, homeassistant, cycle, pulsecast, gemini_live, devteam)"
+                        "description": "Zielkategorie (system, services, ai, 9router, hermes, ide, agents, ai-info, config, fantasy, personal, solar, homeassistant, cycle, pulsecast, gemini_live, devteam)"
                     }
                 },
                 "required": ["target"]
@@ -20500,6 +20894,10 @@ if USE_FLASK:
     CATEGORY_NAMES_MAP = {
         "system": "SYSTEM & SENSOR VERLAUF",
         "services": "SERVICES & PROZESS-SCANNER",
+        "ai": "LCARS KÜNSTLICHE INTELLIGENZ // BEREICHSÜBERSICHT",
+        "9router": "9ROUTER COMM-LINK // SUBRAUM CHAT",
+        "hermes": "HERMES AUTONOMOUS RUNTIME // SYSTEM-AGENTEN",
+        "ide": "GOOGLE ANTIGRAVITY // ENTWICKLUNGSUMGEBUNG",
         "agents": "LCARS SUBRAUM COMM-LINK // KI-AGENTEN",
         "ai-info": "KI-INFO // 9ROUTER & NEURAL TELEMETRIE",
         "config": "SYSTEM CONFIG & FARBMODI",
@@ -20516,7 +20914,11 @@ if USE_FLASK:
     SECTION_SYNONYMS = {
         "system": ["system", "systeme", "sensor", "sensoren", "sensor verlauf", "hardware", "cpu", "ram", "terminal 47", "terminal", "agy-pi", "agypi", "pi"],
         "services": ["services", "service", "prozesse", "prozess", "scanner", "prozess-scanner", "dienste", "ports", "server", "webserver"],
-        "agents": ["agents", "agenten", "ki agenten", "ki-agenten", "subraum comm-link", "chat", "9router", "hermes", "assistent", "bot", "ai agents"],
+        "ai": ["ai", "ki", "ki bereich", "ki-bereich", "künstliche intelligenz", "kuenstliche intelligenz", "ki übersicht", "ki uebersicht", "ai themen", "ki themen", "ai bereich", "ki gruppe"],
+        "9router": ["9router", "9 router", "router comm", "9router comm", "9router chat", "chat", "router chat", "9router comm-link"],
+        "hermes": ["hermes", "hermes agenten", "hermes runtime", "system-agenten", "system agenten", "hermes profile"],
+        "ide": ["ide", "antigravity", "antigravity ide", "entwicklerumgebung", "entwicklungsumgebung", "cloud ide", "coding ide", "google antigravity"],
+        "agents": ["agents", "agenten", "ki agenten", "ki-agenten", "subraum comm-link", "assistent", "bot", "ai agents"],
         "ai-info": ["ai-info", "ai_info", "ai info", "ki-info", "ki_info", "ki info", "neural telemetrie", "telemetrie", "benchmarks", "neural", "router telemetrie"],
         "config": ["config", "konfiguration", "einstellungen", "farbmodi", "farbmodus", "settings", "theme", "farben", "lcars farben"],
         "fantasy": ["fantasy", "espn", "espn fantasy", "football", "incomplete pass", "fantasy football", "liga"],

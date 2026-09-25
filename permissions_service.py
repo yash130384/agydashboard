@@ -15,6 +15,10 @@ DEFAULT_LOCKED_SECTIONS = ["cycle", "pulsecast", "gemini_live", "devteam"]
 VALID_SECTIONS = [
     "system",
     "services",
+    "ai",
+    "9router",
+    "hermes",
+    "ide",
     "agents",
     "ai-info",
     "config",

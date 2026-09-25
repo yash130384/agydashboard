@@ -36,6 +36,12 @@ class TestCactusUiNavigation(unittest.TestCase):
             ("Gehe zu Fantasy", "fantasy"),
             ("Gehe zu Persönlich", "personal"),
             ("Öffne persönlichen Bereich", "personal"),
+            ("Gehe zu KI", "ai"),
+            ("Gehe zu 9Router", "9router"),
+            ("Gehe zu Hermes", "hermes"),
+            ("Gehe zu Antigravity", "ide"),
+            ("Gehe zu KI Info", "ai-info"),
+            ("Gehe zu Subraum Comm", "gemini_live"),
         ]
         for prompt, expected_sec in prompts:
             with self.subTest(prompt=prompt):
