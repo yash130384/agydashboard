@@ -441,6 +441,72 @@ def get_disk_metrics():
         return {"percent": 0.0, "used_gb": 0.0, "total_gb": 0.0, "free_gb": 0.0}
 
 
+def get_hardware_model():
+    """Ermittelt das genaue Hardware-Modell / Systembezeichnung (z.B. Raspberry Pi 4B, ThinkCentre M720q)."""
+    # 1. Device Tree (ARM / Raspberry Pi)
+    for dt_path in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
+        if os.path.exists(dt_path):
+            try:
+                with open(dt_path, "r", errors="ignore") as f:
+                    val = f.read().strip("\x00 \n\r\t")
+                    if val:
+                        return val
+            except Exception:
+                pass
+
+    # 2. DMI / Sysfs (x86_64 PCs, Desktops, Laptops, Server)
+    sys_vendor = ""
+    if os.path.exists("/sys/class/dmi/id/sys_vendor"):
+        try:
+            with open("/sys/class/dmi/id/sys_vendor", "r", errors="ignore") as f:
+                sys_vendor = f.read().strip()
+        except Exception:
+            pass
+
+    for p in ("/sys/class/dmi/id/product_version", "/sys/class/dmi/id/product_family", "/sys/class/dmi/id/product_name", "/sys/class/dmi/id/board_name"):
+        if os.path.exists(p):
+            try:
+                with open(p, "r", errors="ignore") as f:
+                    val = f.read().strip()
+                    if val and val.lower() not in ("none", "system product name", "to be filled by o.e.m.", "default string", "type2 - board version"):
+                        if sys_vendor and sys_vendor.lower() not in val.lower() and sys_vendor.lower() not in ("system manufacturer", "to be filled by o.e.m."):
+                            return f"{sys_vendor} {val}"
+                        return val
+            except Exception:
+                pass
+
+    # 3. Fallback: OS-Name / Platform Machine
+    return f"{platform.system()} {platform.machine()}"
+
+
+def get_system_elbow_label(ram_total_gb=None):
+    """Generiert die kurze, prägnante LCARS-Systembezeichnung für den linken Rahmen-Elbow (z.B. 'M720Q // 8G' oder 'PI-4B // 8G')."""
+    model = get_hardware_model()
+    if "raspberry pi" in model.lower():
+        m = re.search(r"Raspberry Pi (\d+)(?:\s+Model\s+([A-Za-z0-9]+))?", model, re.I)
+        if m:
+            num = m.group(1)
+            letter = m.group(2) or ""
+            short = f"PI-{num}{letter}"
+        else:
+            short = "RASPBERRY-PI"
+    elif "thinkcentre" in model.lower():
+        m = re.search(r"M\d+[a-z]?", model, re.I)
+        if m:
+            short = m.group(0).upper()
+        else:
+            short = "THINKCENTRE"
+    else:
+        parts = model.split()
+        if len(parts) >= 2 and len(parts[0]) + len(parts[1]) <= 12:
+            short = f"{parts[0]} {parts[1]}".upper()
+        else:
+            short = (parts[-1] if parts else platform.machine()).upper()
+
+    ram_str = f" // {round(ram_total_gb)}G" if (ram_total_gb and ram_total_gb > 0) else ""
+    return f"{short}{ram_str}"
+
+
 _lan_ip_cache = None
 _lan_ip_cache_ts = 0
 _lan_ip_lock = threading.Lock()
@@ -1880,9 +1946,16 @@ def get_9router_stats(cache_ttl=10.0):
 # Gesamt-System-Stats Sammler
 # ---------------------------------------------------------------------------
 def get_system_stats(include_history=False):
-    stats = {
+    ram_metrics = get_ram_metrics()
+    total_ram_gb = ram_metrics.get("total_gb", 0)
+    hw_model = get_hardware_model()
+    elbow_label = get_system_elbow_label(total_ram_gb)
+
+    stats: dict = {
         "hostname": socket.gethostname(),
         "platform": f"{platform.system()} {platform.release()} ({platform.machine()})",
+        "system_model": hw_model,
+        "system_label": elbow_label,
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -1908,7 +1981,7 @@ def get_system_stats(include_history=False):
             stats["cpu"] = {"percent": 0.0, "cores": os.cpu_count() or 1}
 
     # RAM & Disk
-    stats["ram"] = get_ram_metrics()
+    stats["ram"] = ram_metrics
     stats["disk"] = get_disk_metrics()
 
     # CPU Temperatur
@@ -3254,6 +3327,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .pill-info  { background-color: var(--c-butterscotch); }
     .pill-cfg   { background-color: var(--c-gold); }
     .pill-fantasy { background-color: var(--c-almond); }
+    .pill-personal { background-color: var(--c-gold); color: #000; font-weight: 700; border-left: 6px solid var(--c-butterscotch); }
+    .pill-personal.active-parent { background-color: var(--c-gold) !important; color: #000 !important; border-left: 6px solid var(--c-primary) !important; box-shadow: inset 0 0 12px rgba(235, 148, 58, 0.45); }
+    .nav-personal-group { display: flex; flex-direction: column; width: 100%; }
+    .nav-personal-subpillar { display: flex; flex-direction: column; gap: 3px; padding: 4px 0 4px 6px; background: rgba(0, 0, 0, 0.45); border-left: 3px solid var(--c-gold); }
+    .lcars-sub-pill { height: 38px !important; font-size: 0.95rem !important; padding: 0.25rem 0.6rem !important; }
     .pill-solar { background-color: var(--c-gold); color: #000; }
     .pill-ha { background-color: var(--c-secondary); }
     .pill-cycle { background-color: var(--c-secondary); color: #000; }
@@ -4887,7 +4965,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <!-- OBERER RAHMEN -->
   <div class="wrap">
     <div class="left-frame-top">
-      <button onclick="playLcarsBeep(880, 1760); switchCategory('system')" title="Terminal 47 // Klicken für System-Details">TERMINAL 47<br><span style="font-size:0.8rem; opacity:0.85;">AGY-PI</span></button>
+      <button onclick="playLcarsBeep(880, 1760); switchCategory('system')" title="Terminal 47 // Klicken für System-Details">TERMINAL 47<br><span style="font-size:0.8rem; opacity:0.85;" id="topTerminalHost">{{ stats.hostname.upper() }}</span></button>
       <div style="font-size: 0.8rem; font-family: var(--mono-family);">ONLINE</div>
     </div>
     <div class="right-frame-top">
@@ -4973,18 +5051,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="lcars-pill-btn pill-fantasy" onclick="switchCategory('fantasy')" id="btn-cat-fantasy">
           FANTASY
         </button>
-        <button class="lcars-pill-btn pill-solar" onclick="switchCategory('solar')" id="btn-cat-solar">
-          SOLAR
-        </button>
-        <button class="lcars-pill-btn pill-ha" onclick="switchCategory('homeassistant')" id="btn-cat-homeassistant" style="display: none;">
-          ASSISTANT
-        </button>
-        <button class="lcars-pill-btn pill-cycle" onclick="switchCategory('cycle')" id="btn-cat-cycle" style="display: none;">
-          ZYKLUS
-        </button>
-        <button class="lcars-pill-btn pill-pulsecast" onclick="switchCategory('pulsecast')" id="btn-cat-pulsecast" style="display: none;">
-          PULSECAST
-        </button>
+        <!-- PERSÖNLICHER BEREICH -->
+        <div class="nav-personal-group" id="nav-personal-group">
+          <button class="lcars-pill-btn pill-personal" onclick="handlePersonalPillClick()" id="btn-cat-personal">
+            <span id="personalFoldIcon" style="font-size:0.75rem; margin-right:0.35rem; transition:transform 0.2s;">▶</span> PERSÖNLICH
+          </button>
+          <div class="nav-personal-subpillar" id="personal-subpillar" style="display: none;">
+            <button class="lcars-pill-btn lcars-sub-pill pill-solar" onclick="switchCategory('solar')" id="btn-cat-solar">
+              SOLAR
+            </button>
+            <button class="lcars-pill-btn lcars-sub-pill pill-ha" onclick="switchCategory('homeassistant')" id="btn-cat-homeassistant" style="display: none;">
+              ASSISTANT
+            </button>
+            <button class="lcars-pill-btn lcars-sub-pill pill-cycle" onclick="switchCategory('cycle')" id="btn-cat-cycle" style="display: none;">
+              ZYKLUS
+            </button>
+            <button class="lcars-pill-btn lcars-sub-pill pill-pulsecast" onclick="switchCategory('pulsecast')" id="btn-cat-pulsecast" style="display: none;">
+              PULSECAST
+            </button>
+          </div>
+        </div>
         <button class="lcars-pill-btn pill-gemini-live" onclick="switchCategory('gemini_live')" id="btn-cat-gemini_live" style="display: none;">
           SUBRAUM COMM
         </button>
@@ -5008,7 +5094,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <span>⟳</span> <span>REFRESH</span>
         </button>
         <div class="left-elbow-bottom">
-          <span>PI-4B // 8G</span>
+          <span id="sysElbowLabel">{{ stats.system_label }}</span>
         </div>
       </div>
     </div>
@@ -5139,6 +5225,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
               <div style="font-size: 1.15rem; color:#fff; margin-bottom: 0.25rem;">{{ stats.hostname }}</div>
               <div class="card-metric-sub">{{ stats.platform }}</div>
+              <div class="card-metric-sub">SYSTEM: <span id="sysHardwareModel">{{ stats.system_model }}</span></div>
               <div class="card-metric-sub">LAN IP: <span id="sysLanIp">{{ stats.lan_ip or '192.168.31.210' }}</span></div>
             </div>
           </div>
@@ -5367,7 +5454,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                   HERMES AUTONOMOUS RUNTIME // SYSTEM-AGENTEN
                 </span>
                 <div style="font-family: var(--mono-family); font-size: 0.78rem; color: #888; margin-top: 2px;">
-                  Installiert unter ~/.hermes // Autonomes Multi-Agent Framework auf dem Raspberry Pi
+                  Installiert unter ~/.hermes // Autonomes Multi-Agent Framework auf {{ stats.system_model or stats.hostname }}
                 </div>
               </div>
               <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
@@ -6808,6 +6895,124 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
         </section>
 
+        <!-- PERSÖNLICHER BEREICH // ÜBERSICHT -->
+        <section class="lcars-section" id="section-personal">
+          <div class="lcars-header-bar">
+            <h2>LCARS PERSÖNLICHER BEREICH // KONTROLLZENTRUM</h2>
+            <span class="lcars-pill-tag" style="background-color: var(--c-gold); color: #000;">PERSONAL OPERATIONS</span>
+          </div>
+
+          <!-- PERSÖNLICHER BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('personal')">
+              <span>📊</span> 1. ÜBERSICHT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('solar')">
+              <span>☀️</span> 2. SOLAR
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('homeassistant')">
+              <span>💡</span> 3. ASSISTANT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('cycle')">
+              <span>🌸</span> 4. ZYKLUS
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('pulsecast')">
+              <span>🎬</span> 5. PULSECAST
+            </button>
+          </div>
+
+          <!-- OVERVIEW GRID -->
+          <div class="personal-overview-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; margin-top: 1rem;">
+            <!-- SOLAR CARD -->
+            <div class="lcars-card" style="border-color: var(--c-gold);">
+              <div class="card-head" style="border-bottom: 2px solid var(--c-gold); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <span class="card-head-title" style="color: var(--c-gold);">☀️ BALKONSOLAR</span>
+                <button class="left-action-btn" onclick="switchCategory('solar')" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; border-color: var(--c-gold); color: var(--c-gold);">ÖFFNEN ▶</button>
+              </div>
+              <div style="padding: 0.8rem 0; display: flex; flex-direction: column; gap: 0.6rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">PV Live-Erzeugung:</span>
+                  <span id="personalSolarPv" style="color: var(--c-gold); font-size: 1.3rem; font-weight: 700;">-- W</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Akkustand Speicher:</span>
+                  <span id="personalSolarBat" style="color: var(--c-secondary); font-size: 1.1rem; font-weight: 700;">-- %</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Haus-Gesamtbedarf:</span>
+                  <span id="personalSolarHouse" style="color: var(--c-blue); font-size: 1.1rem; font-weight: 700;">-- W</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- HOME ASSISTANT CARD -->
+            <div class="lcars-card" style="border-color: var(--c-secondary);">
+              <div class="card-head" style="border-bottom: 2px solid var(--c-secondary); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <span class="card-head-title" style="color: var(--c-secondary);">💡 HOME ASSISTANT</span>
+                <button class="left-action-btn" onclick="switchCategory('homeassistant')" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; border-color: var(--c-secondary); color: var(--c-secondary);">ÖFFNEN ▶</button>
+              </div>
+              <div style="padding: 0.8rem 0; display: flex; flex-direction: column; gap: 0.6rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Status:</span>
+                  <span id="personalHaStatus" style="color: #44dd88; font-size: 1.0rem; font-weight: 700;">BEREIT</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Instanz:</span>
+                  <span id="personalHaEntities" style="color: var(--c-text); font-size: 1.0rem; font-weight: 700;">Assistant</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Lichtsteuerung:</span>
+                  <span style="font-size: 0.85rem; color: #888;">16 Lichter &amp; Automationen</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- ZYKLUS TRACKER CARD -->
+            <div class="lcars-card" style="border-color: var(--c-secondary);">
+              <div class="card-head" style="border-bottom: 2px solid var(--c-secondary); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <span class="card-head-title" style="color: var(--c-secondary);">🌸 PARTNERINNEN-ZYKLUS</span>
+                <button class="left-action-btn" onclick="switchCategory('cycle')" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; border-color: var(--c-secondary); color: var(--c-secondary);">ÖFFNEN ▶</button>
+              </div>
+              <div style="padding: 0.8rem 0; display: flex; flex-direction: column; gap: 0.6rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Partnerin:</span>
+                  <span id="personalCyclePartner" style="color: var(--c-primary); font-size: 1.0rem; font-weight: 700;">--</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Zyklustag:</span>
+                  <span id="personalCycleDay" style="color: var(--c-gold); font-size: 1.1rem; font-weight: 700;">--</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Zyklusphase:</span>
+                  <span id="personalCyclePhase" style="color: var(--c-secondary); font-size: 0.95rem; font-weight: 700;">--</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- PULSECAST CARD -->
+            <div class="lcars-card" style="border-color: var(--c-butterscotch);">
+              <div class="card-head" style="border-bottom: 2px solid var(--c-butterscotch); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <span class="card-head-title" style="color: var(--c-butterscotch);">🎬 PULSECAST</span>
+                <button class="left-action-btn" onclick="switchCategory('pulsecast')" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; border-color: var(--c-butterscotch); color: var(--c-butterscotch);">ÖFFNEN ▶</button>
+              </div>
+              <div style="padding: 0.8rem 0; display: flex; flex-direction: column; gap: 0.6rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Hub Status:</span>
+                  <span id="personalPulsecastStatus" style="color: #44dd88; font-size: 1.0rem; font-weight: 700;">BEREIT</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Downloads:</span>
+                  <span id="personalPulsecastDownloads" style="color: var(--c-butterscotch); font-size: 1.1rem; font-weight: 700;">--</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Funktionen:</span>
+                  <span style="font-size: 0.85rem; color: #888;">Mediathek, Streaming &amp; XDCC</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- KATEGORIE 7: HOME ASSISTANT HAUSSTEUERUNG -->
         <section class="lcars-section" id="section-homeassistant">
           <div class="lcars-header-bar">
@@ -6824,6 +7029,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <span>⟳</span> <span>REFRESH</span>
               </button>
             </div>
+          </div>
+
+          <!-- PERSÖNLICHER BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('personal')">
+              <span>📊</span> 1. ÜBERSICHT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('solar')">
+              <span>☀️</span> 2. SOLAR
+            </button>
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('homeassistant')">
+              <span>💡</span> 3. ASSISTANT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('cycle')">
+              <span>🌸</span> 4. ZYKLUS
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('pulsecast')">
+              <span>🎬</span> 5. PULSECAST
+            </button>
           </div>
 
           <!-- Room Filter Tabs & Domain Search Bar -->
@@ -6877,6 +7101,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <span>⟳</span> <span>REFRESH</span>
               </button>
             </div>
+          </div>
+
+          <!-- PERSÖNLICHER BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('personal')">
+              <span>📊</span> 1. ÜBERSICHT
+            </button>
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('solar')">
+              <span>☀️</span> 2. SOLAR
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('homeassistant')">
+              <span>💡</span> 3. ASSISTANT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('cycle')">
+              <span>🌸</span> 4. ZYKLUS
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('pulsecast')">
+              <span>🎬</span> 5. PULSECAST
+            </button>
           </div>
 
           <!-- LCARS EPS ENERGIEFLUSS POWER-FLOW DIAGRAMM -->
@@ -7174,6 +7417,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="lcars-pill-tag">MULTI-MONITORING 1-30 TAGE // VERGLEICHSGRAPH</span>
           </div>
 
+          <!-- PERSÖNLICHER BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('personal')">
+              <span>📊</span> 1. ÜBERSICHT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('solar')">
+              <span>☀️</span> 2. SOLAR
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('homeassistant')">
+              <span>💡</span> 3. ASSISTANT
+            </button>
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('cycle')">
+              <span>🌸</span> 4. ZYKLUS
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('pulsecast')">
+              <span>🎬</span> 5. PULSECAST
+            </button>
+          </div>
+
           <!-- Empty State (when no partners exist) -->
           <div id="cycleEmptyState" class="lcars-card" style="text-align:center; padding:3rem 1.5rem; display:none;">
             <div style="font-size:3rem; margin-bottom:0.8rem;">🧬</div>
@@ -7364,6 +7626,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <span>🔄</span> <span>AKTUALISIEREN</span>
               </button>
             </div>
+          </div>
+
+          <!-- PERSÖNLICHER BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('personal')">
+              <span>📊</span> 1. ÜBERSICHT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('solar')">
+              <span>☀️</span> 2. SOLAR
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('homeassistant')">
+              <span>💡</span> 3. ASSISTANT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('cycle')">
+              <span>🌸</span> 4. ZYKLUS
+            </button>
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('pulsecast')">
+              <span>🎬</span> 5. PULSECAST
+            </button>
           </div>
 
           <!-- Command Code Gate View (when locked & unauthorized) -->
@@ -11433,6 +11714,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     // Timestamp
     if (data.timestamp) {
       document.getElementById('footerTimestamp').textContent = data.timestamp;
+    }
+
+    // System & Hardware Label Sync
+    if (data.system_label) {
+      const el = document.getElementById('sysElbowLabel');
+      if (el) el.textContent = data.system_label;
+    }
+    if (data.system_model) {
+      const el = document.getElementById('sysHardwareModel');
+      if (el) el.textContent = data.system_model;
+    }
+    if (data.hostname) {
+      const el = document.getElementById('topTerminalHost');
+      if (el) el.textContent = String(data.hostname).toUpperCase();
     }
   }
 
@@ -17316,6 +17611,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         appendGeminiLog('computer', `[UI-AKTION] Zu Sektion '${CATEGORY_NAMES[normalizedTarget]}' gewechselt.`);
       } else {
         console.warn('Unbekannte Zielkategorie für Navigation:', target);
+        playLcarsBeep(440, 220);
+        appendGeminiLog('error', `[UI-AKTION] Unbekannte Zielkategorie '${target}'.`);
       }
       return;
     }
@@ -18476,10 +18773,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 # ---------------------------------------------------------------------------
 def render_html_fallback(stats):
     stats_json = json.dumps(stats)
-    return DASHBOARD_HTML.replace("{{ stats.hostname }}", str(stats.get("hostname", "pi"))) \
+    hostname = str(stats.get("hostname", "pi"))
+    system_label = str(stats.get("system_label", ""))
+    system_model = str(stats.get("system_model", ""))
+    return DASHBOARD_HTML.replace("{{ stats.hostname }}", hostname) \
+                         .replace("{{ stats.hostname.upper() }}", hostname.upper()) \
                          .replace("{{ stats_json | safe }}", stats_json) \
                          .replace("{{ stats.timestamp }}", str(stats.get("timestamp", ""))) \
-                         .replace("{{ stats.platform }}", str(stats.get("platform", "")))
+                         .replace("{{ stats.platform }}", str(stats.get("platform", ""))) \
+                         .replace("{{ stats.system_label }}", system_label) \
+                         .replace("{{ stats.system_model }}", system_model) \
+                         .replace("{{ stats.system_model or stats.hostname }}", system_model or hostname)
 
 
 # ---------------------------------------------------------------------------
@@ -19731,9 +20035,11 @@ if USE_FLASK:
             }
 
         # 3. Section Navigation
-        nav_prefix_regex = r"^(?:geh(?:e)?(?:\s+(?:zu|in|auf|nach))?|öffne(?:n)?|zeige(?:n)?|wechsle(?:\s+(?:zu|in|auf|nach))?|navigiere(?:\s+(?:zu|in|auf|nach))?|schalte(?:\s+(?:auf|zu|in))|springe(?:\s+(?:zu|in|auf|nach))?|open|go\s+to|show|switch\s+to|navigate\s+to|sektion|kategorie|ansicht)\s+"
+        nav_prefix_regex = r"^(?:geh(?:e)?(?:\s+(?:zu|zum|zur|in|ins|in\s+die|in\s+das|in\s+den|auf|auf\s+die|auf\s+das|nach))?|öffne(?:n)?|zeig(?:e)?(?:n)?(?:\s+mir)?|wechsel(?:n|e)?(?:\s+(?:zu|zum|zur|in|ins|in\s+die|in\s+das|in\s+den|auf|nach))?|wechsle(?:\s+(?:zu|zum|zur|in|ins|in\s+die|in\s+das|in\s+den|auf|nach))?|navigier(?:e|en)?(?:\s+(?:zu|zum|zur|in|ins|auf|nach))?|schalte(?:\s+(?:auf|zu|in))|spring(?:e|en)?(?:\s+(?:zu|zum|zur|in|ins|auf|nach))?|open|go\s+to|show(?:\s+me)?|switch\s+to|navigate\s+to|sektion|kategorie|ansicht)\s+"
+        has_nav_prefix = bool(re.search(nav_prefix_regex, p_clean))
         candidate = re.sub(nav_prefix_regex, "", p_clean).strip()
-        candidate = re.sub(r"\s+(?:anzeigen|öffnen|oeffnen|sektion|ansicht|kategorie|dashboard|menü|menu)$", "", candidate).strip()
+        candidate = re.sub(r"^(?:das|die|der|dem|den|mir|uns)\s+", "", candidate).strip()
+        candidate = re.sub(r"\s+(?:anzeigen|öffnen|oeffnen|sektion|ansicht|kategorie|dashboard|menü|menu|seite)$", "", candidate).strip()
 
         target_sec = None
         for sec_id, synonyms in SECTION_SYNONYMS.items():
@@ -19761,6 +20067,22 @@ if USE_FLASK:
                 "ui_action": {"type": "navigate", "target": target_sec, "section": target_sec, "title": title},
                 "confidence": 100.0,
                 "error": None,
+                "mode": mode
+            }
+
+        # Falls explizites Navigations-Präfix vorhanden war, aber kein Ziel passte:
+        # Nicht an NeedleAgent/Home Assistant durchreichen, sondern deterministisch ablehnen
+        if has_nav_prefix and candidate:
+            return {
+                "success": False,
+                "prompt": prompt,
+                "message": f"Sektion '{candidate}' nicht im LCARS Dashboard gefunden.",
+                "tool_call": None,
+                "action": "navigate_failed",
+                "entity_id": None,
+                "ui_action": None,
+                "confidence": 0.0,
+                "error": f"unknown_section: {candidate}",
                 "mode": mode
             }
 
@@ -19826,22 +20148,24 @@ if USE_FLASK:
         should_process = process_param.lower() in ("true", "1", "yes")
 
         lang = request.form.get("lang") or request.args.get("lang") or "de"
+        prompt_hint = request.form.get("prompt_hint") or request.args.get("prompt_hint") or "LCARS Sprachsteuerung: Gehe zu Solar, System, Services, PulseCast, Einstellungen, Home Assistant, Nächste Seite, Vorherige Seite, Zurück, Vor, Aktualisieren, Vollbild."
 
         try:
             model = get_whisper_model()
             text = ""
-            try:
-                import io
-                buf = io.BytesIO(audio_bytes)
-                segments, info = model.transcribe(buf, language=lang, beam_size=1)
-                text = " ".join([s.text for s in segments]).strip()
-            except Exception:
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix=".webm", delete=True) as tf:
-                    tf.write(audio_bytes)
-                    tf.flush()
-                    segments, info = model.transcribe(tf.name, language=lang, beam_size=1)
+            with WHISPER_LOCK:
+                try:
+                    import io
+                    buf = io.BytesIO(audio_bytes)
+                    segments, info = model.transcribe(buf, language=lang, beam_size=1, initial_prompt=prompt_hint)
                     text = " ".join([s.text for s in segments]).strip()
+                except Exception:
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".webm", delete=True) as tf:
+                        tf.write(audio_bytes)
+                        tf.flush()
+                        segments, info = model.transcribe(tf.name, language=lang, beam_size=1, initial_prompt=prompt_hint)
+                        text = " ".join([s.text for s in segments]).strip()
 
             if not text:
                 return jsonify({
