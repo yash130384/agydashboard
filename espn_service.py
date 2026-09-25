@@ -103,6 +103,14 @@ class EspnFantasyClient:
         self._mode = "manual"
         self._risk_level = 3
         self._flash_enabled = True
+        self._ai_interval_hours = 4
+        self._ai_cycle_interval = 14400
+        self._kickoff_buffer_minutes = 20
+        self._checked_slots = set()
+        self._last_interval_check_ts = 0
+        self._last_slot_check_ts = 0
+        self._pro_schedule_cache = None
+        self._pro_schedule_cache_ts = 0
         self._last_ai_usage = {
             "prompt_tokens": 950,
             "completion_tokens": 250,
@@ -112,7 +120,6 @@ class EspnFantasyClient:
         self._last_ai_check_ts = 0
         self._last_ai_action = ""
         self._last_ai_reason = ""
-        self._ai_cycle_interval = 120
         self._last_raw_roster_entries = []
         self._last_scoring_period_id = 1
 
@@ -165,6 +172,24 @@ class EspnFantasyClient:
                             self._flash_enabled = val.lower() in ("true", "1", "yes", "on")
                         else:
                             self._flash_enabled = bool(val)
+                    if "ai_check_interval_hours" in cfg:
+                        try:
+                            h = int(cfg["ai_check_interval_hours"])
+                            if h in (4, 8, 12, 24):
+                                self._ai_interval_hours = h
+                                self._ai_cycle_interval = h * 3600
+                        except (ValueError, TypeError):
+                            pass
+                    elif "ai_check_interval" in cfg:
+                        try:
+                            val = int(cfg["ai_check_interval"])
+                            if val > 0:
+                                self._ai_cycle_interval = val
+                                h = round(val / 3600)
+                                if h in (4, 8, 12, 24):
+                                    self._ai_interval_hours = h
+                        except (ValueError, TypeError):
+                            pass
                     return cfg
         except Exception as e:
             print(f"[WARN] EspnFantasyClient: Konnte config.json nicht lesen: {e}", file=sys.stderr)
@@ -270,28 +295,162 @@ class EspnFantasyClient:
             "status": "ok",
             "mode": self.get_mode(),
             "risk_level": self.get_risk_level(),
-            "flash_enabled": self.get_flash_enabled()
+            "flash_enabled": self.get_flash_enabled(),
+            "interval_hours": self.get_interval_hours(),
+            "interval_seconds": self.get_ai_interval(),
+            "slot_checks_enabled": True
         }
 
-    def update_settings(self, mode=None, risk_level=None, flash_enabled=None):
+    def update_settings(self, mode=None, risk_level=None, flash_enabled=None, interval_hours=None):
         if mode is not None:
             self.set_mode(mode)
         if risk_level is not None:
             self.set_risk_level(risk_level)
         if flash_enabled is not None:
             self.set_flash_enabled(flash_enabled)
+        if interval_hours is not None:
+            self.set_interval_hours(interval_hours)
         return self.get_settings()
 
-    def get_ai_interval(self):
-        cfg = self._load_config()
+    def get_interval_hours(self):
+        with self._mode_lock:
+            cfg = self._load_config()
+            if "ai_check_interval_hours" in cfg:
+                try:
+                    val = int(cfg["ai_check_interval_hours"])
+                    if val in (4, 8, 12, 24):
+                        return val
+                except (ValueError, TypeError):
+                    pass
+            secs = self.get_ai_interval()
+            h = round(secs / 3600)
+            return h if h in (4, 8, 12, 24) else getattr(self, "_ai_interval_hours", 4)
+
+    def set_interval_hours(self, hours):
         try:
-            return max(30, int(cfg.get("ai_check_interval", getattr(self, "_ai_cycle_interval", 120))))
+            h = int(hours)
         except (ValueError, TypeError):
-            return 120
+            raise ValueError(f"Ungültiges Prüfintervall '{hours}'. Erlaubt sind: 4, 8, 12, 24 Stunden.")
+        if h not in (4, 8, 12, 24):
+            raise ValueError(f"Ungültiges Prüfintervall '{hours}'. Erlaubt sind: 4, 8, 12, 24 Stunden.")
+        with self._mode_lock:
+            self._ai_interval_hours = h
+            self._ai_cycle_interval = h * 3600
+            success = self._save_settings_to_config({
+                "ai_check_interval_hours": h,
+                "ai_check_interval": h * 3600
+            })
+            if self._cached_data and isinstance(self._cached_data, dict):
+                self._cached_data["interval_hours"] = h
+                self._cached_data["interval_seconds"] = h * 3600
+            self.log_decision("INTERVAL_CHANGE", f"Prüfintervall geändert auf: {h} Stunden", success=success)
+            return {"success": success, "interval_hours": h, "interval_seconds": h * 3600}
+
+    def get_ai_interval(self):
+        with self._mode_lock:
+            cfg = self._load_config()
+            if "ai_check_interval_hours" in cfg:
+                try:
+                    val = int(cfg["ai_check_interval_hours"])
+                    if val in (4, 8, 12, 24):
+                        return val * 3600
+                except (ValueError, TypeError):
+                    pass
+            if "ai_check_interval" in cfg:
+                try:
+                    val = int(cfg["ai_check_interval"])
+                    if val > 0:
+                        return val
+                except (ValueError, TypeError):
+                    pass
+            return getattr(self, "_ai_cycle_interval", 14400)
+
+    def _extract_slots_from_pro_schedule(self, data, target_week=None):
+        slots = set()
+        pts = data.get("settings", {}).get("proTeams", [])
+        for pt in pts:
+            games_by_period = pt.get("proGamesByScoringPeriod", {})
+            if target_week:
+                weeks_to_check = [str(target_week), str(target_week + 1)]
+            else:
+                weeks_to_check = list(games_by_period.keys())
+            for w in weeks_to_check:
+                for g in games_by_period.get(w, []):
+                    d_ms = g.get("date", 0)
+                    if d_ms and d_ms > 0:
+                        slots.add(d_ms / 1000.0)
+        return sorted(list(slots))
+
+    def _fetch_pro_schedule_slots(self, season, target_week=None):
+        now = time.time()
+        if getattr(self, "_pro_schedule_cache", None) and (now - getattr(self, "_pro_schedule_cache_ts", 0) < 43200):
+            return self._extract_slots_from_pro_schedule(self._pro_schedule_cache, target_week)
+        url = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}?view=proTeamSchedules_wl"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                self._pro_schedule_cache = data
+                self._pro_schedule_cache_ts = now
+                return self._extract_slots_from_pro_schedule(data, target_week)
+        except Exception:
+            pass
+        return []
+
+    def _get_standard_fallback_slots(self, ref_time=None):
+        now = ref_time or time.time()
+        slots = []
+        for day_offset in range(-2, 8):
+            day_ts = now + day_offset * 86400
+            dt = datetime.fromtimestamp(day_ts)
+            weekday = dt.weekday()
+            if weekday == 4:  # Freitag 02:15 CEST (TNF)
+                slots.append(dt.replace(hour=2, minute=15, second=0, microsecond=0).timestamp())
+            elif weekday == 6:  # Sonntag 19:00, 22:05, 22:25 CEST
+                slots.append(dt.replace(hour=19, minute=0, second=0, microsecond=0).timestamp())
+                slots.append(dt.replace(hour=22, minute=5, second=0, microsecond=0).timestamp())
+                slots.append(dt.replace(hour=22, minute=25, second=0, microsecond=0).timestamp())
+            elif weekday == 0:  # Montag 02:20 CEST (SNF)
+                slots.append(dt.replace(hour=2, minute=20, second=0, microsecond=0).timestamp())
+            elif weekday == 1:  # Dienstag 02:15 CEST (MNF)
+                slots.append(dt.replace(hour=2, minute=15, second=0, microsecond=0).timestamp())
+        return sorted(list(set(slots)))
+
+    def get_upcoming_game_slots(self, week=None, ref_time=None):
+        now = ref_time or time.time()
+        cfg = self._load_config()
+        season = cfg.get("season_year", 2026)
+        slots = self._fetch_pro_schedule_slots(season, target_week=week)
+        future_slots = [ts for ts in set(slots) if ts > (now - 1200)]
+        if not future_slots and week is not None:
+            slots = self._fetch_pro_schedule_slots(season, target_week=None)
+            future_slots = [ts for ts in set(slots) if ts > (now - 1200)]
+        if not future_slots:
+            future_slots = [ts for ts in set(self._get_standard_fallback_slots(ref_time=now)) if ts > (now - 1200)]
+        return sorted(future_slots)
+
+    def _is_slot_already_checked(self, slot_ts):
+        if hasattr(self, "_checked_slots") and int(slot_ts) in self._checked_slots:
+            return True
+        try:
+            log_data = self._load_decision_log()
+            w_start = slot_ts - 1260
+            w_end = slot_ts + 60
+            for entry in log_data.get("history", []):
+                t = entry.get("timestamp", 0)
+                meta = entry.get("metadata") or {}
+                if meta.get("slot_ts") == int(slot_ts):
+                    return True
+                if w_start <= t <= w_end and ("Kickoff" in entry.get("details", "") or "KICKOFF" in str(meta.get("trigger", ""))):
+                    return True
+        except Exception:
+            pass
+        return False
 
     def get_bot_status(self):
         mode = self.get_mode()
         interval = self.get_ai_interval()
+        interval_hours = self.get_interval_hours()
         now = time.time()
         last_run = getattr(self, "_last_ai_check_ts", 0)
 
@@ -316,20 +475,73 @@ class EspnFantasyClient:
             next_run_ts = None
             next_run_in_seconds = None
             next_run_text = "Pausiert (Modus Manuell)" if mode == "manual" else "Poller inaktiv"
+            next_run_type = "none"
+            next_slot_str = None
         else:
+            # 1. Regulärer Intervall-Zielzeitpunkt
             if last_run > 0:
-                target_ts = last_run + interval
-                next_run_ts = int(target_ts)
-                next_run_in_seconds = max(0, int(target_ts - now))
+                target_interval_ts = last_run + interval
             else:
-                next_run_ts = int(now + 10)
-                next_run_in_seconds = 10
-            next_run_text = f"In {next_run_in_seconds}s" if next_run_in_seconds > 0 else "In Kürze..."
+                target_interval_ts = now + 10
+
+            # 2. Prüfe anstehende Spielslot-Checks (T-20min vor Kickoff)
+            next_slot_run = None
+            next_slot_ts = None
+            try:
+                slots = self.get_upcoming_game_slots()
+                for s_ts in slots:
+                    check_ts = s_ts - 20 * 60
+                    if not self._is_slot_already_checked(s_ts):
+                        if check_ts <= now < s_ts:
+                            next_slot_run = now
+                            next_slot_ts = s_ts
+                            break
+                        elif check_ts > now:
+                            next_slot_run = check_ts
+                            next_slot_ts = s_ts
+                            break
+            except Exception:
+                pass
+
+            # 3. Was kommt früher: Intervall oder Spielslot-Check?
+            if next_slot_run is not None and next_slot_ts is not None and next_slot_run < target_interval_ts:
+                target_ts = int(next_slot_run)
+                next_run_type = "kickoff_slot"
+                slot_dt = datetime.fromtimestamp(next_slot_ts)
+                next_slot_str = slot_dt.strftime("%a %H:%M")
+            else:
+                target_ts = int(target_interval_ts)
+                next_run_type = "interval"
+                next_slot_str = None
+
+            next_run_ts = target_ts
+            next_run_in_seconds = max(0, int(target_ts - now))
+
+            if next_run_in_seconds <= 0:
+                next_run_text = "● KI-CHECK LÄUFT..."
+            elif next_run_type == "kickoff_slot":
+                if next_run_in_seconds < 3600:
+                    mins = max(1, next_run_in_seconds // 60)
+                    next_run_text = f"In {mins}m (Kickoff {next_slot_str})"
+                else:
+                    h = next_run_in_seconds // 3600
+                    m = (next_run_in_seconds % 3600) // 60
+                    next_run_text = f"In {h}h {m}m (Kickoff {next_slot_str})"
+            else:
+                if next_run_in_seconds < 3600:
+                    mins = max(1, next_run_in_seconds // 60)
+                    next_run_text = f"In {mins}m"
+                else:
+                    h = next_run_in_seconds // 3600
+                    m = (next_run_in_seconds % 3600) // 60
+                    next_run_text = f"In {h}h {m}m"
 
         return {
             "mode": mode,
             "is_active": is_active,
+            "interval_hours": interval_hours,
             "interval_seconds": interval,
+            "slot_checks_enabled": True,
             "last_run_ts": last_run,
             "last_run_datetime": datetime.fromtimestamp(last_run).strftime("%d.%m.%Y %H:%M:%S") if last_run else "Noch kein Lauf",
             "last_action": getattr(self, "_last_ai_action", "Kader analysiert: Keine Änderungen erforderlich") if last_run else "Noch kein Lauf aufgezeichnet",
@@ -337,6 +549,8 @@ class EspnFantasyClient:
             "next_run_ts": next_run_ts,
             "next_run_in_seconds": next_run_in_seconds,
             "next_run_text": next_run_text,
+            "next_run_type": next_run_type,
+            "next_kickoff_slot": next_slot_str,
             "model": getattr(self, "_last_ai_model", "ag/gemini-3.8-flash-high via 9Router")
         }
 
@@ -533,6 +747,15 @@ class EspnFantasyClient:
     def fetch(self, force=False):
         now = time.time()
         if not force and self._cached_data and (now - self._cache_timestamp < self._cache_ttl):
+            # Dynamic runtime fields immer mit aktuellem Status aktualisieren
+            self._cached_data["mode"] = self.get_mode()
+            self._cached_data["risk_level"] = self.get_risk_level()
+            self._cached_data["flash_enabled"] = self.get_flash_enabled()
+            self._cached_data["interval_hours"] = self.get_interval_hours()
+            self._cached_data["interval_seconds"] = self.get_ai_interval()
+            self._cached_data["bot_status"] = self.get_bot_status()
+            self._cached_data["active_proposal"] = self.get_active_proposal()
+            self._cached_data["decision_history"] = self.get_decision_log(limit=40)
             return self._cached_data
 
         cfg = self._load_config()
@@ -690,6 +913,8 @@ class EspnFantasyClient:
             "mode": self.get_mode(),
             "risk_level": self.get_risk_level(),
             "flash_enabled": self.get_flash_enabled(),
+            "interval_hours": self.get_interval_hours(),
+            "interval_seconds": self.get_ai_interval(),
             "ai_stats": self.get_ai_stats(),
             "bot_status": self.get_bot_status(),
             "decision_history": self.get_decision_log(limit=40),
@@ -1220,7 +1445,7 @@ class EspnFantasyClient:
             "risk_level": risk_level
         }
 
-    def analyze_roster_with_ai(self, force=False):
+    def analyze_roster_with_ai(self, force=False, trigger_reason=None):
         """
         Analysiert das Roster via 9Router (Gemini 3.8 Flash) oder Heuristik.
         Im Modus 'semi': Erzeugt Vorschlag in espn_proposals.json und sendet Benachrichtigung.
@@ -1440,18 +1665,24 @@ class EspnFantasyClient:
         else:
             assessment = analysis_result.get("assessment") if analysis_result else None
             reason = assessment or "Kader optimal aufgestellt. Alle Starter aktiv und prognostizieren Bestleistung."
-            self._last_ai_action = "Kader analysiert: Keine Änderungen erforderlich"
+            if trigger_reason:
+                self._last_ai_action = f"Kader geprüft ({trigger_reason}): Aufstellung optimal"
+                base_details = f"Kader analysiert ({trigger_reason}): Aufstellung optimal, keine Änderungen nötig"
+            else:
+                self._last_ai_action = "Kader analysiert: Keine Änderungen erforderlich"
+                base_details = "Kader analysiert: Aufstellung optimal, keine Änderungen nötig"
             self._last_ai_reason = reason
             self.log_decision(
                 "ROSTER_CHECK",
-                "Kader analysiert: Aufstellung optimal, keine Änderungen nötig",
+                base_details,
                 success=True,
                 metadata={
                     "reason": reason,
                     "assessment": assessment,
                     "confidence": analysis_result.get("confidence") if analysis_result else 1.0,
                     "recommended_moves_count": 0,
-                    "base_details": "Kader analysiert: Aufstellung optimal, keine Änderungen nötig",
+                    "base_details": base_details,
+                    "trigger": trigger_reason or "interval",
                     "mode": mode
                 }
             )
@@ -1471,16 +1702,41 @@ class EspnFantasyClient:
         if mode == "manual":
             return
 
-        interval = self.get_ai_interval()
-        if now - self._last_ai_check_ts < interval:
-            return
-
-        self._last_ai_check_ts = now
+        # 1. Kickoff-Slot-Check (T-20min vor anstehendem Spielslot) - IMMER AKTIV
         try:
-            print(f"[INFO] EspnScorePoller: Führe KI-Manager Zyklus durch (Modus: {mode})...", flush=True)
-            self.analyze_roster_with_ai(force=False)
+            slots = self.get_upcoming_game_slots()
+            for slot_ts in slots:
+                check_ts = slot_ts - 20 * 60
+                if check_ts <= now < slot_ts:
+                    if slot_ts not in getattr(self, "_checked_slots", set()) and not self._is_slot_already_checked(slot_ts):
+                        if not hasattr(self, "_checked_slots"):
+                            self._checked_slots = set()
+                        self._checked_slots.add(int(slot_ts))
+                        self._last_ai_check_ts = now
+                        self._last_slot_check_ts = now
+                        slot_dt = datetime.fromtimestamp(slot_ts)
+                        slot_str = slot_dt.strftime("%a %H:%M")
+                        print(f"[INFO] EspnScorePoller: Kickoff-Slot Check 20min vor {slot_str} (Modus: {mode})...", flush=True)
+                        try:
+                            self.analyze_roster_with_ai(force=False, trigger_reason=f"Kickoff {slot_str}")
+                        except Exception as e:
+                            print(f"[WARN] EspnScorePoller: Fehler im Kickoff-Check: {e}", file=sys.stderr, flush=True)
+                        return
         except Exception as e:
-            print(f"[WARN] EspnScorePoller: Fehler im KI-Manager Zyklus: {e}", file=sys.stderr, flush=True)
+            print(f"[WARN] EspnScorePoller: Fehler bei Spielslot-Prüfung: {e}", file=sys.stderr, flush=True)
+
+        # 2. Regulärer Intervall-Check (4h / 8h / 12h / 24h)
+        interval = self.get_ai_interval()
+        last_interval_ts = getattr(self, "_last_interval_check_ts", 0) or getattr(self, "_last_ai_check_ts", 0)
+        if now - last_interval_ts >= interval:
+            self._last_ai_check_ts = now
+            self._last_interval_check_ts = now
+            hours = self.get_interval_hours()
+            print(f"[INFO] EspnScorePoller: Führe regulären KI-Manager Intervall-Check ({hours}h) durch...", flush=True)
+            try:
+                self.analyze_roster_with_ai(force=False, trigger_reason=f"Intervall {hours}h")
+            except Exception as e:
+                print(f"[WARN] EspnScorePoller: Fehler im KI-Manager Zyklus: {e}", file=sys.stderr, flush=True)
 
     def trigger_flash(self, entity_id=None, duration=None):
         """Triggert das Home Assistant Flash-Signal asynchron in einem separaten Thread."""

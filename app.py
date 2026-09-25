@@ -6695,6 +6695,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 </button>
               </div>
 
+              <!-- 4-STUFEN-INTERVALL-SCHALTER -->
+              <div class="fantasy-interval-selector" style="display:inline-flex; align-items:center; background:rgba(0,0,0,0.6); border:1px solid rgba(255,255,255,0.18); border-radius:14px; padding:2px; gap:2px;">
+                <span style="font-size:0.68rem; color:var(--c-blue); font-family:var(--font-family); font-weight:700; padding:0 0.35rem; letter-spacing:0.04em;">INTERVALL:</span>
+                <button type="button" id="btn-fantasy-interval-4" onclick="setFantasyInterval(4)" class="fantasy-interval-btn active" style="font-size:0.7rem; padding:0.22rem 0.5rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:var(--c-butterscotch); color:#000; transition:all 0.2s ease;" title="Prüfung alle 4 Stunden + vor Spielslots">4H</button>
+                <button type="button" id="btn-fantasy-interval-8" onclick="setFantasyInterval(8)" class="fantasy-interval-btn" style="font-size:0.7rem; padding:0.22rem 0.5rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:transparent; color:#888; transition:all 0.2s ease;" title="Prüfung alle 8 Stunden + vor Spielslots">8H</button>
+                <button type="button" id="btn-fantasy-interval-12" onclick="setFantasyInterval(12)" class="fantasy-interval-btn" style="font-size:0.7rem; padding:0.22rem 0.5rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:transparent; color:#888; transition:all 0.2s ease;" title="Prüfung alle 12 Stunden + vor Spielslots">12H</button>
+                <button type="button" id="btn-fantasy-interval-24" onclick="setFantasyInterval(24)" class="fantasy-interval-btn" style="font-size:0.7rem; padding:0.22rem 0.5rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:transparent; color:#888; transition:all 0.2s ease;" title="Prüfung alle 24 Stunden (1x täglich) + vor Spielslots">24H</button>
+              </div>
+
               <!-- 5-STUFEN-RISIKOREGLER -->
               <div class="fantasy-risk-selector" style="display:inline-flex; align-items:center; background:rgba(0,0,0,0.6); border:1px solid rgba(255,255,255,0.18); border-radius:14px; padding:2px; gap:2px;">
                 <span style="font-size:0.68rem; color:var(--c-gold); font-family:var(--font-family); font-weight:700; padding:0 0.35rem; letter-spacing:0.04em;">RISIKO:</span>
@@ -6747,6 +6756,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <span style="color:var(--c-blue); font-weight:700;">KI:</span>
               <span id="fantasyAiModelText">Gemini 3.8 Flash | ~1.2k Tokens / Run (&lt;0,03ct)</span>
             </div>
+            <div id="fantasyAiIntervalStatus" style="color:var(--c-blue); font-weight:700;">
+              INTERVALL: 4H + KICKOFF (T-20M)
+            </div>
             <div id="fantasyAiRiskStatus" style="color:var(--c-gold); font-weight:700;">
               STRATEGIE: 3: AUSGEWOGEN (STANDARD)
             </div>
@@ -6763,6 +6775,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <span style="color:#666;">|</span>
               <span style="color:#aaa;">NÄCHSTER LAUF:</span>
               <strong id="fantasyBotNextRun" style="color:#44dd88;">--</strong>
+              <span style="color:#666;">|</span>
+              <span style="color:#aaa;">SLOT-CHECKS:</span>
+              <strong id="fantasyBotSlotChecks" style="color:#44dd88;" title="Kickoff-Checks 20 Min vor jedem Spielslot sind immer aktiv">AKTIV (T-20M)</strong>
             </div>
             <div style="display:flex; align-items:center; gap:0.6rem; margin-left:auto;">
               <button type="button" id="btnFantasyRunNow" onclick="triggerFantasyBotCheck()" style="font-size:0.75rem; font-weight:700; color:#000; background:var(--c-gold); border:none; padding:0.25rem 0.75rem; border-radius:12px; cursor:pointer; font-family:var(--font-family); letter-spacing:0.04em; transition:all 0.2s ease;" title="Kader jetzt sofort durch Bot analysieren lassen">
@@ -9912,6 +9927,52 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
+  let currentFantasyInterval = 4;
+
+  function updateFantasyIntervalButtons(hours) {
+    const h = parseInt(hours, 10) || 4;
+    currentFantasyInterval = h;
+    [4, 8, 12, 24].forEach(val => {
+      const btn = document.getElementById(`btn-fantasy-interval-${val}`);
+      if (!btn) return;
+      if (val === h) {
+        btn.classList.add('active');
+        btn.style.background = 'var(--c-butterscotch, #cc9933)';
+        btn.style.color = '#000';
+        btn.style.boxShadow = '0 0 10px rgba(218,165,32,0.4)';
+      } else {
+        btn.classList.remove('active');
+        btn.style.background = 'transparent';
+        btn.style.color = '#888';
+        btn.style.boxShadow = 'none';
+      }
+    });
+    const intervalStatusEl = document.getElementById('fantasyAiIntervalStatus');
+    if (intervalStatusEl) {
+      intervalStatusEl.textContent = `INTERVALL: ${h}H + KICKOFF (T-20M)`;
+    }
+  }
+
+  window.setFantasyInterval = async function(hours) {
+    const h = parseInt(hours, 10);
+    if (![4, 8, 12, 24].includes(h)) return;
+    updateFantasyIntervalButtons(h);
+    try {
+      const resp = await fetch('/api/espn/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interval_hours: h })
+      });
+      const res = await resp.json();
+      if (res.status === 'ok' || res.interval_hours) {
+        updateFantasyIntervalButtons(res.interval_hours || h);
+        loadFantasyData(false);
+      }
+    } catch (e) {
+      console.error('Fehler beim Setzen des Fantasy-Intervalls:', e);
+    }
+  };
+
   window.setFantasyRiskLevel = async function(level) {
     const lvl = parseInt(level, 10);
     if (!lvl || lvl < 1 || lvl > 5) return;
@@ -10068,6 +10129,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let currentFantasyLog = [];
   let currentFantasyLogFilter = 'all';
   let botNextRunSeconds = null;
+  let botNextRunType = 'interval';
+  let botNextKickoffSlot = null;
 
   function updateFantasyBotStatus(status) {
     if (!status) return;
@@ -10102,6 +10165,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     } else {
       botNextRunSeconds = null;
     }
+    botNextRunType = status.next_run_type || 'interval';
+    botNextKickoffSlot = status.next_kickoff_slot || null;
     updateFantasyBotCountdownUI(status.next_run_text);
 
     if (lastActionEl) {
@@ -10116,6 +10181,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         lastReasonWrap.style.display = 'none';
       }
     }
+
+    const slotChecksEl = document.getElementById('fantasyBotSlotChecks');
+    if (slotChecksEl) {
+      if (status.mode === 'manual') {
+        slotChecksEl.textContent = 'PAUSIERT';
+        slotChecksEl.style.color = '#888';
+      } else {
+        slotChecksEl.textContent = 'AKTIV (T-20M)';
+        slotChecksEl.style.color = '#44dd88';
+      }
+    }
+
+    if (status.interval_hours) {
+      updateFantasyIntervalButtons(status.interval_hours);
+    }
   }
 
   function updateFantasyBotCountdownUI(fallbackText) {
@@ -10129,10 +10209,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         nextRunEl.textContent = '● KI-CHECK LÄUFT...';
         nextRunEl.style.color = 'var(--c-gold)';
       } else {
-        const mins = Math.floor(botNextRunSeconds / 60);
+        const hours = Math.floor(botNextRunSeconds / 3600);
+        const mins = Math.floor((botNextRunSeconds % 3600) / 60);
         const secs = botNextRunSeconds % 60;
-        const timeStr = mins > 0 ? `${mins}m ${secs < 10 ? '0' : ''}${secs}s` : `${secs}s`;
-        nextRunEl.textContent = `In ${timeStr}`;
+        let timeStr = '';
+        if (hours > 0) {
+          timeStr = `${hours}h ${mins}m`;
+        } else if (mins > 0) {
+          timeStr = `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
+        } else {
+          timeStr = `${secs}s`;
+        }
+        if (botNextRunType === 'kickoff_slot' && botNextKickoffSlot) {
+          nextRunEl.textContent = `In ${timeStr} (Kickoff ${botNextKickoffSlot})`;
+        } else {
+          nextRunEl.textContent = `In ${timeStr}`;
+        }
         nextRunEl.style.color = '#44dd88';
       }
     } else {
@@ -10179,7 +10271,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     } else if (currentFantasyLogFilter === 'checks') {
       items = items.filter(e => e.action === 'ROSTER_CHECK' || e.action === 'ROSTER_ANALYSIS_MANUAL' || e.action === 'MANUAL_CHECK_RESULT');
     } else if (currentFantasyLogFilter === 'config') {
-      items = items.filter(e => ['MODE_CHANGE', 'RISK_LEVEL_CHANGE', 'FLASH_TOGGLE'].includes(e.action));
+      items = items.filter(e => ['MODE_CHANGE', 'RISK_LEVEL_CHANGE', 'FLASH_TOGGLE', 'INTERVAL_CHANGE'].includes(e.action));
     }
 
     if (badgeCount) {
@@ -10205,7 +10297,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         typeBadge = '<span style="background:#777; color:#fff; font-size:0.7rem; font-weight:700; padding:2px 6px; border-radius:6px;">ABGELEHNT</span>';
       } else if (action === 'ROSTER_CHECK' || action === 'ROSTER_ANALYSIS_MANUAL' || action === 'MANUAL_CHECK_RESULT') {
         typeBadge = '<span style="background:var(--c-secondary); color:#000; font-size:0.7rem; font-weight:700; padding:2px 6px; border-radius:6px;">KADER-CHECK</span>';
-      } else if (action === 'MODE_CHANGE' || action === 'RISK_LEVEL_CHANGE' || action === 'FLASH_TOGGLE') {
+      } else if (action === 'MODE_CHANGE' || action === 'RISK_LEVEL_CHANGE' || action === 'FLASH_TOGGLE' || action === 'INTERVAL_CHANGE') {
         typeBadge = '<span style="background:var(--c-primary); color:#000; font-size:0.7rem; font-weight:700; padding:2px 6px; border-radius:6px;">EINSTELLUNG</span>';
       } else if (action === 'AUTO_MOVE_FAILED' || action === 'TRANSACTION_FAILED' || action === 'TRANSACTION_ERROR' || !e.success) {
         typeBadge = '<span style="background:var(--c-red); color:#fff; font-size:0.7rem; font-weight:800; padding:2px 6px; border-radius:6px;">FEHLER</span>';
@@ -10314,6 +10406,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
       if (data.risk_level !== undefined) {
         updateFantasyRiskButtons(data.risk_level);
+      }
+      if (data.interval_hours !== undefined) {
+        updateFantasyIntervalButtons(data.interval_hours);
       }
       if (data.flash_enabled !== undefined) {
         updateFantasyFlashToggle(data.flash_enabled);
@@ -19589,8 +19684,9 @@ if USE_FLASK:
             mode = data.get("mode")
             risk_level = data.get("risk_level")
             flash_enabled = data.get("flash_enabled")
+            interval_hours = data.get("interval_hours") or data.get("ai_check_interval_hours") or data.get("interval")
             try:
-                res = espn_client.update_settings(mode=mode, risk_level=risk_level, flash_enabled=flash_enabled)
+                res = espn_client.update_settings(mode=mode, risk_level=risk_level, flash_enabled=flash_enabled, interval_hours=interval_hours)
                 return jsonify(res)
             except ValueError as ve:
                 return jsonify({"status": "error", "message": str(ve)}), 400
@@ -21860,7 +21956,8 @@ else:
                         res = espn_client.update_settings(
                             mode=data.get("mode"),
                             risk_level=data.get("risk_level"),
-                            flash_enabled=data.get("flash_enabled")
+                            flash_enabled=data.get("flash_enabled"),
+                            interval_hours=data.get("interval_hours") or data.get("ai_check_interval_hours") or data.get("interval")
                         )
                         resp = json.dumps(res).encode("utf-8")
                         code = 200
