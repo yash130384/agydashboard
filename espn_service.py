@@ -110,6 +110,9 @@ class EspnFantasyClient:
         }
         self._last_ai_model = "ag/gemini-3.8-flash-high via 9Router"
         self._last_ai_check_ts = 0
+        self._last_ai_action = ""
+        self._last_ai_reason = ""
+        self._ai_cycle_interval = 120
         self._last_raw_roster_entries = []
         self._last_scoring_period_id = 1
 
@@ -279,6 +282,64 @@ class EspnFantasyClient:
             self.set_flash_enabled(flash_enabled)
         return self.get_settings()
 
+    def get_ai_interval(self):
+        cfg = self._load_config()
+        try:
+            return max(30, int(cfg.get("ai_check_interval", getattr(self, "_ai_cycle_interval", 120))))
+        except (ValueError, TypeError):
+            return 120
+
+    def get_bot_status(self):
+        mode = self.get_mode()
+        interval = self.get_ai_interval()
+        now = time.time()
+        last_run = getattr(self, "_last_ai_check_ts", 0)
+
+        # Fallback: Aus Decision-Log wiederherstellen falls nach Neustart noch 0
+        if not last_run:
+            try:
+                log_data = self._load_decision_log()
+                for entry in reversed(log_data.get("history", [])):
+                    act = entry.get("action", "")
+                    if act in ("ROSTER_CHECK", "AUTO_MOVE_EXECUTED", "TRANSACTION_EXECUTED", "PROPOSAL_CREATED"):
+                        last_run = int(entry.get("timestamp", 0))
+                        self._last_ai_check_ts = last_run
+                        self._last_ai_action = entry.get("details", "")
+                        self._last_ai_reason = (entry.get("metadata") or {}).get("reason", "")
+                        break
+            except Exception:
+                pass
+
+        is_active = (mode in ("semi", "full")) and getattr(self, "_poller_running", False)
+
+        if not is_active:
+            next_run_ts = None
+            next_run_in_seconds = None
+            next_run_text = "Pausiert (Modus Manuell)" if mode == "manual" else "Poller inaktiv"
+        else:
+            if last_run > 0:
+                target_ts = last_run + interval
+                next_run_ts = int(target_ts)
+                next_run_in_seconds = max(0, int(target_ts - now))
+            else:
+                next_run_ts = int(now + 10)
+                next_run_in_seconds = 10
+            next_run_text = f"In {next_run_in_seconds}s" if next_run_in_seconds > 0 else "In Kürze..."
+
+        return {
+            "mode": mode,
+            "is_active": is_active,
+            "interval_seconds": interval,
+            "last_run_ts": last_run,
+            "last_run_datetime": datetime.fromtimestamp(last_run).strftime("%d.%m.%Y %H:%M:%S") if last_run else "Noch kein Lauf",
+            "last_action": getattr(self, "_last_ai_action", "Kader analysiert: Keine Änderungen erforderlich") if last_run else "Noch kein Lauf aufgezeichnet",
+            "last_reason": getattr(self, "_last_ai_reason", "") if last_run else "",
+            "next_run_ts": next_run_ts,
+            "next_run_in_seconds": next_run_in_seconds,
+            "next_run_text": next_run_text,
+            "model": getattr(self, "_last_ai_model", "ag/gemini-3.8-flash-high via 9Router")
+        }
+
     def get_ai_stats(self):
         usage = getattr(self, "_last_ai_usage", {
             "prompt_tokens": 950,
@@ -290,7 +351,8 @@ class EspnFantasyClient:
             "model": getattr(self, "_last_ai_model", "ag/gemini-3.8-flash-high via 9Router"),
             "estimated_cost_usd": 0.0002,
             "last_token_usage": usage,
-            "last_check_ts": getattr(self, "_last_ai_check_ts", 0)
+            "last_check_ts": getattr(self, "_last_ai_check_ts", 0),
+            "bot_status": self.get_bot_status()
         }
 
     def _load_proposals(self):
@@ -332,7 +394,25 @@ class EspnFantasyClient:
         props.append(proposal)
         data["proposals"] = props[-20:]  # max 20 Vorschläge behalten
         self._save_proposals(data)
-        self.log_decision("PROPOSAL_CREATED", f"Vorschlag {proposal.get('id')}: {proposal.get('reason')}", success=True)
+        p_in = proposal.get("player_in_name")
+        p_out = proposal.get("player_out_name")
+        gain = proposal.get("projected_gain")
+        details = f"Vorschlag erstellt: {p_in} für {p_out}" if (p_in and p_out) else f"Vorschlag {proposal.get('id')}: {proposal.get('reason')}"
+        if gain:
+            details += f" (+{gain} PTS)"
+        self.log_decision(
+            "PROPOSAL_CREATED",
+            details,
+            success=True,
+            metadata={
+                "proposal_id": proposal.get("id"),
+                "reason": proposal.get("reason"),
+                "player_in": p_in,
+                "player_out": p_out,
+                "confidence": proposal.get("confidence"),
+                "projected_gain": gain
+            }
+        )
         return proposal
 
     def dismiss_proposal(self, proposal_id):
@@ -370,9 +450,28 @@ class EspnFantasyClient:
     def log_decision(self, action, details, success=True, metadata=None):
         data = self._load_decision_log()
         history = data.get("history", [])
+        now_ts = int(time.time())
+        now_dt = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+
+        # In-Place-Aktualisierung bei aufeinanderfolgenden identischen Roster-Checks (kein Log-Spam)
+        if history and action == "ROSTER_CHECK" and history[-1].get("action") == "ROSTER_CHECK":
+            last_entry = history[-1]
+            last_meta = last_entry.get("metadata") or {}
+            cur_reason = (metadata or {}).get("reason", "")
+            if last_meta.get("reason") == cur_reason:
+                last_entry["timestamp"] = now_ts
+                last_entry["datetime"] = now_dt
+                repeat_count = int(last_meta.get("repeat_count", 1)) + 1
+                last_meta["repeat_count"] = repeat_count
+                base_details = (metadata or {}).get("base_details") or "Kader analysiert: Aufstellung optimal, keine Änderungen nötig"
+                last_entry["details"] = f"{base_details} (x{repeat_count}, zuletzt {now_dt.split(' ')[1]})"
+                last_entry["metadata"] = last_meta
+                self._save_decision_log(data)
+                return last_entry
+
         entry = {
-            "timestamp": int(time.time()),
-            "datetime": datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
+            "timestamp": now_ts,
+            "datetime": now_dt,
             "action": action,
             "details": details,
             "success": bool(success),
@@ -382,6 +481,7 @@ class EspnFantasyClient:
         history.append(entry)
         data["history"] = history[-100:]  # max 100 Einträge im Audit-Trail
         self._save_decision_log(data)
+        return entry
 
     def get_decision_log(self, limit=50):
         data = self._load_decision_log()
@@ -591,6 +691,8 @@ class EspnFantasyClient:
             "risk_level": self.get_risk_level(),
             "flash_enabled": self.get_flash_enabled(),
             "ai_stats": self.get_ai_stats(),
+            "bot_status": self.get_bot_status(),
+            "decision_history": self.get_decision_log(limit=40),
             "active_proposal": self.get_active_proposal(),
             "my_rank": my_rank,
             "total_teams": len(teams_raw),
@@ -1240,25 +1342,33 @@ class EspnFantasyClient:
         if valid_proposals:
             prop_id = f"prop_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             first_move = valid_proposals[0]
+            p_in = first_move.get("player_in_name", "Unbekannt")
+            p_out = first_move.get("player_out_name", "Unbekannt")
+            rationale = first_move.get("rationale") or analysis_result.get("assessment") or "Strategische Aufstellungsoptimierung"
+            gain = first_move.get("projected_gain", 0.0)
+            conf = analysis_result.get("confidence", 0.9)
+
             proposal_obj = {
                 "id": prop_id,
                 "created_at": int(time.time()),
                 "week": current_week,
                 "status": "pending",
-                "reason": first_move.get("rationale") or analysis_result.get("assessment"),
-                "confidence": analysis_result.get("confidence", 0.9),
-                "projected_gain": first_move.get("projected_gain", 0.0),
-                "player_in_name": first_move.get("player_in_name"),
-                "player_out_name": first_move.get("player_out_name"),
+                "reason": rationale,
+                "confidence": conf,
+                "projected_gain": gain,
+                "player_in_name": p_in,
+                "player_out_name": p_out,
                 "moves": first_move.get("items", [])
             }
 
             if mode == "semi":
                 self.add_proposal(proposal_obj)
+                self._last_ai_action = f"Vorschlag erstellt: {p_in} für {p_out}"
+                self._last_ai_reason = rationale
                 self.send_telegram_notification(
                     f"⚠️ *[LCARS ESPN KI-MANAGER // SEMI]*\n"
                     f"Vorschlag für Woche {current_week}:\n"
-                    f"🔄 *Move*: {first_move.get('player_in_name')} (Bench ➔ Starter) für {first_move.get('player_out_name')} ({first_move.get('rationale')})\n"
+                    f"🔄 *Move*: {p_in} (Bench ➔ Starter) für {p_out} ({rationale})\n"
                     f"👉 Im Dashboard freigeben: https://dash.pimmel.site#fantasy"
                 )
             elif mode == "full":
@@ -1269,17 +1379,82 @@ class EspnFantasyClient:
                     proposal_obj["status"] = "applied_autonomously"
                     proposal_obj["applied_at"] = int(time.time())
                     self.add_proposal(proposal_obj)
+                    self._last_ai_action = f"Aufstellung angepasst: {p_in} für {p_out} eingewechselt"
+                    self._last_ai_reason = rationale
+                    self.log_decision(
+                        "AUTO_MOVE_EXECUTED",
+                        f"Aufstellung autonom angepasst: {p_in} eingewechselt für {p_out}",
+                        success=True,
+                        metadata={
+                            "reason": rationale,
+                            "player_in": p_in,
+                            "player_out": p_out,
+                            "projected_gain": gain,
+                            "confidence": conf,
+                            "mode": "full"
+                        }
+                    )
                     self.send_telegram_notification(
                         f"⚡ *[LCARS ESPN KI-MANAGER // FULL-AUTONOM]*\n"
                         f"Autonome Aufstellungsanpassung durchgeführt:\n"
-                        f"✅ {first_move.get('player_in_name')} eingewechselt für {first_move.get('player_out_name')}.\n"
-                        f"Grund: {first_move.get('rationale')}"
+                        f"✅ {p_in} eingewechselt für {p_out}.\n"
+                        f"Grund: {rationale}"
                     )
                 else:
+                    err_msg = res.get('error', 'Unbekannter Fehler')
+                    self._last_ai_action = f"Autonome Ausführung fehlgeschlagen: {err_msg}"
+                    self._last_ai_reason = rationale
+                    self.log_decision(
+                        "AUTO_MOVE_FAILED",
+                        f"Autonomer Move fehlgeschlagen: {err_msg}",
+                        success=False,
+                        metadata={
+                            "reason": rationale,
+                            "player_in": p_in,
+                            "player_out": p_out,
+                            "error": err_msg,
+                            "mode": "full"
+                        }
+                    )
                     self.send_telegram_notification(
                         f"❌ *[LCARS ESPN KI-MANAGER // FULL-AUTONOM]*\n"
-                        f"Fehler bei autonomer Ausführung: {res.get('error')}"
+                        f"Fehler bei autonomer Ausführung: {err_msg}"
                     )
+            else:
+                # Modus manual
+                self._last_ai_action = f"Analyse abgeschlossen: {len(valid_proposals)} Wechsel empfohlen"
+                self._last_ai_reason = rationale
+                self.log_decision(
+                    "ROSTER_ANALYSIS_MANUAL",
+                    f"Kader analysiert: {len(valid_proposals)} Wechsel empfohlen (Modus: Manuell)",
+                    success=True,
+                    metadata={
+                        "reason": rationale,
+                        "player_in": p_in,
+                        "player_out": p_out,
+                        "projected_gain": gain,
+                        "confidence": conf,
+                        "mode": "manual"
+                    }
+                )
+        else:
+            assessment = analysis_result.get("assessment") if analysis_result else None
+            reason = assessment or "Kader optimal aufgestellt. Alle Starter aktiv und prognostizieren Bestleistung."
+            self._last_ai_action = "Kader analysiert: Keine Änderungen erforderlich"
+            self._last_ai_reason = reason
+            self.log_decision(
+                "ROSTER_CHECK",
+                "Kader analysiert: Aufstellung optimal, keine Änderungen nötig",
+                success=True,
+                metadata={
+                    "reason": reason,
+                    "assessment": assessment,
+                    "confidence": analysis_result.get("confidence") if analysis_result else 1.0,
+                    "recommended_moves_count": 0,
+                    "base_details": "Kader analysiert: Aufstellung optimal, keine Änderungen nötig",
+                    "mode": mode
+                }
+            )
 
         return {
             "status": "ok",
@@ -1296,8 +1471,8 @@ class EspnFantasyClient:
         if mode == "manual":
             return
 
-        # Cooldown: Mindestens 120 Sekunden zwischen automatischen KI-Checks
-        if now - self._last_ai_check_ts < 120:
+        interval = self.get_ai_interval()
+        if now - self._last_ai_check_ts < interval:
             return
 
         self._last_ai_check_ts = now

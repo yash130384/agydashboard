@@ -6752,6 +6752,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </div>
           </div>
 
+          <!-- AUTO-BOT TELEMETRIE & LAUFZEITEN -->
+          <div id="fantasyBotStatusBar" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.75rem; margin-top:0.6rem; padding:0.6rem 0.9rem; background:rgba(20,20,30,0.7); border:1px solid rgba(235,148,58,0.25); border-left:4px solid var(--c-primary); border-radius:8px; font-family:var(--mono-family); font-size:0.8rem;">
+            <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
+              <span id="fantasyBotStatusBadge" style="font-size:0.75rem; font-weight:800; padding:2px 8px; border-radius:10px; background:var(--c-primary); color:#000; letter-spacing:0.04em;">
+                BOT: VOLLAUTONOM
+              </span>
+              <span style="color:#aaa;">LETZTER LAUF:</span>
+              <strong id="fantasyBotLastRun" style="color:#fff;">--</strong>
+              <span style="color:#666;">|</span>
+              <span style="color:#aaa;">NÄCHSTER LAUF:</span>
+              <strong id="fantasyBotNextRun" style="color:#44dd88;">--</strong>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.6rem; margin-left:auto;">
+              <button type="button" id="btnFantasyRunNow" onclick="triggerFantasyBotCheck()" style="font-size:0.75rem; font-weight:700; color:#000; background:var(--c-gold); border:none; padding:0.25rem 0.75rem; border-radius:12px; cursor:pointer; font-family:var(--font-family); letter-spacing:0.04em; transition:all 0.2s ease;" title="Kader jetzt sofort durch Bot analysieren lassen">
+                ⚡ JETZT PRÜFEN
+              </button>
+              <button type="button" onclick="document.getElementById('fantasyBotLogCard').scrollIntoView({behavior:'smooth'})" style="font-size:0.75rem; color:var(--c-blue); background:transparent; border:1px solid rgba(136,153,255,0.4); padding:0.22rem 0.6rem; border-radius:12px; cursor:pointer; font-family:var(--mono-family);">
+                LOG ANZEIGEN ▼
+              </button>
+            </div>
+            <!-- ZWEITE ZEILE: LETZTE AKTION & BEGRÜNDUNG -->
+            <div id="fantasyBotActionLine" style="width:100%; border-top:1px dashed rgba(255,255,255,0.1); padding-top:0.4rem; margin-top:0.2rem; font-size:0.78rem; display:flex; align-items:baseline; gap:0.5rem; flex-wrap:wrap;">
+              <span style="color:var(--c-gold); font-weight:700;">LETZTE AKTION:</span>
+              <span id="fantasyBotLastAction" style="color:#fff;">Lade Bot-Status...</span>
+              <span id="fantasyBotLastReasonWrapper" style="display:inline-flex; align-items:baseline; gap:0.3rem;">
+                <span style="color:#aaa;">// BEGRÜNDUNG:</span>
+                <span id="fantasyBotLastReason" style="color:var(--c-butterscotch); font-style:italic;">--</span>
+              </span>
+            </div>
+          </div>
+
           <!-- VORSCHLAG-CONTAINER (SEMI-MODUS PROPOSAL BANNER) -->
           <div id="fantasyProposalBanner" class="lcars-card" style="display:none; margin-top:1rem; border-left:4px solid var(--c-gold); background:rgba(237, 179, 120, 0.08); border-top:1px solid rgba(237, 179, 120, 0.3); border-right:1px solid rgba(237, 179, 120, 0.2); border-bottom:1px solid rgba(237, 179, 120, 0.2); border-radius:8px; padding:1rem 1.25rem;">
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
@@ -6922,6 +6953,39 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </div>
             </div>
 
+          </div>
+
+          <!-- AUTO-BOT AKTIVITÄTS-LOG & HISTORIE -->
+          <div class="lcars-card" id="fantasyBotLogCard" style="margin-top:1.25rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:0.75rem; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:0.6rem;">
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <div class="card-head-title" style="margin-bottom:0;">AUTO-BOT AKTIVITÄTS-LOG // ENTSCHEIDUNGEN</div>
+                <span class="lcars-pill-tag" id="fantasyLogCountBadge" style="font-size:0.75rem;">0 EINTRÄGE</span>
+              </div>
+              <div style="display:inline-flex; align-items:center; background:rgba(0,0,0,0.6); border:1px solid rgba(255,255,255,0.18); border-radius:14px; padding:2px; gap:2px;">
+                <button type="button" class="fantasy-log-filter active" onclick="filterFantasyLog('all')" id="flt-all" style="font-size:0.7rem; padding:0.2rem 0.55rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:var(--c-butterscotch); color:#000;">ALLE</button>
+                <button type="button" class="fantasy-log-filter" onclick="filterFantasyLog('moves')" id="flt-moves" style="font-size:0.7rem; padding:0.2rem 0.55rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:transparent; color:#888;">WECHSEL &amp; VORSCHLÄGE</button>
+                <button type="button" class="fantasy-log-filter" onclick="filterFantasyLog('checks')" id="flt-checks" style="font-size:0.7rem; padding:0.2rem 0.55rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:transparent; color:#888;">KADER-CHECKS</button>
+                <button type="button" class="fantasy-log-filter" onclick="filterFantasyLog('config')" id="flt-config" style="font-size:0.7rem; padding:0.2rem 0.55rem; border-radius:10px; border:none; cursor:pointer; font-family:var(--font-family); font-weight:700; background:transparent; color:#888;">EINSTELLUNGEN</button>
+              </div>
+            </div>
+
+            <!-- TABELLE DER LOG-EINTRÄGE -->
+            <div style="overflow-x:auto; max-height:420px; overflow-y:auto;">
+              <table style="width:100%; border-collapse:collapse; font-size:0.84rem; text-align:left;">
+                <thead>
+                  <tr style="border-bottom:2px solid var(--c-primary); color:var(--c-primary); font-family:var(--font-family); letter-spacing:0.06em; position:sticky; top:0; background:var(--c-card-bg); z-index:1;">
+                    <th style="padding:0.4rem 0.5rem; width:140px;">ZEITPUNKT</th>
+                    <th style="padding:0.4rem 0.5rem; width:125px;">STATUS / TYP</th>
+                    <th style="padding:0.4rem 0.5rem; width:85px;">MODUS</th>
+                    <th style="padding:0.4rem 0.5rem;">AKTION &amp; BEGRÜNDUNG</th>
+                  </tr>
+                </thead>
+                <tbody id="fantasyDecisionLogTableBody">
+                  <tr><td colspan="4" style="padding:1rem; text-align:center; color:#888;">Lade Aktivitäts-Log...</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
         </section>
@@ -10001,6 +10065,227 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   };
 
+  let currentFantasyLog = [];
+  let currentFantasyLogFilter = 'all';
+  let botNextRunSeconds = null;
+
+  function updateFantasyBotStatus(status) {
+    if (!status) return;
+    const badge = document.getElementById('fantasyBotStatusBadge');
+    const lastRunEl = document.getElementById('fantasyBotLastRun');
+    const lastActionEl = document.getElementById('fantasyBotLastAction');
+    const lastReasonEl = document.getElementById('fantasyBotLastReason');
+    const lastReasonWrap = document.getElementById('fantasyBotLastReasonWrapper');
+
+    if (badge) {
+      if (status.mode === 'full') {
+        badge.textContent = 'BOT: VOLLAUTONOM (FULL)';
+        badge.style.background = 'var(--c-primary)';
+        badge.style.color = '#000';
+      } else if (status.mode === 'semi') {
+        badge.textContent = 'BOT: SEMI-AUTONOM (SEMI)';
+        badge.style.background = 'var(--c-gold)';
+        badge.style.color = '#000';
+      } else {
+        badge.textContent = 'BOT: MANUELL (PAUSIERT)';
+        badge.style.background = '#555';
+        badge.style.color = '#aaa';
+      }
+    }
+
+    if (lastRunEl) {
+      lastRunEl.textContent = status.last_run_datetime || 'Noch kein Lauf';
+    }
+
+    if (status.next_run_in_seconds !== null && status.next_run_in_seconds !== undefined) {
+      botNextRunSeconds = parseInt(status.next_run_in_seconds, 10);
+    } else {
+      botNextRunSeconds = null;
+    }
+    updateFantasyBotCountdownUI(status.next_run_text);
+
+    if (lastActionEl) {
+      lastActionEl.textContent = status.last_action || 'Kader geprüft: Keine Änderungen erforderlich';
+    }
+
+    if (lastReasonEl && lastReasonWrap) {
+      if (status.last_reason && String(status.last_reason).trim()) {
+        lastReasonEl.textContent = status.last_reason;
+        lastReasonWrap.style.display = 'inline-flex';
+      } else {
+        lastReasonWrap.style.display = 'none';
+      }
+    }
+  }
+
+  function updateFantasyBotCountdownUI(fallbackText) {
+    const nextRunEl = document.getElementById('fantasyBotNextRun');
+    if (!nextRunEl) return;
+    if (currentFantasyMode === 'manual') {
+      nextRunEl.textContent = 'Pausiert (Modus Manuell)';
+      nextRunEl.style.color = '#888';
+    } else if (botNextRunSeconds !== null) {
+      if (botNextRunSeconds <= 0) {
+        nextRunEl.textContent = '● KI-CHECK LÄUFT...';
+        nextRunEl.style.color = 'var(--c-gold)';
+      } else {
+        const mins = Math.floor(botNextRunSeconds / 60);
+        const secs = botNextRunSeconds % 60;
+        const timeStr = mins > 0 ? `${mins}m ${secs < 10 ? '0' : ''}${secs}s` : `${secs}s`;
+        nextRunEl.textContent = `In ${timeStr}`;
+        nextRunEl.style.color = '#44dd88';
+      }
+    } else {
+      nextRunEl.textContent = fallbackText || 'In Kürze...';
+      nextRunEl.style.color = '#44dd88';
+    }
+  }
+
+  function updateFantasyDecisionLog(history) {
+    if (Array.isArray(history)) {
+      currentFantasyLog = history;
+    }
+    renderFantasyDecisionLogTable();
+  }
+
+  window.filterFantasyLog = function(filter) {
+    currentFantasyLogFilter = filter;
+    ['all', 'moves', 'checks', 'config'].forEach(f => {
+      const btn = document.getElementById(`flt-${f}`);
+      if (!btn) return;
+      if (f === filter) {
+        btn.classList.add('active');
+        btn.style.background = 'var(--c-butterscotch)';
+        btn.style.color = '#000';
+      } else {
+        btn.classList.remove('active');
+        btn.style.background = 'transparent';
+        btn.style.color = '#888';
+      }
+    });
+    renderFantasyDecisionLogTable();
+  };
+
+  function renderFantasyDecisionLogTable() {
+    const tbody = document.getElementById('fantasyDecisionLogTableBody');
+    const badgeCount = document.getElementById('fantasyLogCountBadge');
+    if (!tbody) return;
+
+    const escapeFn = typeof escapeHtml === 'function' ? escapeHtml : (s => String(s || ''));
+
+    let items = (currentFantasyLog || []).slice().reverse(); // neueste zuerst
+    if (currentFantasyLogFilter === 'moves') {
+      items = items.filter(e => ['AUTO_MOVE_EXECUTED', 'TRANSACTION_EXECUTED', 'PROPOSAL_CREATED', 'PROPOSAL_APPLIED', 'AUTO_MOVE_FAILED', 'TRANSACTION_FAILED'].includes(e.action));
+    } else if (currentFantasyLogFilter === 'checks') {
+      items = items.filter(e => e.action === 'ROSTER_CHECK' || e.action === 'ROSTER_ANALYSIS_MANUAL' || e.action === 'MANUAL_CHECK_RESULT');
+    } else if (currentFantasyLogFilter === 'config') {
+      items = items.filter(e => ['MODE_CHANGE', 'RISK_LEVEL_CHANGE', 'FLASH_TOGGLE'].includes(e.action));
+    }
+
+    if (badgeCount) {
+      badgeCount.textContent = `${items.length} EINTRÄGE`;
+    }
+
+    if (!items.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="padding:1.2rem; text-align:center; color:#888;">Keine Einträge für diese Filterauswahl vorhanden.</td></tr>';
+      return;
+    }
+
+    let html = '';
+    items.forEach(e => {
+      const meta = e.metadata || {};
+      const action = e.action || '';
+      let typeBadge = '<span style="background:#555; color:#fff; font-size:0.7rem; font-weight:700; padding:2px 6px; border-radius:6px;">INFO</span>';
+      
+      if (action === 'AUTO_MOVE_EXECUTED' || action === 'TRANSACTION_EXECUTED' || action === 'PROPOSAL_APPLIED') {
+        typeBadge = '<span style="background:#44dd88; color:#000; font-size:0.7rem; font-weight:800; padding:2px 6px; border-radius:6px;">WECHSEL</span>';
+      } else if (action === 'PROPOSAL_CREATED') {
+        typeBadge = '<span style="background:var(--c-gold); color:#000; font-size:0.7rem; font-weight:800; padding:2px 6px; border-radius:6px;">VORSCHLAG</span>';
+      } else if (action === 'PROPOSAL_DISMISSED') {
+        typeBadge = '<span style="background:#777; color:#fff; font-size:0.7rem; font-weight:700; padding:2px 6px; border-radius:6px;">ABGELEHNT</span>';
+      } else if (action === 'ROSTER_CHECK' || action === 'ROSTER_ANALYSIS_MANUAL' || action === 'MANUAL_CHECK_RESULT') {
+        typeBadge = '<span style="background:var(--c-secondary); color:#000; font-size:0.7rem; font-weight:700; padding:2px 6px; border-radius:6px;">KADER-CHECK</span>';
+      } else if (action === 'MODE_CHANGE' || action === 'RISK_LEVEL_CHANGE' || action === 'FLASH_TOGGLE') {
+        typeBadge = '<span style="background:var(--c-primary); color:#000; font-size:0.7rem; font-weight:700; padding:2px 6px; border-radius:6px;">EINSTELLUNG</span>';
+      } else if (action === 'AUTO_MOVE_FAILED' || action === 'TRANSACTION_FAILED' || action === 'TRANSACTION_ERROR' || !e.success) {
+        typeBadge = '<span style="background:var(--c-red); color:#fff; font-size:0.7rem; font-weight:800; padding:2px 6px; border-radius:6px;">FEHLER</span>';
+      }
+
+      let modeLabel = (e.mode || 'manual').toUpperCase();
+      if (modeLabel === 'FULL') modeLabel = '<span style="color:var(--c-primary); font-weight:700;">FULL</span>';
+      else if (modeLabel === 'SEMI') modeLabel = '<span style="color:var(--c-gold); font-weight:700;">SEMI</span>';
+      else modeLabel = '<span style="color:#888;">MANUELL</span>';
+
+      let detailsHtml = `<div style="font-weight:600; color:#fff; margin-bottom:2px;">${escapeFn(e.details || action)}</div>`;
+      
+      if (meta.player_in && meta.player_out) {
+        const gainStr = meta.projected_gain != null ? ` | Erwartet: <strong>+${Number(meta.projected_gain).toFixed(1)} PTS</strong>` : '';
+        detailsHtml += `<div style="font-size:0.78rem; color:var(--c-gold); margin-top:2px;">
+          🔄 Tausch: <strong>${escapeFn(meta.player_in)}</strong> (Bank ➔ Start) für <strong>${escapeFn(meta.player_out)}</strong>${gainStr}
+        </div>`;
+      }
+
+      const reason = meta.reason || meta.assessment;
+      if (reason && String(reason).trim()) {
+        detailsHtml += `<div style="font-size:0.76rem; color:var(--c-butterscotch); margin-top:2px; font-style:italic;">
+          💡 Begründung: ${escapeFn(reason)}
+        </div>`;
+      }
+
+      html += `<tr style="border-bottom:1px solid rgba(255,255,255,0.06); font-family:var(--mono-family);">
+        <td style="padding:0.45rem 0.5rem; color:#aaa; font-size:0.78rem; white-space:nowrap; vertical-align:top;">${escapeFn(e.datetime || '')}</td>
+        <td style="padding:0.45rem 0.5rem; vertical-align:top;">${typeBadge}</td>
+        <td style="padding:0.45rem 0.5rem; vertical-align:top; font-size:0.75rem;">${modeLabel}</td>
+        <td style="padding:0.45rem 0.5rem; vertical-align:top;">${detailsHtml}</td>
+      </tr>`;
+    });
+
+    tbody.innerHTML = html;
+  }
+
+  window.triggerFantasyBotCheck = async function() {
+    const btn = document.getElementById('btnFantasyRunNow');
+    const origText = btn ? btn.textContent : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '⚡ PRÜFE...';
+      btn.style.opacity = '0.7';
+    }
+
+    try {
+      const resp = await fetch('/api/espn/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await resp.json();
+      if (btn) {
+        btn.textContent = '✓ FERTIG';
+        btn.style.background = '#44dd88';
+        btn.style.color = '#000';
+      }
+      setTimeout(() => {
+        loadFantasyData(true);
+      }, 500);
+    } catch (e) {
+      console.error('Fehler bei manueller Bot-Prüfung:', e);
+      if (btn) {
+        btn.textContent = '✗ FEHLER';
+        btn.style.background = 'var(--c-red)';
+        btn.style.color = '#fff';
+      }
+    } finally {
+      setTimeout(() => {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = origText || '⚡ JETZT PRÜFEN';
+          btn.style.background = 'var(--c-gold)';
+          btn.style.color = '#000';
+          btn.style.opacity = '1';
+        }
+      }, 2500);
+    }
+  };
+
   async function loadFantasyData(force = false) {
     if (isFantasyLoading) return;
     isFantasyLoading = true;
@@ -10035,6 +10320,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
       if (data.ai_stats) {
         updateFantasyAiStats(data.ai_stats);
+      }
+      if (data.bot_status) {
+        updateFantasyBotStatus(data.bot_status);
+      }
+      if (data.decision_history) {
+        updateFantasyDecisionLog(data.decision_history);
       }
 
       // Aktiven Vorschlag rendern
@@ -10262,6 +10553,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
 
       fantasyCountdownSeconds--;
+      if (botNextRunSeconds !== null && currentFantasyMode !== 'manual') {
+        botNextRunSeconds = Math.max(0, botNextRunSeconds - 1);
+        updateFantasyBotCountdownUI();
+      }
       if (fantasyCountdownSeconds <= 0) {
         fantasyCountdownSeconds = 30;
         updateFantasyCountdownUI();
@@ -19352,7 +19647,8 @@ if USE_FLASK:
         except (ValueError, TypeError):
             limit = 50
         history = espn_client.get_decision_log(limit=limit)
-        return jsonify({"status": "ok", "history": history})
+        bot_status = espn_client.get_bot_status() if hasattr(espn_client, "get_bot_status") else {}
+        return jsonify({"status": "ok", "bot_status": bot_status, "history": history})
 
     @app.route("/api/espn/lineup/move", methods=["POST"])
     def api_espn_lineup_move():
