@@ -52,6 +52,7 @@ class TestPersonalArea(unittest.TestCase):
         self.assertIn('id="personal-subpillar"', html)
 
         # Check grouped children remain present with their original IDs
+        self.assertIn('id="btn-cat-fantasy"', html)
         self.assertIn('id="btn-cat-solar"', html)
         self.assertIn('id="btn-cat-homeassistant"', html)
         self.assertIn('id="btn-cat-cycle"', html)
@@ -67,12 +68,14 @@ class TestPersonalArea(unittest.TestCase):
         self.assertIn("LCARS PERSÖNLICHER BEREICH", html)
 
         # Check overview cards
+        self.assertIn('id="personalFantasyTeam"', html)
         self.assertIn('id="personalSolarPv"', html)
         self.assertIn('id="personalHaStatus"', html)
         self.assertIn('id="personalCyclePartner"', html)
         self.assertIn('id="personalPulsecastStatus"', html)
 
         # Check subnav in personal child sections
+        self.assertIn('id="section-fantasy"', html)
         self.assertIn('id="section-solar"', html)
         self.assertIn('id="section-homeassistant"', html)
         self.assertIn('id="section-cycle"', html)

@@ -3326,7 +3326,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .pill-ai    { background-color: var(--c-secondary); }
     .pill-info  { background-color: var(--c-butterscotch); }
     .pill-cfg   { background-color: var(--c-gold); }
-    .pill-fantasy { background-color: var(--c-almond); }
+    .pill-fantasy { background-color: var(--c-almond); color: #000; }
     .pill-personal { background-color: var(--c-gold); color: #000; font-weight: 700; border-left: 6px solid var(--c-butterscotch); }
     .pill-personal.active-parent { background-color: var(--c-gold) !important; color: #000 !important; border-left: 6px solid var(--c-primary) !important; box-shadow: inset 0 0 12px rgba(235, 148, 58, 0.45); }
     .nav-personal-group { display: flex; flex-direction: column; width: 100%; }
@@ -5048,15 +5048,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="lcars-pill-btn pill-cfg" onclick="switchCategory('config')" id="btn-cat-config">
           CONFIG
         </button>
-        <button class="lcars-pill-btn pill-fantasy" onclick="switchCategory('fantasy')" id="btn-cat-fantasy">
-          FANTASY
-        </button>
         <!-- PERSÖNLICHER BEREICH -->
         <div class="nav-personal-group" id="nav-personal-group">
           <button class="lcars-pill-btn pill-personal" onclick="handlePersonalPillClick()" id="btn-cat-personal">
             <span id="personalFoldIcon" style="font-size:0.75rem; margin-right:0.35rem; transition:transform 0.2s;">▶</span> PERSÖNLICH
           </button>
           <div class="nav-personal-subpillar" id="personal-subpillar" style="display: none;">
+            <button class="lcars-pill-btn lcars-sub-pill pill-fantasy" onclick="switchCategory('fantasy')" id="btn-cat-fantasy">
+              FANTASY
+            </button>
             <button class="lcars-pill-btn lcars-sub-pill pill-solar" onclick="switchCategory('solar')" id="btn-cat-solar">
               SOLAR
             </button>
@@ -6719,6 +6719,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </div>
           </div>
 
+          <!-- PERSÖNLICHER BEREICH SUBNAV -->
+          <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('personal')">
+              <span>📊</span> 1. ÜBERSICHT
+            </button>
+            <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('fantasy')">
+              <span>🏈</span> 2. FANTASY
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('solar')">
+              <span>☀️</span> 3. SOLAR
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('homeassistant')">
+              <span>💡</span> 4. ASSISTANT
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('cycle')">
+              <span>🌸</span> 5. ZYKLUS
+            </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('pulsecast')">
+              <span>🎬</span> 6. PULSECAST
+            </button>
+          </div>
+
           <!-- KI TOKEN & MODELL STATUSZEILE -->
           <div id="fantasyAiStatsStrip" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem; margin-top:0.6rem; padding:0.35rem 0.85rem; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.08); border-radius:8px; font-size:0.75rem; font-family:var(--mono-family); color:#aaa;">
             <div style="display:flex; align-items:center; gap:0.5rem;">
@@ -6916,22 +6938,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('personal')">
               <span>📊</span> 1. ÜBERSICHT
             </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('fantasy')">
+              <span>🏈</span> 2. FANTASY
+            </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('solar')">
-              <span>☀️</span> 2. SOLAR
+              <span>☀️</span> 3. SOLAR
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('homeassistant')">
-              <span>💡</span> 3. ASSISTANT
+              <span>💡</span> 4. ASSISTANT
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('cycle')">
-              <span>🌸</span> 4. ZYKLUS
+              <span>🌸</span> 5. ZYKLUS
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('pulsecast')">
-              <span>🎬</span> 5. PULSECAST
+              <span>🎬</span> 6. PULSECAST
             </button>
           </div>
 
           <!-- OVERVIEW GRID -->
           <div class="personal-overview-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; margin-top: 1rem;">
+            <!-- FANTASY FOOTBALL CARD -->
+            <div class="lcars-card" style="border-color: var(--c-almond);">
+              <div class="card-head" style="border-bottom: 2px solid var(--c-almond); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <span class="card-head-title" style="color: var(--c-almond);">🏈 FANTASY FOOTBALL</span>
+                <button class="left-action-btn" onclick="switchCategory('fantasy')" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; border-color: var(--c-almond); color: var(--c-almond);">ÖFFNEN ▶</button>
+              </div>
+              <div style="padding: 0.8rem 0; display: flex; flex-direction: column; gap: 0.6rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Team / Liga:</span>
+                  <span id="personalFantasyTeam" style="color: var(--c-primary); font-size: 0.95rem; font-weight: 700; text-align:right;">--</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Rang &amp; Record:</span>
+                  <span id="personalFantasyRank" style="color: var(--c-gold); font-size: 1.1rem; font-weight: 700;">--</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="color: #aaa; font-size: 0.85rem;">Matchup Score:</span>
+                  <span id="personalFantasyMatchup" style="color: var(--c-blue); font-size: 1.1rem; font-weight: 700;">--</span>
+                </div>
+              </div>
+            </div>
+
             <!-- SOLAR CARD -->
             <div class="lcars-card" style="border-color: var(--c-gold);">
               <div class="card-head" style="border-bottom: 2px solid var(--c-gold); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
@@ -7045,17 +7092,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('personal')">
               <span>📊</span> 1. ÜBERSICHT
             </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('fantasy')">
+              <span>🏈</span> 2. FANTASY
+            </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('solar')">
-              <span>☀️</span> 2. SOLAR
+              <span>☀️</span> 3. SOLAR
             </button>
             <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('homeassistant')">
-              <span>💡</span> 3. ASSISTANT
+              <span>💡</span> 4. ASSISTANT
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('cycle')">
-              <span>🌸</span> 4. ZYKLUS
+              <span>🌸</span> 5. ZYKLUS
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('pulsecast')">
-              <span>🎬</span> 5. PULSECAST
+              <span>🎬</span> 6. PULSECAST
             </button>
           </div>
 
@@ -7117,17 +7167,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('personal')">
               <span>📊</span> 1. ÜBERSICHT
             </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('fantasy')">
+              <span>🏈</span> 2. FANTASY
+            </button>
             <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('solar')">
-              <span>☀️</span> 2. SOLAR
+              <span>☀️</span> 3. SOLAR
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('homeassistant')">
-              <span>💡</span> 3. ASSISTANT
+              <span>💡</span> 4. ASSISTANT
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('cycle')">
-              <span>🌸</span> 4. ZYKLUS
+              <span>🌸</span> 5. ZYKLUS
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('pulsecast')">
-              <span>🎬</span> 5. PULSECAST
+              <span>🎬</span> 6. PULSECAST
             </button>
           </div>
 
@@ -7431,17 +7484,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('personal')">
               <span>📊</span> 1. ÜBERSICHT
             </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('fantasy')">
+              <span>🏈</span> 2. FANTASY
+            </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('solar')">
-              <span>☀️</span> 2. SOLAR
+              <span>☀️</span> 3. SOLAR
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('homeassistant')">
-              <span>💡</span> 3. ASSISTANT
+              <span>💡</span> 4. ASSISTANT
             </button>
             <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('cycle')">
-              <span>🌸</span> 4. ZYKLUS
+              <span>🌸</span> 5. ZYKLUS
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('pulsecast')">
-              <span>🎬</span> 5. PULSECAST
+              <span>🎬</span> 6. PULSECAST
             </button>
           </div>
 
@@ -7642,17 +7698,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('personal')">
               <span>📊</span> 1. ÜBERSICHT
             </button>
+            <button type="button" class="lcars-subnav-pill" onclick="switchCategory('fantasy')">
+              <span>🏈</span> 2. FANTASY
+            </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('solar')">
-              <span>☀️</span> 2. SOLAR
+              <span>☀️</span> 3. SOLAR
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('homeassistant')">
-              <span>💡</span> 3. ASSISTANT
+              <span>💡</span> 4. ASSISTANT
             </button>
             <button type="button" class="lcars-subnav-pill" onclick="switchCategory('cycle')">
-              <span>🌸</span> 4. ZYKLUS
+              <span>🌸</span> 5. ZYKLUS
             </button>
             <button type="button" class="lcars-subnav-pill active" onclick="switchCategory('pulsecast')">
-              <span>🎬</span> 5. PULSECAST
+              <span>🎬</span> 6. PULSECAST
             </button>
           </div>
 
@@ -9418,6 +9477,33 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   async function initPersonalOverview() {
     try {
+      const resp = await fetch('/api/fantasy');
+      if (resp.ok) {
+        const d = await resp.json();
+        const fTeam = document.getElementById('personalFantasyTeam');
+        const fRank = document.getElementById('personalFantasyRank');
+        const fMatchup = document.getElementById('personalFantasyMatchup');
+        if (fTeam) {
+          fTeam.textContent = (d.team_name || 'Norderstedt Railsguns') + (d.league_name ? ' (' + d.league_name + ')' : '');
+        }
+        if (fRank) {
+          const myStanding = (d.standings || []).find(s => s.is_my_team);
+          const rec = myStanding ? `(${myStanding.wins}-${myStanding.losses}-${myStanding.ties})` : '';
+          fRank.textContent = (d.my_rank ? 'Rang #' + d.my_rank + ' ' : '') + rec;
+        }
+        if (fMatchup) {
+          if (d.matchup) {
+            fMatchup.textContent = `${d.matchup.my_score || 0} : ${d.matchup.opp_score || 0} PTS`;
+          } else {
+            fMatchup.textContent = 'Kein aktives Matchup';
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Personal Fantasy overview error:', e);
+    }
+
+    try {
       const resp = await fetch('/api/solar/data');
       if (resp.ok) {
         const d = await resp.json();
@@ -9502,7 +9588,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     playLcarsBeep(980, 1400);
     currentCategory = catId;
 
-    const personalCategories = ['personal', 'solar', 'homeassistant', 'cycle', 'pulsecast'];
+    const personalCategories = ['personal', 'fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast'];
     const personalBtn = document.getElementById('btn-cat-personal');
     if (personalCategories.includes(catId)) {
       togglePersonalNav(true);

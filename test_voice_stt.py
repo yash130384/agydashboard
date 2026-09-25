@@ -104,6 +104,41 @@ class TestVoiceSttIntegration(unittest.TestCase):
         self.assertTrue(data.get("success"))
         self.assertEqual(data.get("text"), "")
 
+    def test_concurrent_transcribe_thread_safety(self):
+        import concurrent.futures
+        wav1 = self._create_wav(duration_s=0.5, freq=0).getvalue()
+        wav2 = self._create_wav(duration_s=0.5, freq=0).getvalue()
+
+        def request_transcribe(wav_bytes):
+            return self.client.post(
+                "/api/voice/transcribe?mode=test&process=false",
+                data=wav_bytes,
+                headers={**self.auth_headers, "Content-Type": "audio/wav"}
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            f1 = executor.submit(request_transcribe, wav1)
+            f2 = executor.submit(request_transcribe, wav2)
+            r1 = f1.result()
+            r2 = f2.result()
+
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r2.status_code, 200)
+        self.assertTrue(r1.get_json().get("success"))
+        self.assertTrue(r2.get_json().get("success"))
+
+    def test_corrupted_audio_handling(self):
+        # Invalid / corrupted audio data should return 500 or error json gracefully, not crash server
+        resp = self.client.post(
+            "/api/voice/transcribe?mode=test&process=false",
+            data=b"INVALID_CORRUPTED_AUDIO_PAYLOAD",
+            headers={**self.auth_headers, "Content-Type": "audio/webm"}
+        )
+        self.assertEqual(resp.status_code, 500)
+        data = resp.get_json()
+        self.assertFalse(data.get("success"))
+        self.assertIn("error", data)
+
 
 if __name__ == "__main__":
     unittest.main()
