@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LCARS Dashboard</title>
+    <style>
+        :root {
+            --bg: #000000;
+            --c-primary: #55a7ff;
+            --c-secondary: #888888;
+            --c-blue: #55a7ff;
+            --c-almond: #a78755;
+            --c-butterscotch: #d9b166;
+            --c-red: #ff3333;
+            --c-gold: #ffcc00;
+            --c-text: #ffffff;
+            --font-family: 'LCARS', 'Arial Narrow', sans-serif;
+            --mono-family: 'Courier New', monospace;
+            --bar-height: 45px;
+            --lfw: 165px;
+            --elbow-radius: 0 0 45px 0;
+            --elbow-top: var(--c-primary);
+            --elbow-bottom: var(--c-almond);
+            --corner-cutout: 0 100% 0 0;
+        }
+        
+        /* Red Alert Combat Theme (Automatisch bei Alarm) */
+        [data-theme="redalert"] {
+          --c-primary: #cf3030;
+          --c-secondary: #ff4444;
+          --c-blue: #ffaa00;
+          --c-almond: #881111;
+          --c-butterscotch: #ff2222;
+          --c-red: #ff0000;
+          --c-gold: #ffcc00;
+          --elbow-top: #cf3030;
+          --elbow-bottom: #881111;
+          --banner-color: #ff4444;
+          --data-cascade-color: #ff3333;
+          --c-card-border: rgba(207, 48, 48, 0.65);
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            background-color: var(--bg);
+            color: var(--c-text);
+            font-family: var(--font-family);
+            text-transform: uppercase;
+            overflow-x: hidden;
+        }
+        
+        .wrap-standard {
+            width: 100%;
+            max-width: 100%;
+            min-height: 98vh;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow-x: hidden;
+        }
+        
+        .wrap {
+            display: flex;
+            width: 100%;
+            max-width: 100%;
+            position: relative;
+            box-sizing: border-box;
+            overflow-x: hidden;
+        }
+        
+        .left-frame-top {
+            width: var(--lfw);
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--elbow-top);
+            border-radius: var(--elbow-radius);
+            padding: 0.5rem;
+            text-align: right;
+            color: #000;
+            font-weight: 700;
+            justify-content: space-between;
+            min-height: 120px;
+        }
+        
+        .right-frame-top {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .right-frame-top::before {
+            content: '';
+            display: block;
+            width: 45px;
+            height: 45px;
+            background-color: var(--elbow-top);
+            position: absolute;
+            left: 0;
+            bottom: var(--bar-height);
+            z-index: 1;
+        }
+        
+        .right-frame-top::after {
+            content: '';
+            display: block;
+            width: 45px;
+            height: 45px;
+            background-color: #000;
+            border-radius: var(--corner-cutout);
+            position: absolute;
+            left: 0;
+            bottom: var(--bar-height);
+            z-index: 2;
+        }
+        
+        .banner-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            padding-bottom: 0.35rem;
+            padding-left: 55px;
+            flex-wrap: wrap;
+        }
+        
+        .lcars-elbow {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            height: 45px;
+            background-color: var(--elbow-bottom);
+            border-radius: 45px 0 0 0;
+            padding: 0 1.5rem;
+            font-weight: 700;
+            color: #000;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .lcars-title {
+            font-size: 2.5rem;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-align: right;
+            line-height: 1.1;
+            margin-right: 1.5rem;
+            color: var(--c-text);
+        }
+        
+        .lcars-bar {
+            height: var(--bar-height);
+            background-color: var(--c-primary);
+            display: flex;
+            align-items: center;
+            padding: 0 1rem;
+            font-weight: 700;
+            color: #000;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .lcars-bar-right {
+            margin-left: auto;
+            background-color: var(--c-almond);
+        }
+        
+        .lcars-nav {
+            display: flex;
+            gap: 0.5rem;
+            padding: 0.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .lcars-nav-btn {
+            background: rgba(85, 167, 255, 0.2);
+            border: 1px solid var(--c-primary);
+            border-radius: 4px;
+            color: var(--c-text);
+            font-family: var(--font-family);
+            font-size: 0.9rem;
+            font-weight: 700;
+            padding: 0.4rem 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .lcars-nav-btn:hover {
+            background: var(--c-primary);
+            color: #000;
+        }
+        
+        .lcars-main-content {
+            display: flex;
+            flex: 1;
+            padding: 1rem;
+            gap: 1rem;
+        }
+        
+        .lcars-sidebar {
+            width: var(--lfw);
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .lcars-card {
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid var(--c-card-border, rgba(85, 167, 255, 0.4));
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        
+        .lcars-card-title {
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+            color: var(--c-primary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .lcars-toggle-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 1rem 0;
+        }
+        
+        .lcars-toggle-label {
+            font-size: 1.1rem;
+            font-weight: 700;
+        }
+        
+        .lcars-toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 34px;
+        }
+        
+        .lcars-toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .lcars-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 34px;
+        }
+        
+        .lcars-slider:before {
+            position: absolute;
+            content: "";
+            height: 26px;
+            width: 26px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        
+        input:checked + .lcars-slider {
+            background-color: var(--c-primary);
+        }
+        
+        input:checked + .lcars-slider:before {
+            transform: translateX(26px);
+        }
+        
+        .red-alert-banner {
+            background: linear-gradient(90deg, #cf3030 0%, #ff0000 50%, #cf3030 100%);
+            color: #fff;
+            padding: 0.55rem 1rem;
+            border-radius: 6px;
+            margin-bottom: 0.85rem;
+            box-shadow: 0 0 20px rgba(255, 0, 0, 0.65);
+            animation: alert-pulse 1.2s infinite alternate;
+            border: 2px solid #ff4444;
+            font-family: var(--font-family);
+            font-weight: 800;
+            letter-spacing: 1px;
+            display: none;
+        }
+        
+        @keyframes alert-pulse {
+            0% { opacity: 0.85; filter: brightness(1); }
+            100% { opacity: 1; filter: brightness(1.35); }
+        }
+        
+        .red-alert-content {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        
+        .red-alert-icon {
+            font-size: 1.4rem;
+            animation: icon-bounce 0.6s infinite alternate;
+        }
+        
+        @keyframes icon-bounce {
+            from { transform: scale(1); }
+            to { transform: scale(1.25); }
+        }
+        
+        .red-alert-title {
+            font-size: 1.1rem;
+            text-transform: uppercase;
+            color: #fff;
+        }
+        
+        .red-alert-reasons {
+            font-family: var(--mono-family);
+            font-size: 0.92rem;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            color: #ffea00;
+        }
+        
+        .lcars-content-pane {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .lcars-section {
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid var(--c-card-border, rgba(85, 167, 255, 0.4));
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        
+        .lcars-section-title {
+            font-size: 1.4rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: var(--c-primary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .lcars-data-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+        
+        .lcars-data-item {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(85, 167, 255, 0.2);
+            border-radius: 6px;
+            padding: 0.75rem;
+        }
+        
+        .lcars-data-label {
+            font-size: 0.85rem;
+            color: var(--c-secondary);
+            margin-bottom: 0.25rem;
+        }
+        
+        .lcars-data-value {
+            font-family: var(--mono-family);
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--c-text);
+        }
+        
+        .lcars-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 1rem;
+            background-color: var(--elbow-bottom);
+            color: #000;
+            font-weight: 700;
+            height: var(--bar-height);
+        }
+        
+        .lcars-footer::before {
+            content: '';
+            display: block;
+            width: 45px;
+            height: 45px;
+            background-color: var(--elbow-top);
+            border-radius: 0 0 0 45px;
+            position: absolute;
+            left: var(--lfw);
+            top: 0;
+        }
+        
+        .lcars-footer-right {
+            margin-left: auto;
+            background-color: var(--c-blue);
+            height: 100%;
+            display: flex;
+            align-items: center;
+            padding: 0 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap-standard">
+        <div class="wrap">
+            <div class="left-frame-top">
+                <div>SECURITY</div>
+                <div>MOTION ALARM</div>
+            </div>
+            <div class="right-frame-top">
+                <div class="banner-container">
+                    <div class="lcars-elbow">ALARM SYSTEM</div>
+                    <div class="lcars-title">LCARS DASHBOARD</div>
+                </div>
+                <div class="lcars-bar">
+                    MOTION DETECTION & ALERT SYSTEM
+                </div>
+                <div class="lcars-bar lcars-bar-right">
+                    STATUS: <span id="systemStatus">ACTIVE</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="red-alert-banner" id="intruderAlert">
+            <div class="red-alert-content">
+                <div class="red-alert-icon">⚠️</div>
+                <div class="red-alert-title">INTRUDER ALERT</div>
+                <div class="red-alert-reasons">MOTION SENSOR ACTIVATED</div>
+            </div>
+        </div>
+        
+        <div class="lcars-main-content">
+            <div class="lcars-sidebar">
+                <div class="lcars-card">
+                    <div class="lcars-card-title">SYSTEM CONTROLS</div>
+                    <div class="lcars-toggle-container">
+                        <span class="lcars-toggle-label">MOTION ALARM</span>
+                        <label class="lcars-toggle-switch">
+                            <input type="checkbox" id="alarmToggle">
+                            <span class="lcars-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="lcars-card">
+                    <div class="lcars-card-title">QUICK ACTIONS</div>
+                    <button class="lcars-nav-btn" onclick="testAlarm()">TEST ALARM</button>
+                    <button class="lcars-nav-btn" onclick="simulateMotion()">SIMULATE MOTION</button>
+                </div>
+            </div>
+            
+            <div class="lcars-content-pane">
+                <div class="lcars-section">
+                    <div class="lcars-section-title">SYSTEM STATUS</div>
+                    <div class="lcars-data-grid">
+                        <div class="lcars-data-item">
+                            <div class="lcars-data-label">ALARM ENABLED</div>
+                            <div class="lcars-data-value" id="alarmStatus">UNKNOWN</div>
+                        </div>
+                        <div class="lcars-data-item">
+                            <div class="lcars-data-label">LAST TRIGGER</div>
+                            <div class="lcars-data-value" id="lastTrigger">NEVER</div>
+                        </div>
+                        <div class="lcars-data-item">
+                            <div class="lcars-data-label">COOLDOWN</div>
+                            <div class="lcars-data-value" id="cooldownStatus">INACTIVE</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="lcars-section">
+                    <div class="lcars-section-title">EVENT LOG</div>
+                    <div id="eventLog" style="font-family: var(--mono-family); background: rgba(0,0,0,0.4); padding: 1rem; height: 200px; overflow-y: auto;">
+                        <div>System initialized...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="lcars-footer">
+            <div>SECURITY NET</div>
+            <div class="lcars-footer-right">ALARM SYSTEM v1.0</div>
+        </div>
+    </div>
+    
+    <!-- Hidden audio element for alarm sound -->
+    <audio id="alarmAudio" src="/static/audio/rogue_one_alarm.mp3" preload="auto"></audio>
+    
+    <script src="/static/js/motion_alarm.js"></script>
+    <script>
+        // Initialize alarm status display
+        function updateAlarmStatus() {
+            const alarmStatus = document.getElementById('alarmStatus');
+            const lastTrigger = document.getElementById('lastTrigger');
+            const cooldownStatus = document.getElementById('cooldownStatus');
+            
+            alarmStatus.textContent = alarmEnabled ? 'ENABLED' : 'DISABLED';
+            alarmStatus.style.color = alarmEnabled ? '#0f0' : '#f00';
+            
+            if (lastAlarmTime) {
+                const date = new Date(lastAlarmTime);
+                lastTrigger.textContent = date.toLocaleTimeString();
+            } else {
+                lastTrigger.textContent = 'NEVER';
+            }
+            
+            const now = Date.now();
+            if (now - lastAlarmTime < ALARM_COOLDOWN_MS) {
+                const remaining = Math.ceil((ALARM_COOLDOWN_MS - (now - lastAlarmTime)) / 1000);
+                cooldownStatus.textContent = `${remaining}s REMAINING`;
+                cooldownStatus.style.color = '#ff0';
+            } else {
+                cooldownStatus.textContent = 'INACTIVE';
+                cooldownStatus.style.color = '#0f0';
+            }
+        }
+        
+        // Add log entry to event log
+        function logEvent(message) {
+            const eventLog = document.getElementById('eventLog');
+            const entry = document.createElement('div');
+            entry.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+            eventLog.appendChild(entry);
+            eventLog.scrollTop = eventLog.scrollHeight;
+        }
+        
+        // Test functions
+        function testAlarm() {
+            logEvent('Manual alarm test triggered');
+            triggerAlarm();
+        }
+        
+        function simulateMotion() {
+            logEvent('Motion simulation triggered');
+            const fakeEventData = {
+                data: {
+                    entities: {
+                        "binary_sensor.motion_sensor_1": {
+                            state: "on"
+                        }
+                    }
+                }
+            };
+            checkMotionEvents(fakeEventData);
+        }
+        
+        // Initialize when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            updateAlarmStatus();
+            logEvent('Dashboard initialized');
+            
+            // Update status periodically
+            setInterval(updateAlarmStatus, 1000);
+            
+            // Initialize alarm toggle
+            initializeAlarmToggle();
+        });
+    </script>
+</body>
+</html>

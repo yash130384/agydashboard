@@ -139,6 +139,7 @@ class TestEspnBotLog(unittest.TestCase):
 
     def test_ui_dom_elements_present(self):
         test_client = app.test_client()
+        test_client.set_cookie("lcars_session", "0901")
         resp = test_client.get("/")
         self.assertEqual(resp.status_code, 200)
         html = resp.data.decode("utf-8")

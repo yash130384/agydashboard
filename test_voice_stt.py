@@ -22,7 +22,9 @@ class TestVoiceSttIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = app.test_client()
-        cls.auth_headers = {"X-Command-Code": "0901"}
+        login_res = cls.client.post("/api/auth/login", json={"username": "cb", "password": "09010901"})
+        token = login_res.get_json()["token"]
+        cls.auth_headers = {"Authorization": f"Bearer {token}"}
         cls.model = get_whisper_model()
 
     def _create_wav(self, duration_s=1.0, freq=440, sample_rate=16000):

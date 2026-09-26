@@ -5,6 +5,7 @@ Manages user accounts, credentials with PBKDF2-HMAC-SHA256, sessions, permission
 and security audit logs in SQLite (users.db).
 """
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -43,12 +44,17 @@ class UserService:
         self._lock = threading.RLock()
         self._init_db()
 
+    @contextlib.contextmanager
     def _get_connection(self):
         conn = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self):
         with self._lock:
@@ -104,6 +110,11 @@ class UserService:
                     CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON auth_audit_log(timestamp);
                     """
                 )
+                try:
+                    conn.execute("ALTER TABLE users ADD COLUMN api_key TEXT;")
+                except Exception:
+                    pass
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key);")
                 for k, v in KNOWN_SERVICES.items():
                     conn.execute(
                         """
@@ -149,7 +160,7 @@ class UserService:
         except Exception as e:
             print(f"[WARN] UserService.log_audit Fehler: {e}", file=sys.stderr)
 
-    def create_user(self, username: str, password: str, display_name: str = "", allowed_services: list = None, notes: str = "") -> dict:
+    def create_user(self, username: str, password: str, display_name: str = "", allowed_services: list | None = None, notes: str = "", api_key: str | None = None) -> dict:
         username = (username or "").strip().lower()
         if not username or len(username) < 2:
             return {"success": False, "error": "Benutzername muss mindestens 2 Zeichen lang sein."}
@@ -158,27 +169,30 @@ class UserService:
 
         services = allowed_services if isinstance(allowed_services, list) else []
         pwd_hash, salt = self.hash_password(password)
+        api_key_clean = api_key.strip() if api_key and str(api_key).strip() else None
 
         with self._lock:
             try:
                 with self._get_connection() as conn:
                     cursor = conn.execute(
                         """
-                        INSERT INTO users (username, password_hash, salt, display_name, allowed_services, notes)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO users (username, password_hash, salt, display_name, allowed_services, notes, api_key)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (username, pwd_hash, salt, display_name.strip(), json.dumps(services), notes.strip()),
+                        (username, pwd_hash, salt, display_name.strip(), json.dumps(services), notes.strip(), api_key_clean),
                     )
                     user_id = cursor.lastrowid
                     conn.commit()
                 self.log_audit(username, "USER_CREATED", details=f"User ID: {user_id}, Services: {services}")
-                return {"success": True, "user_id": user_id, "username": username}
-            except sqlite3.IntegrityError:
+                return {"success": True, "user_id": user_id, "username": username, "api_key": api_key_clean}
+            except sqlite3.IntegrityError as ie:
+                if "api_key" in str(ie):
+                    return {"success": False, "error": "API-Key existiert bereits."}
                 return {"success": False, "error": f"Benutzername '{username}' existiert bereits."}
             except Exception as e:
                 return {"success": False, "error": f"Datenbankfehler beim Erstellen: {e}"}
 
-    def update_user(self, user_id: int, display_name: str = None, is_active: bool = None, allowed_services: list = None, notes: str = None) -> dict:
+    def update_user(self, user_id: int, display_name: str | None = None, is_active: bool | None = None, allowed_services: list | None = None, notes: str | None = None, api_key: str | None = None) -> dict:
         with self._lock:
             try:
                 with self._get_connection() as conn:
@@ -201,6 +215,9 @@ class UserService:
                     if notes is not None:
                         updates.append("notes = ?")
                         params.append(notes.strip())
+                    if api_key is not None:
+                        updates.append("api_key = ?")
+                        params.append(api_key.strip() if api_key.strip() else None)
 
                     if not updates:
                         return {"success": True, "message": "Keine Änderungen"}
@@ -270,10 +287,33 @@ class UserService:
                 return None
             return self._row_to_user_dict(row)
 
+    def get_user_by_api_key(self, api_key: str) -> dict | None:
+        if not api_key:
+            return None
+        with self._lock, self._get_connection() as conn:
+            row = conn.execute("SELECT * FROM users WHERE api_key = ?", (api_key.strip(),)).fetchone()
+            if not row:
+                return None
+            return self._row_to_user_dict(row)
+
+    def verify_api_key(self, api_key: str) -> dict | None:
+        if not api_key:
+            return None
+        user = self.get_user_by_api_key(api_key)
+        if not user or not user["is_active"]:
+            return None
+        return {
+            "id": user["id"],
+            "username": user["username"],
+            "display_name": user["display_name"],
+            "allowed_services": user["allowed_services"],
+            "api_key": user.get("api_key"),
+        }
+
     def list_users(self) -> list[dict]:
         with self._lock, self._get_connection() as conn:
             rows = conn.execute(
-                "SELECT id, username, display_name, is_active, allowed_services, created_at, last_login_at, notes FROM users ORDER BY id ASC"
+                "SELECT id, username, display_name, is_active, allowed_services, created_at, last_login_at, notes, api_key FROM users ORDER BY id ASC"
             ).fetchall()
             res = []
             for r in rows:
@@ -290,6 +330,7 @@ class UserService:
                     "created_at": r["created_at"],
                     "last_login_at": r["last_login_at"],
                     "notes": r["notes"] or "",
+                    "api_key": r["api_key"] if "api_key" in r.keys() else None,
                 })
             return res
 
@@ -298,7 +339,7 @@ class UserService:
             services = json.loads(r["allowed_services"] or "[]")
         except Exception:
             services = []
-        return {
+        user_dict = {
             "id": r["id"],
             "username": r["username"],
             "password_hash": r["password_hash"],
@@ -311,6 +352,9 @@ class UserService:
             "last_login_at": r["last_login_at"],
             "notes": r["notes"] or "",
         }
+        if "api_key" in r.keys():
+            user_dict["api_key"] = r["api_key"]
+        return user_dict
 
     def authenticate(self, username: str, password: str, ip: str = "", user_agent: str = "") -> dict:
         user = self.get_user_by_username(username)
@@ -418,6 +462,10 @@ class UserService:
 
     def ensure_default_admins(self):
         """Stellt sicher, dass 'admin' und 'cb' existieren und als Super Admin voll berechtigt sind."""
+        default_keys = {
+            "cb": "lcars_cb_sec_token_0901",
+            "admin": "lcars_admin_sec_token_0901"
+        }
         for uname in ("admin", "cb"):
             u = self.get_user_by_username(uname)
             if not u:
@@ -427,12 +475,21 @@ class UserService:
                     display_name="cb (Super Admin)" if uname == "cb" else "Master Administrator",
                     allowed_services=["*"],
                     notes="Super Admin" if uname == "cb" else "Master Admin",
+                    api_key=default_keys.get(uname),
                 )
             else:
                 svcs = u.get("allowed_services", [])
+                needs_update = False
+                update_kwargs = {}
                 if "*" not in svcs and "all" not in svcs:
                     svcs.append("*")
-                    self.update_user(u["id"], allowed_services=svcs)
+                    update_kwargs["allowed_services"] = svcs
+                    needs_update = True
+                if not u.get("api_key") and uname in default_keys:
+                    update_kwargs["api_key"] = default_keys[uname]
+                    needs_update = True
+                if needs_update:
+                    self.update_user(u["id"], **update_kwargs)
 
     def register_service(self, key: str, name: str | None = None, subdomain: str | None = None, port: int | None = None, desc: str = "") -> bool:
         """Registriert einen Dienst dynamisch in users.db."""
@@ -515,7 +572,15 @@ class UserService:
         services = user_info.get("allowed_services", [])
         if "*" in services or "all" in services:
             return True
-        return service_key in services
+        if service_key in services:
+            return True
+        try:
+            from permissions_service import permissions_service
+            if permissions_service and hasattr(permissions_service, "check_permission"):
+                return permissions_service.check_permission(user_info, service_key)
+        except Exception:
+            pass
+        return False
 
     def get_audit_log(self, limit: int = 50) -> list[dict]:
         with self._lock, self._get_connection() as conn:

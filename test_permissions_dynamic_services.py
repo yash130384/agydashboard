@@ -111,7 +111,9 @@ class TestFlaskServiceApi(unittest.TestCase):
         self.assertIn("pulsecast", keys)
 
     def test_api_users_includes_services(self):
-        resp = self.client.get("/api/users", headers={"X-Command-Code": "0901"})
+        login_res = self.client.post("/api/auth/login", json={"username": "cb", "password": "09010901"})
+        token = login_res.get_json()["token"]
+        resp = self.client.get("/api/users", headers={"Authorization": f"Bearer {token}"})
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertTrue(data.get("success"))

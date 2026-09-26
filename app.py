@@ -23,6 +23,7 @@ import os
 import platform
 import re
 import shutil
+import secrets
 import socket
 import sqlite3
 import subprocess
@@ -66,7 +67,7 @@ if psutil:
 
 # Flask Import mit Fallback zu http.server
 try:
-    from flask import Flask, jsonify, render_template_string, request, send_from_directory, Response, stream_with_context, redirect, make_response
+    from flask import Flask, jsonify, render_template, render_template_string, request, send_from_directory, Response, stream_with_context, redirect, make_response
     USE_FLASK = True
 except ImportError:
     print("[INFO] Flask nicht installiert, verwende Python Standardbibliothek (http.server).")
@@ -126,6 +127,20 @@ try:
 except Exception as _proxy_err:
     auth_proxy = None
     print(f"[WARN] auth_proxy konnte nicht importiert werden: {_proxy_err}", file=sys.stderr)
+
+# LCARS Knowledge Base Service Import
+try:
+    from knowledge_service import knowledge_service
+except Exception as _kb_err:
+    knowledge_service = None
+    print(f"[WARN] knowledge_service konnte nicht importiert werden: {_kb_err}", file=sys.stderr)
+
+# LCARS Research Service Import
+try:
+    from research_service import research_service
+except Exception as _res_err:
+    research_service = None
+    print(f"[WARN] research_service konnte nicht importiert werden: {_res_err}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -3405,6 +3420,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .pill-pulsecast { background-color: var(--c-butterscotch); color: #000; }
     .pill-gemini-live { background-color: var(--c-secondary); color: #000; font-weight: 700; }
     .pill-devteam { background-color: var(--c-butterscotch); color: #000; font-weight: 700; }
+    .pill-knowledge { background-color: var(--c-secondary); color: #000; font-weight: 700; }
+    .pill-research { background-color: #33bbcc; color: #000; font-weight: 700; }
     .pill-auth  { background-color: var(--c-almond); color: #000; }
 
     .devteam-task-card:hover {
@@ -5048,6 +5065,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span>STARDATE:</span>
             <span id="stardateValue" style="font-weight:700;">{{ stats.stardate or '--------.-' }}</span>
           </div>
+          <div class="banner-user-badge" id="topUserBadge" style="display:flex; align-items:center; gap:0.45rem; background:rgba(235,148,58,0.14); border:1px solid rgba(235,148,58,0.45); border-radius:14px; padding:3px 10px; font-family:var(--mono-family); font-size:0.78rem; color:var(--c-gold);">
+            <span style="font-size:0.85rem;">👤</span>
+            <span id="topUserPrefix" style="color:var(--c-butterscotch); letter-spacing:0.04em;">ANGEMELDET ALS:</span>
+            <span id="topUserDisplay" style="font-weight:700; color:#ffffff; letter-spacing:0.06em; text-transform:uppercase;">CB</span>
+            <button type="button" id="topLogoutBtn" onclick="lcarsLogout()" class="lcars-pill-btn" style="height:auto; min-height:unset; padding:2px 8px; border-radius:10px; background-color:var(--c-red); color:#ffffff; border:none; font-family:var(--font-family); font-size:0.75rem; font-weight:700; cursor:pointer; margin-left:4px; letter-spacing:0.05em;" title="LCARS Session beenden / Abmelden">⏻ LOGOUT</button>
+          </div>
         </div>
       </div>
       <div class="data-cascade-bar">
@@ -5160,8 +5183,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="lcars-pill-btn pill-devteam" onclick="switchCategory('devteam')" id="btn-cat-devteam" style="display: none;">
           DEV-TEAM
         </button>
-        <button class="lcars-pill-btn pill-auth" onclick="toggleAuthModal()" id="btn-auth-toggle">
-          <span id="authBtnIcon">🔒</span> <span id="authBtnLabel">CODE</span>
+        <!-- WISSEN (KNOWLEDGE BASE) -->
+        <button class="lcars-pill-btn pill-knowledge" onclick="switchCategory('knowledge')" id="btn-cat-knowledge" style="display: none;">
+          WISSEN
+        </button>
+        <!-- RESEARCH (RECHERCHE BOT) -->
+        <button class="lcars-pill-btn pill-research" onclick="switchCategory('research')" id="btn-cat-research" style="display: none;">
+          RESEARCH
         </button>
       </nav>
 
@@ -5175,6 +5203,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="left-action-btn" onclick="fetchLiveStats(true)">
           <span>⟳</span> <span>REFRESH</span>
         </button>
+
         <div class="left-elbow-bottom">
           <span id="sysElbowLabel">{{ stats.system_label }}</span>
         </div>
@@ -5312,6 +5341,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </div>
           </div>
         </section>
+
+
 
         <!-- KATEGORIE 2: SERVICES & SCANNER (KOMBINIERT) -->
         <section class="lcars-section" id="section-services">
@@ -6424,60 +6455,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </button>
           </div>
 
-          <!-- LCARS RECHTEVERWALTUNG // COMMAND CODE ZUGRIFFSKONTROLLE -->
+          <!-- LCARS RECHTEVERWALTUNG // ZUGRIFFSKONTROLLE -->
           <div class="lcars-card" id="configPermissionsCard" style="margin-top: 1.25rem; margin-bottom: 1.25rem; width: 100%; border-left: 6px solid var(--c-primary);">
             <div class="card-head" style="display:flex; justify-content:space-between; align-items:center;">
               <div style="display:flex; align-items:center; gap:0.6rem;">
-                <span class="card-head-icon" id="permHeadIcon">🔒</span>
+                <span class="card-head-icon" id="permHeadIcon">🛡️</span>
                 <span class="card-head-title" style="color:var(--c-primary); font-size:1.15rem;">LCARS SICHERHEITSPROTOKOLL // RECHTEVERWALTUNG</span>
               </div>
-              <span id="permStatusBadge" class="badge-status" style="background-color: var(--c-red); color: #fff;">GESPERRT // STUFE 1</span>
-            </div>
-
-            <p style="color:var(--c-gold); font-size:0.9rem; margin-bottom:1rem;">
-              ZUGANGSKONTROLLE FÜR SENSIBLE BEREICHE. GESPERRTE BEREICHE WERDEN ERST NACH EINGABE DES COMMAND CODES IN DER NAVIGATION ANGEZEIGT (INITIAL-CODE: 0901).
-            </p>
-
-            <!-- Locked State View (Command Code Input & Keypad) -->
-            <div id="permLockedView" style="display:block; background:rgba(0,0,0,0.5); border:1px solid rgba(235,148,58,0.3); border-radius:8px; padding:1.25rem;">
-              <div style="max-width: 420px; margin: 0 auto; text-align: center;">
-                <div style="font-family:var(--font-family); font-size:1.25rem; color:var(--c-primary); letter-spacing:0.08em; margin-bottom:0.5rem; text-transform:uppercase;">
-                  AUTHORISIERUNG ERFORDERLICH
-                </div>
-                <div style="font-family:var(--mono-family); font-size:0.85rem; color:#aaa; margin-bottom:1.2rem;">
-                  COMMAND CODE EINGEBEN UM DIE RECHTEVERWALTUNG ZU ENTSPERREN
-                </div>
-
-                <div style="display:flex; gap:0.5rem; justify-content:center; align-items:center; margin-bottom:1rem;">
-                  <input type="password" id="configPinInput" maxlength="10" placeholder="••••" class="lcars-input" style="width:180px; font-size:1.6rem; text-align:center; letter-spacing:0.3em; font-family:var(--mono-family);" onkeydown="if(event.key==='Enter') verifyConfigPin();">
-                  <button type="button" class="left-action-btn" onclick="verifyConfigPin()" style="padding:0.6rem 1.2rem; font-size:0.95rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
-                    <span>🔓</span> <span>LOGIN</span>
-                  </button>
-                </div>
-
-                <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:0.4rem; max-width:210px; margin:0 auto 1rem auto;">
-                  <button type="button" class="keypad-btn" onclick="appendConfigPin('1')">1</button>
-                  <button type="button" class="keypad-btn" onclick="appendConfigPin('2')">2</button>
-                  <button type="button" class="keypad-btn" onclick="appendConfigPin('3')">3</button>
-                  <button type="button" class="keypad-btn" onclick="appendConfigPin('4')">4</button>
-                  <button type="button" class="keypad-btn" onclick="appendConfigPin('5')">5</button>
-                  <button type="button" class="keypad-btn" onclick="appendConfigPin('6')">6</button>
-                  <button type="button" class="keypad-btn" onclick="appendConfigPin('7')">7</button>
-                  <button type="button" class="keypad-btn" onclick="appendConfigPin('8')">8</button>
-                  <button type="button" class="keypad-btn" onclick="appendConfigPin('9')">9</button>
-                  <button type="button" class="keypad-btn keypad-special" onclick="clearConfigPin()">CLR</button>
-                  <button type="button" class="keypad-btn" onclick="appendConfigPin('0')">0</button>
-                  <button type="button" class="keypad-btn keypad-special" onclick="verifyConfigPin()">ENTER</button>
-                </div>
-
-                <div id="configPinError" style="display:none; color:var(--c-red); font-family:var(--mono-family); font-size:0.85rem; margin-top:0.5rem;">
-                  ZUGRIFF VERWEIGERT // UNGÜLTIGER COMMAND CODE
-                </div>
-              </div>
+              <span id="permStatusBadge" class="badge-status" style="background-color: #44dd88; color: #000;">AKTIV // ZENTRALE AUTH</span>
             </div>
 
             <!-- Unlocked Management View -->
-            <div id="permUnlockedView" style="display:none;">
+            <div id="permUnlockedView" style="display:block;">
               <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:0.75rem 1rem; margin-bottom:1.25rem;">
                 <div style="display:flex; align-items:center; gap:0.6rem;">
                   <span style="color:#44dd88; font-size:1.2rem;">●</span>
@@ -6651,6 +6640,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                         <span class="perm-desc">Hermes Kanban Board &amp; Dispatcher</span>
                       </div>
                     </label>
+
+                    <!-- WISSEN (KNOWLEDGE BASE) -->
+                    <label class="perm-checkbox-card" style="border-color:var(--c-secondary);">
+                      <input type="checkbox" id="permLock_knowledge" value="knowledge" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name" style="color:var(--c-secondary);">WISSEN</span>
+                        <span class="perm-desc">Wissensdatenbank, QA- &amp; Review-Berichte, ADRs</span>
+                      </div>
+                    </label>
+
+                    <!-- RESEARCH (RECHERCHE BOT) -->
+                    <label class="perm-checkbox-card" style="border-color:#33bbcc;">
+                      <input type="checkbox" id="permLock_research" value="research" class="perm-lock-cb">
+                      <div class="perm-card-info">
+                        <span class="perm-name" style="color:#33bbcc;">RESEARCH</span>
+                        <span class="perm-desc">Recherche-Berichte &amp; Researcher-Aufträge</span>
+                      </div>
+                    </label>
                   </div>
                 </div>
 
@@ -6685,14 +6692,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </form>
 
               <!-- 3. LCARS BENUTZER- & ZUGRIFFSVERWALTUNG (*.PIMMEL.SITE) -->
-              <div style="margin-top:2rem; border-top:2px solid var(--c-primary); padding-top:1.5rem;">
+              <div id="lcarsUserManagementSection" style="margin-top:2rem; border-top:2px solid var(--c-primary); padding-top:1.5rem;">
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
                   <div>
                     <div style="font-family:var(--font-family); font-size:1.25rem; font-weight:700; color:var(--c-primary); letter-spacing:0.06em; text-transform:uppercase;">
                       3. LCARS BENUTZER- &amp; ZUGRIFFSVERWALTUNG (*.PIMMEL.SITE)
                     </div>
                     <div style="font-family:var(--mono-family); font-size:0.85rem; color:#aaa;">
-                      Zentrale Accounts für geschützte Dienste via Cloudflare Named Tunnel (cast, tele, mat, head, port)
+                      Zentrale Accounts für geschützte Dienste &amp; Dashboard-Kategorien (Nur für cb / Super Admin)
                     </div>
                   </div>
                   <div style="display:flex; gap:0.5rem;">
@@ -6711,9 +6718,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     <thead>
                       <tr style="background:rgba(235,148,58,0.15); border-bottom:1px solid rgba(235,148,58,0.3); text-align:left; font-family:var(--mono-family); color:var(--c-gold);">
                         <th style="padding:0.6rem 0.75rem;">STATUS</th>
-                        <th style="padding:0.6rem 0.75rem;">BENUTZER</th>
+                        <th style="padding:0.6rem 0.75rem;">BENUTZER &amp; KEY</th>
                         <th style="padding:0.6rem 0.75rem;">NAME / NOTIZ</th>
-                        <th style="padding:0.6rem 0.75rem;">BERECHTIGTE DIENSTE</th>
+                        <th style="padding:0.6rem 0.75rem;">BERECHTIGTE KATEGORIEN &amp; DIENSTE</th>
                         <th style="padding:0.6rem 0.75rem;">LETZTER LOGIN</th>
                         <th style="padding:0.6rem 0.75rem; text-align:right;">AKTIONEN</th>
                       </tr>
@@ -6738,6 +6745,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     <div style="color:#666;">Keine Authentifizierungsereignisse protokolliert.</div>
                   </div>
                 </div>
+              </div>
+
+              <!-- Non-Admin Notice for User Management -->
+              <div id="lcarsUserMgmtRestrictedNotice" style="display:none; margin-top:2rem; border-top:2px solid var(--c-red); padding:1.25rem; background:rgba(207,79,79,0.12); border-radius:6px; font-family:var(--mono-family); font-size:0.85rem; color:var(--c-red); text-align:center;">
+                🔒 BENUTZER- &amp; RECHTEVERWALTUNG IST NUR FÜR ADMINISTRATOREN (CB / SUPER ADMIN) ZUGÄNGLICH.
               </div>
             </div>
           </div>
@@ -9159,6 +9171,202 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </section>
 
+        <!-- KATEGORIE: WISSEN (KNOWLEDGE BASE) -->
+        <section class="lcars-section" id="section-knowledge">
+          <!-- Header Bar -->
+          <div class="lcars-header-bar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+            <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+              <h2>WISSENSDATENBANK</h2>
+              <div style="display:flex; align-items:center; gap:4px;">
+                <span style="display:inline-block; width:28px; height:12px; background:var(--c-secondary); border-radius:6px 0 0 6px;"></span>
+                <span style="display:inline-block; width:16px; height:12px; background:var(--c-primary);"></span>
+                <span style="display:inline-block; width:36px; height:12px; background:var(--c-gold); border-radius:0 6px 6px 0;"></span>
+              </div>
+              <span class="lcars-pill-tag" style="background:var(--c-secondary); color:#000;">ODN KNOWLEDGE ARCHIVE</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
+              <span id="knowledgeLastSyncText" style="font-family:var(--mono-family); font-size:0.78rem; color:#aaa; margin-right:0.3rem;">SYNC: --:--:--</span>
+              <button type="button" class="left-action-btn" id="btnKnowledgeNewArticle" onclick="openKnowledgeNewModal()" style="border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700; padding:0.35rem 0.9rem; font-size:0.82rem;">
+                <span>+</span> <span>EINTRAG ERSTELLEN</span>
+              </button>
+              <button type="button" class="left-action-btn" onclick="fetchKnowledgeData(true)" style="border-color:var(--c-blue); color:var(--c-blue); padding:0.35rem 0.8rem; font-size:0.82rem;">
+                <span>⟳</span> <span>REFRESH</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- READOUT GRID: METRIKEN -->
+          <div class="readout-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom:1rem;">
+            <div class="lcars-card">
+              <div class="card-head">
+                <span class="card-head-title">ARTIKEL GESAMT</span>
+                <span class="card-head-icon">📚</span>
+              </div>
+              <div class="card-metric" id="knowledgeStatTotal" style="color:var(--c-secondary);">0</div>
+              <div class="card-metric-sub">Einträge in Wissensdatenbank</div>
+              <div class="badge-status badge-online" style="background:var(--c-secondary); color:#000;">ARCHIV AKTIV</div>
+            </div>
+            <div class="lcars-card card-blue">
+              <div class="card-head">
+                <span class="card-head-title">QA-REPORTS</span>
+                <span class="card-head-icon">🧪</span>
+              </div>
+              <div class="card-metric" id="knowledgeStatQa" style="color:#66ccff;">0</div>
+              <div class="card-metric-sub">Testberichte &amp; Verifizierungen</div>
+              <div class="badge-status badge-online" style="background:#0099ff; color:#fff;">QA SUITE</div>
+            </div>
+            <div class="lcars-card">
+              <div class="card-head">
+                <span class="card-head-title">CODE-REVIEWS</span>
+                <span class="card-head-icon">🔍</span>
+              </div>
+              <div class="card-metric" id="knowledgeStatReview" style="color:#ffcc66;">0</div>
+              <div class="card-metric-sub">Audit-Befunde &amp; Walkthroughs</div>
+              <div class="badge-status badge-online" style="background:var(--c-butterscotch); color:#000;">REVIEW POOL</div>
+            </div>
+            <div class="lcars-card">
+              <div class="card-head">
+                <span class="card-head-title">ARCHITEKTUR (ADR)</span>
+                <span class="card-head-icon">📐</span>
+              </div>
+              <div class="card-metric" id="knowledgeStatAdr" style="color:#44dd88;">0</div>
+              <div class="card-metric-sub">Decision Records &amp; Runbooks</div>
+              <div class="badge-status badge-online" style="background:#44dd88; color:#000;">DECISIONS</div>
+            </div>
+          </div>
+
+          <!-- FILTER- UND SUCHARCHE -->
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.6rem 0.8rem;">
+            <!-- Kategorie Filter Tabs -->
+            <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+              <button type="button" class="left-action-btn kb-filter-btn active" data-cat="all" onclick="filterKnowledgeCategory('all')" id="kb-filter-all" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700;">
+                ALLE
+              </button>
+              <button type="button" class="left-action-btn kb-filter-btn" data-cat="qa" onclick="filterKnowledgeCategory('qa')" id="kb-filter-qa" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#bbb;">
+                QA-REPORTS
+              </button>
+              <button type="button" class="left-action-btn kb-filter-btn" data-cat="review" onclick="filterKnowledgeCategory('review')" id="kb-filter-review" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#bbb;">
+                CODE-REVIEWS
+              </button>
+              <button type="button" class="left-action-btn kb-filter-btn" data-cat="architecture" onclick="filterKnowledgeCategory('architecture')" id="kb-filter-architecture" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#bbb;">
+                ADRS
+              </button>
+              <button type="button" class="left-action-btn kb-filter-btn" data-cat="runbook" onclick="filterKnowledgeCategory('runbook')" id="kb-filter-runbook" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#bbb;">
+                RUNBOOKS
+              </button>
+              <button type="button" class="left-action-btn kb-filter-btn" data-cat="allgemein" onclick="filterKnowledgeCategory('allgemein')" id="kb-filter-allgemein" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#bbb;">
+                ALLGEMEIN
+              </button>
+            </div>
+
+            <!-- Volltext-Suche -->
+            <div style="display:flex; align-items:center; gap:0.5rem; flex:1; max-width:380px; min-width:200px;">
+              <input type="text" id="knowledgeSearchInput" class="lcars-input" placeholder="🔍 Volltextsuche in Titel &amp; Inhalt..." oninput="handleKnowledgeSearchInput()" style="width:100%; height:32px; font-size:0.85rem;">
+              <button type="button" class="left-action-btn" onclick="clearKnowledgeSearch()" style="padding:0.3rem 0.6rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#888;">✕</button>
+            </div>
+          </div>
+
+          <!-- ARTIKEL LISTE / KARTEN -->
+          <div id="knowledgeArticleList" style="display:flex; flex-direction:column; gap:0.75rem; min-height:150px;">
+            <div style="text-align:center; padding:2rem; color:#888; font-family:var(--mono-family);">Lade Wissensartikel...</div>
+          </div>
+        </section>
+
+        <!-- KATEGORIE: RESEARCH (RECHERCHE BOT) -->
+        <section class="lcars-section" id="section-research">
+          <!-- Header Bar -->
+          <div class="lcars-header-bar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+            <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+              <h2>RESEARCH</h2>
+              <div style="display:flex; align-items:center; gap:4px;">
+                <span style="display:inline-block; width:28px; height:12px; background:#33bbcc; border-radius:6px 0 0 6px;"></span>
+                <span style="display:inline-block; width:16px; height:12px; background:var(--c-primary);"></span>
+                <span style="display:inline-block; width:36px; height:12px; background:var(--c-gold); border-radius:0 6px 6px 0;"></span>
+              </div>
+              <span class="lcars-pill-tag" style="background:#33bbcc; color:#000;">RESEARCHER BOT REPOSITORY</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
+              <span id="researchLastSyncText" style="font-family:var(--mono-family); font-size:0.78rem; color:#aaa; margin-right:0.3rem;">SYNC: --:--:--</span>
+              <button type="button" class="left-action-btn" id="btnResearchStart" onclick="openResearchTriggerModal()" style="border-color:#33bbcc; color:#33bbcc; font-weight:700; padding:0.35rem 0.9rem; font-size:0.82rem;">
+                <span>+</span> <span>RECHERCHE STARTEN</span>
+              </button>
+              <button type="button" class="left-action-btn" onclick="fetchResearchData(true)" style="border-color:var(--c-blue); color:var(--c-blue); padding:0.35rem 0.8rem; font-size:0.82rem;">
+                <span>⟳</span> <span>REFRESH</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- READOUT GRID: METRIKEN -->
+          <div class="readout-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom:1rem;">
+            <div class="lcars-card">
+              <div class="card-head">
+                <span class="card-head-title">RECHERCHEN GESAMT</span>
+                <span class="card-head-icon">🔬</span>
+              </div>
+              <div class="card-metric" id="researchStatTotal" style="color:#33bbcc;">0</div>
+              <div class="card-metric-sub">Aufträge &amp; Berichte</div>
+              <div class="badge-status badge-online" style="background:#33bbcc; color:#000;">DATENBANK AKTIV</div>
+            </div>
+            <div class="lcars-card card-blue">
+              <div class="card-head">
+                <span class="card-head-title">ABGESCHLOSSEN</span>
+                <span class="card-head-icon">✅</span>
+              </div>
+              <div class="card-metric" id="researchStatCompleted" style="color:#44dd88;">0</div>
+              <div class="card-metric-sub">Fertige Recherche-Berichte</div>
+              <div class="badge-status badge-online" style="background:#44dd88; color:#000;">BEREIT</div>
+            </div>
+            <div class="lcars-card">
+              <div class="card-head">
+                <span class="card-head-title">LAUFEND</span>
+                <span class="card-head-icon">⚡</span>
+              </div>
+              <div class="card-metric" id="researchStatRunning" style="color:#ffcc66;">0</div>
+              <div class="card-metric-sub">In Bearbeitung (Bot)</div>
+              <div class="badge-status badge-online" style="background:var(--c-butterscotch); color:#000;">IN ARBEIT</div>
+            </div>
+            <div class="lcars-card">
+              <div class="card-head">
+                <span class="card-head-title">GEPLANT</span>
+                <span class="card-head-icon">⏳</span>
+              </div>
+              <div class="card-metric" id="researchStatPlanned" style="color:var(--c-secondary);">0</div>
+              <div class="card-metric-sub">Warteschlange / Backlog</div>
+              <div class="badge-status badge-online" style="background:var(--c-secondary); color:#000;">GEPLANT</div>
+            </div>
+          </div>
+
+          <!-- FILTER- UND SUCHARCHE -->
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.6rem 0.8rem;">
+            <!-- Status Filter Tabs -->
+            <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+              <button type="button" class="left-action-btn res-filter-btn active" data-status="all" onclick="filterResearchStatus('all')" id="res-filter-all" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:#33bbcc; color:#33bbcc; font-weight:700;">
+                ALLE
+              </button>
+              <button type="button" class="left-action-btn res-filter-btn" data-status="completed" onclick="filterResearchStatus('completed')" id="res-filter-completed" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#bbb;">
+                ABGESCHLOSSEN
+              </button>
+              <button type="button" class="left-action-btn res-filter-btn" data-status="running" onclick="filterResearchStatus('running')" id="res-filter-running" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#bbb;">
+                LAUFEND
+              </button>
+              <button type="button" class="left-action-btn res-filter-btn" data-status="planned" onclick="filterResearchStatus('planned')" id="res-filter-planned" style="padding:0.35rem 0.8rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#bbb;">
+                GEPLANT
+              </button>
+            </div>
+
+            <!-- Volltext-Suche -->
+            <div style="display:flex; align-items:center; gap:0.5rem; flex:1; max-width:380px; min-width:200px;">
+              <input type="text" id="researchSearchInput" class="lcars-input" placeholder="🔍 Suche in Titel, Thema, Bericht..." oninput="handleResearchSearchInput()" style="width:100%; height:32px; font-size:0.85rem;">
+              <button type="button" class="left-action-btn" onclick="clearResearchSearch()" style="padding:0.3rem 0.6rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#888;">✕</button>
+            </div>
+          </div>
+
+          <!-- RECHERCHE BERICHTE LISTE / KARTEN -->
+          <div id="researchReportList" style="display:flex; flex-direction:column; gap:0.75rem; min-height:150px;">
+            <div style="text-align:center; padding:2rem; color:#888; font-family:var(--mono-family);">Lade Recherche-Berichte...</div>
+          </div>
+        </section>
+
         <!-- LCARS PULSECAST SERIES EPISODES MODAL -->
         <div id="pulsecastSeriesModal" class="ha-modal-overlay" style="display:none;" onclick="handlePulsecastSeriesModalBackdropClick(event)">
           <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:820px; width:95%; max-height:90vh; display:flex; flex-direction:column;">
@@ -9444,36 +9652,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                   <input type="text" id="formUserDisplayName" class="lcars-input" placeholder="z.B. Cdr. Data">
                 </div>
 
+                <div class="config-field" style="margin-bottom:1rem;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.35rem;">
+                    <label for="formUserApiKey" style="font-size:0.85rem; font-weight:700; color:var(--c-gold); font-family:var(--font-family); letter-spacing:0.05em;">
+                      SUBRAUM ACCESS-KEY / API-KEY (OPTIONAL)
+                    </label>
+                    <div style="display:flex; gap:0.4rem;">
+                      <button type="button" class="left-action-btn" onclick="generateFormUserApiKey()" style="padding:0.15rem 0.5rem; font-size:0.72rem; border-color:var(--c-gold); color:var(--c-gold);">
+                        <span>🔑 GENERIEREN</span>
+                      </button>
+                      <button type="button" class="left-action-btn" onclick="clearFormUserApiKey()" style="padding:0.15rem 0.5rem; font-size:0.72rem; border-color:var(--c-red); color:var(--c-red);">
+                        <span>CLR</span>
+                      </button>
+                    </div>
+                  </div>
+                  <input type="text" id="formUserApiKey" class="lcars-input" placeholder="z.B. lcars_... (leer lassen für keinen Key)" autocomplete="off">
+                </div>
+
                 <!-- Berechtigungs-Matrix -->
                 <div style="margin-bottom:1.2rem; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:0.85rem;">
                   <div style="font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.5rem; text-transform:uppercase;">
-                    🛡️ ZUGRIFFSBERECHTIGUNGEN (*.PIMMEL.SITE)
+                    🛡️ ZUGRIFFSBERECHTIGUNGEN (KATEGORIEN & WEBSERVICES)
                   </div>
-                  <div id="userServicesGrid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:0.5rem;">
-                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
-                      <input type="checkbox" id="userSvc_all" value="*" class="user-svc-cb" onchange="handleUserSvcAllToggle()">
-                      <span style="font-family:var(--mono-family); font-size:0.85rem; color:var(--c-primary); font-weight:700;">★ Alle Dienste (*)</span>
-                    </label>
-                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
-                      <input type="checkbox" id="userSvc_pulsecast" value="pulsecast" class="user-svc-cb">
-                      <span style="font-family:var(--mono-family); font-size:0.82rem;">PulseCast (cast)</span>
-                    </label>
-                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
-                      <input type="checkbox" id="userSvc_telemetryvault" value="telemetryvault" class="user-svc-cb">
-                      <span style="font-family:var(--mono-family); font-size:0.82rem;">Telemetry (tele)</span>
-                    </label>
-                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
-                      <input type="checkbox" id="userSvc_matter" value="matter" class="user-svc-cb">
-                      <span style="font-family:var(--mono-family); font-size:0.82rem;">Matter Server (mat)</span>
-                    </label>
-                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
-                      <input type="checkbox" id="userSvc_headroom" value="headroom" class="user-svc-cb">
-                      <span style="font-family:var(--mono-family); font-size:0.82rem;">Headroom AI (head)</span>
-                    </label>
-                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
-                      <input type="checkbox" id="userSvc_cups" value="cups" class="user-svc-cb">
-                      <span style="font-family:var(--mono-family); font-size:0.82rem;">CUPS Drucker (port)</span>
-                    </label>
+                  <div id="userServicesGrid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.5rem;">
                   </div>
                 </div>
 
@@ -9502,34 +9703,132 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </div>
 
-        <!-- LCARS USER PASSWORD RESET MODAL -->
+        <!-- LCARS USER CREDENTIALS & KEYS MODAL -->
         <div id="userPasswordModal" class="ha-modal-overlay" style="display:none;" onclick="if(event.target===this) closeChangePasswordModal()">
-          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:420px; width:95%; background:#08080d; border:2px solid var(--c-gold); border-radius:8px; overflow:hidden;">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:480px; width:95%; background:#08080d; border:2px solid var(--c-gold); border-radius:8px; overflow:hidden;">
             <div class="ha-modal-header" style="background:var(--c-gold); color:#000; padding:0.6rem 1rem; display:flex; justify-content:space-between; align-items:center;">
               <div style="display:flex; align-items:center; gap:0.6rem;">
                 <span style="font-size:1.3rem;">🔑</span>
                 <div style="font-size:1.15rem; font-weight:700; text-transform:uppercase; font-family:var(--font-family);">
-                  PASSWORT ÄNDERN
+                  AUTHENTIFIZIERUNG &amp; KEYS VERWALTEN
                 </div>
               </div>
               <button type="button" class="ha-modal-close-btn" onclick="closeChangePasswordModal()" style="border-color:#000; color:#000; font-weight:700;">✕</button>
             </div>
             <div class="ha-modal-body" style="padding:1.25rem;">
-              <form onsubmit="submitChangeUserPassword(event)">
-                <input type="hidden" id="pwdModalUserId" value="">
-                <div style="margin-bottom:1rem; font-family:var(--mono-family); font-size:0.9rem; color:#ccc;">
-                  Passwort für Benutzer <strong style="color:var(--c-gold);" id="pwdModalUsername"></strong> neu setzen:
+              <input type="hidden" id="pwdModalUserId" value="">
+              <div style="margin-bottom:1.25rem; font-family:var(--mono-family); font-size:0.9rem; color:#ccc;">
+                Benutzer: <strong style="color:var(--c-gold); font-size:1rem;" id="pwdModalUsername"></strong>
+              </div>
+
+              <!-- 1. Passwort Ändern -->
+              <div style="margin-bottom:1.5rem; background:rgba(255,255,255,0.03); border:1px solid rgba(235,148,58,0.25); border-radius:6px; padding:0.85rem;">
+                <div style="font-size:0.85rem; font-weight:700; color:var(--c-primary); margin-bottom:0.6rem; text-transform:uppercase; font-family:var(--font-family);">
+                  1. PASSWORT ÄNDERN
                 </div>
-                <div class="config-field" style="margin-bottom:1.25rem;">
-                  <label for="pwdModalNewPassword" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem;">
-                    NEUES PASSWORT (MIN. 6 ZEICHEN)
-                  </label>
-                  <input type="password" id="pwdModalNewPassword" class="lcars-input" placeholder="••••••••••••" minlength="6" required>
+                <form onsubmit="submitChangeUserPassword(event)">
+                  <div class="config-field" style="margin-bottom:0.75rem;">
+                    <input type="password" id="pwdModalNewPassword" class="lcars-input" placeholder="Neues Passwort (min. 6 Zeichen)" minlength="6">
+                  </div>
+                  <div style="display:flex; justify-content:flex-end;">
+                    <button type="submit" class="left-action-btn" style="padding:0.35rem 1rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700; font-size:0.8rem;">
+                      🔑 PASSWORT SPEICHERN
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <!-- 2. Subraum Access-Key / API-Key -->
+              <div style="margin-bottom:1.25rem; background:rgba(255,255,255,0.03); border:1px solid rgba(186,164,229,0.25); border-radius:6px; padding:0.85rem;">
+                <div style="font-size:0.85rem; font-weight:700; color:var(--c-secondary); margin-bottom:0.6rem; text-transform:uppercase; font-family:var(--font-family);">
+                  2. SUBRAUM ACCESS-KEY (API-KEY)
                 </div>
+                <div class="config-field" style="margin-bottom:0.75rem;">
+                  <div style="display:flex; gap:0.4rem;">
+                    <input type="text" id="pwdModalApiKey" class="lcars-input" placeholder="Kein Access-Key hinterlegt" autocomplete="off" style="font-size:0.9rem;">
+                    <button type="button" class="left-action-btn" onclick="generatePwdModalKey()" style="padding:0.35rem 0.6rem; border-color:var(--c-gold); color:var(--c-gold); white-space:nowrap; font-size:0.8rem;" title="Neuen Zufalls-Key generieren">
+                      <span>⚡ NEU</span>
+                    </button>
+                  </div>
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap:0.5rem;">
+                  <button type="button" class="left-action-btn" onclick="deleteUserApiKey()" style="padding:0.35rem 0.8rem; border-color:var(--c-red); color:var(--c-red); font-size:0.8rem;" title="Access-Key entfernen">
+                    <span>🗑️ KEY LÖSCHEN</span>
+                  </button>
+                  <button type="button" class="left-action-btn" onclick="saveUserApiKey()" style="padding:0.35rem 1rem; border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700; font-size:0.8rem;" title="Key speichern">
+                    <span>💾 KEY SPEICHERN</span>
+                  </button>
+                </div>
+              </div>
+
+              <div id="pwdModalStatus" style="display:none; font-family:var(--mono-family); font-size:0.85rem; padding:0.5rem; border-radius:4px; text-align:center; margin-bottom:1rem;"></div>
+
+              <div style="display:flex; justify-content:flex-end;">
+                <button type="button" class="left-action-btn" onclick="closeChangePasswordModal()" style="padding:0.4rem 1rem;">SCHLIESSEN</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- LCARS IN-DASHBOARD LOGIN OVERLAY -->
+        <div id="lcarsLoginOverlay" class="ha-modal-overlay" style="display:none;" onclick="if(event.target===this) closeLcarsLoginOverlay()">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:500px; width:95%; background:#08080d; border:2px solid var(--c-primary); border-radius:16px 0 16px 0; overflow:hidden; box-shadow:0 0 35px rgba(235,148,58,0.25);">
+            <div class="ha-modal-header" style="background:var(--c-primary); color:#000; padding:0.75rem 1.25rem; display:flex; justify-content:space-between; align-items:center;">
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <span style="font-size:1.3rem;">🛡️</span>
+                <div style="font-size:1.15rem; font-weight:700; text-transform:uppercase; font-family:var(--font-family); letter-spacing:0.06em;">
+                  LCARS ACCESS AUTHORIZATION // LOGIN
+                </div>
+              </div>
+              <button type="button" class="ha-modal-close-btn" onclick="closeLcarsLoginOverlay()" style="border-color:#000; color:#000; font-weight:700;">✕</button>
+            </div>
+            <div class="ha-modal-body" style="padding:1.5rem 1.25rem;">
+              <!-- Mode Tabs -->
+              <div style="display:flex; gap:0.5rem; margin-bottom:1.25rem;">
+                <button type="button" id="overlayTabCredentials" class="left-action-btn" onclick="switchOverlayLoginMode('credentials')" style="flex:1; padding:0.45rem; border-color:var(--c-primary); background:var(--c-primary); color:#000; font-weight:700; font-size:0.85rem;">
+                  <span>OFFICER ID + CODE</span>
+                </button>
+                <button type="button" id="overlayTabKey" class="left-action-btn" onclick="switchOverlayLoginMode('key')" style="flex:1; padding:0.45rem; border-color:var(--c-gold); color:var(--c-gold); font-size:0.85rem;">
+                  <span>ACCESS-KEY</span>
+                </button>
+              </div>
+
+              <form id="lcarsOverlayLoginForm" onsubmit="submitLcarsLoginOverlay(event)">
+                <div id="overlayCredentialsGroup">
+                  <div class="config-field" style="margin-bottom:1rem;">
+                    <label for="overlayUsername" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-primary); margin-bottom:0.35rem; font-family:var(--font-family); letter-spacing:0.05em;">
+                      BENUTZERKENNUNG (OFFICER ID)
+                    </label>
+                    <input type="text" id="overlayUsername" class="lcars-input" placeholder="OFFICER ID" autocomplete="username">
+                  </div>
+                  <div class="config-field" style="margin-bottom:1rem;">
+                    <label for="overlayPassword" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem; font-family:var(--font-family); letter-spacing:0.05em;">
+                      AUTORISIERUNGSCODE (PASSWORT)
+                    </label>
+                    <input type="password" id="overlayPassword" class="lcars-input" placeholder="••••••••••••" autocomplete="current-password">
+                  </div>
+                </div>
+
+                <div id="overlayKeyGroup" style="display:none;">
+                  <div class="config-field" style="margin-bottom:1rem;">
+                    <label for="overlayApiKey" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem; font-family:var(--font-family); letter-spacing:0.05em;">
+                      SUBRAUM ACCESS-KEY / API-KEY
+                    </label>
+                    <input type="text" id="overlayApiKey" class="lcars-input" placeholder="lcars_... / Access-Key" autocomplete="off">
+                  </div>
+                </div>
+
+                <label style="display:flex; align-items:center; gap:0.6rem; cursor:pointer; margin-bottom:1.25rem;">
+                  <input type="checkbox" id="overlayRemember" checked style="accent-color:var(--c-primary); width:18px; height:18px;">
+                  <span style="font-family:var(--mono-family); font-size:0.8rem; color:#bbb;">PERSISTENTE SUBRAUM-SESSION (30 TAGE AKTIV BLEIBEN)</span>
+                </label>
+
+                <div id="overlayStatusBox" style="display:none; padding:0.6rem 0.8rem; border-radius:4px; font-family:var(--mono-family); font-size:0.85rem; margin-bottom:1rem; text-align:center;"></div>
+
                 <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
-                  <button type="button" class="left-action-btn" onclick="closeChangePasswordModal()" style="padding:0.4rem 0.9rem;">ABBRECHEN</button>
-                  <button type="submit" class="left-action-btn" style="padding:0.4rem 1.2rem; border-color:var(--c-gold); color:var(--c-gold); font-weight:700;">
-                    🔑 PASSWORT AKTUALISIEREN
+                  <button type="button" class="left-action-btn" onclick="closeLcarsLoginOverlay()" style="padding:0.4rem 0.9rem;">ABBRECHEN</button>
+                  <button type="submit" id="overlaySubmitBtn" class="left-action-btn" style="padding:0.4rem 1.25rem; border-color:var(--c-primary); color:var(--c-primary); font-weight:700;">
+                    <span>🔓</span> <span>AUTORISIEREN</span>
                   </button>
                 </div>
               </form>
@@ -9675,6 +9974,171 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </div>
 
+        <!-- LCARS KNOWLEDGE BASE ARTICLE DETAIL MODAL -->
+        <div id="knowledgeDetailModal" class="ha-modal-overlay" style="display:none;" onclick="handleKnowledgeDetailModalBackdrop(event)">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:860px; width:95%; max-height:88vh; display:flex; flex-direction:column;">
+            <div class="ha-modal-header" style="background:var(--c-secondary); color:#000;">
+              <div style="display:flex; align-items:center; gap:0.6rem; min-width:0;">
+                <span style="font-size:1.3rem;">📖</span>
+                <div style="min-width:0;">
+                  <div id="knowledgeDetailModalTitle" style="font-size:1.15rem; font-weight:700; text-transform:uppercase; font-family:var(--font-family); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    WISSENSARTIKEL
+                  </div>
+                  <div id="knowledgeDetailModalMeta" style="font-size:0.75rem; color:#222; font-family:var(--mono-family);">
+                    ODN ARCHIVE // DETAIL
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <button type="button" class="left-action-btn" id="btnKnowledgeDeleteArticle" onclick="deleteCurrentKnowledgeArticle()" style="padding:0.25rem 0.6rem; font-size:0.75rem; border-color:var(--c-red); color:var(--c-red); background:rgba(0,0,0,0.2);">LÖSCHEN</button>
+                <button type="button" class="ha-modal-close-btn" onclick="closeKnowledgeDetailModal()">✕</button>
+              </div>
+            </div>
+            <div class="ha-modal-body" style="padding:1.5rem; overflow-y:auto; flex:1;" id="knowledgeDetailModalBody">
+              <!-- Dynamically populated with Markdown render -->
+            </div>
+          </div>
+        </div>
+
+        <!-- LCARS KNOWLEDGE BASE NEW ARTICLE MODAL -->
+        <div id="knowledgeNewModal" class="ha-modal-overlay" style="display:none;" onclick="handleKnowledgeNewModalBackdrop(event)">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:680px; width:95%; max-height:85vh; display:flex; flex-direction:column;">
+            <div class="ha-modal-header" style="background:var(--c-secondary); color:#000;">
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <span style="font-size:1.3rem;">✍️</span>
+                <div style="font-size:1.15rem; font-weight:700; text-transform:uppercase;">
+                  NEUER WISSENSARTIKEL
+                </div>
+              </div>
+              <button type="button" class="ha-modal-close-btn" onclick="closeKnowledgeNewModal()">✕</button>
+            </div>
+            <div class="ha-modal-body" style="padding:1.25rem; overflow-y:auto; flex:1;">
+              <form id="knowledgeNewForm" onsubmit="submitKnowledgeNewArticle(event)">
+                <div style="margin-bottom:1rem;">
+                  <label for="knowledgeFormTitle" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-secondary); margin-bottom:0.35rem;">TITEL *</label>
+                  <input type="text" id="knowledgeFormTitle" class="lcars-input" placeholder="z.B. QA-Abschlussbericht Sprint 42" required style="width:100%;">
+                </div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.8rem; margin-bottom:1rem;">
+                  <div>
+                    <label for="knowledgeFormCategory" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem;">KATEGORIE</label>
+                    <select id="knowledgeFormCategory" class="lcars-input" style="width:100%; background:#101018; color:#fff;">
+                      <option value="qa">QA-Report</option>
+                      <option value="review">Code-Review</option>
+                      <option value="architecture">ADR (Architektur)</option>
+                      <option value="runbook">Runbook</option>
+                      <option value="allgemein" selected>Allgemein</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="knowledgeFormTags" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem;">TAGS (KOMMAGETRENNT)</label>
+                    <input type="text" id="knowledgeFormTags" class="lcars-input" placeholder="qa, release, auth, sprint" style="width:100%;">
+                  </div>
+                </div>
+                <div style="margin-bottom:1rem;">
+                  <label for="knowledgeFormSummary" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-primary); margin-bottom:0.35rem;">KURZZUSAMMENFASSUNG</label>
+                  <input type="text" id="knowledgeFormSummary" class="lcars-input" placeholder="Kurze Übersicht für die Vorschau..." style="width:100%;">
+                </div>
+                <div style="margin-bottom:1.25rem;">
+                  <label for="knowledgeFormContent" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-secondary); margin-bottom:0.35rem;">INHALT (MARKDOWN) *</label>
+                  <textarea id="knowledgeFormContent" class="lcars-input" rows="8" placeholder="# Zusammenfassung&#10;&#10;- Punkt 1&#10;- Punkt 2&#10;&#10;```bash&#10;pytest&#10;```" required style="width:100%; resize:vertical; font-family:var(--mono-family); font-size:0.85rem;"></textarea>
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap:0.6rem; align-items:center;">
+                  <button type="button" class="left-action-btn" onclick="closeKnowledgeNewModal()" style="border-color:#666; color:#aaa; padding:0.4rem 1rem;">ABBRECHEN</button>
+                  <button type="submit" class="left-action-btn" id="btnKnowledgeSubmitArticle" style="border-color:var(--c-secondary); color:var(--c-secondary); font-weight:700; padding:0.4rem 1.2rem;">
+                    <span id="knowledgeSubmitSpinner" style="display:none;" class="spin">⟳</span>
+                    <span>EINTRAG SPEICHERN</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- LCARS RESEARCH REPORT DETAIL MODAL WITH TABS -->
+        <div id="researchDetailModal" class="ha-modal-overlay" style="display:none;" onclick="handleResearchDetailModalBackdrop(event)">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:880px; width:95%; max-height:88vh; display:flex; flex-direction:column;">
+            <div class="ha-modal-header" style="background:#33bbcc; color:#000;">
+              <div style="display:flex; align-items:center; gap:0.6rem; min-width:0;">
+                <span style="font-size:1.3rem;">🔬</span>
+                <div style="min-width:0;">
+                  <div id="researchDetailModalTitle" style="font-size:1.15rem; font-weight:700; text-transform:uppercase; font-family:var(--font-family); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    RECHERCHE-BERICHT
+                  </div>
+                  <div id="researchDetailModalMeta" style="font-size:0.75rem; color:#111; font-family:var(--mono-family);">
+                    RESEARCHER BOT // ODN REPORT
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <button type="button" class="left-action-btn" id="btnResearchDeleteReport" onclick="deleteCurrentResearchReport()" style="padding:0.25rem 0.6rem; font-size:0.75rem; border-color:var(--c-red); color:var(--c-red); background:rgba(0,0,0,0.2);">LÖSCHEN</button>
+                <button type="button" class="ha-modal-close-btn" onclick="closeResearchDetailModal()">✕</button>
+              </div>
+            </div>
+
+            <!-- Tab Navigation Bar -->
+            <div style="display:flex; gap:0.4rem; padding:0.6rem 1.25rem; background:rgba(0,0,0,0.4); border-bottom:1px solid rgba(255,255,255,0.1); flex-wrap:wrap;">
+              <button type="button" class="left-action-btn res-detail-tab-btn active" data-tab="summary" onclick="switchResearchDetailTab('summary')" id="res-tab-summary" style="padding:0.3rem 0.8rem; font-size:0.8rem; border-color:#33bbcc; color:#33bbcc; font-weight:700;">
+                ZUSAMMENFASSUNG
+              </button>
+              <button type="button" class="left-action-btn res-detail-tab-btn" data-tab="details" onclick="switchResearchDetailTab('details')" id="res-tab-details" style="padding:0.3rem 0.8rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#bbb;">
+                DETAILS
+              </button>
+              <button type="button" class="left-action-btn res-detail-tab-btn" data-tab="sources" onclick="switchResearchDetailTab('sources')" id="res-tab-sources" style="padding:0.3rem 0.8rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#bbb;">
+                QUELLENVERZEICHNIS
+              </button>
+              <button type="button" class="left-action-btn res-detail-tab-btn" data-tab="raw" onclick="switchResearchDetailTab('raw')" id="res-tab-raw" style="padding:0.3rem 0.8rem; font-size:0.8rem; border-color:rgba(255,255,255,0.2); color:#bbb;">
+                ROHDATEN
+              </button>
+            </div>
+
+            <div class="ha-modal-body" style="padding:1.5rem; overflow-y:auto; flex:1;" id="researchDetailModalBody">
+              <!-- Dynamically populated per active tab -->
+            </div>
+          </div>
+        </div>
+
+        <!-- LCARS RESEARCH TRIGGER / NEW ASSIGNMENT MODAL -->
+        <div id="researchTriggerModal" class="ha-modal-overlay" style="display:none;" onclick="handleResearchTriggerModalBackdrop(event)">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:640px; width:95%; max-height:85vh; display:flex; flex-direction:column;">
+            <div class="ha-modal-header" style="background:#33bbcc; color:#000;">
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <span style="font-size:1.3rem;">🚀</span>
+                <div style="font-size:1.15rem; font-weight:700; text-transform:uppercase;">
+                  RECHERCHE STARTEN
+                </div>
+              </div>
+              <button type="button" class="ha-modal-close-btn" onclick="closeResearchTriggerModal()">✕</button>
+            </div>
+            <div class="ha-modal-body" style="padding:1.25rem; overflow-y:auto; flex:1;">
+              <form id="researchTriggerForm" onsubmit="submitResearchTrigger(event)">
+                <div style="margin-bottom:1rem;">
+                  <label for="researchFormTitle" style="display:block; font-size:0.85rem; font-weight:700; color:#33bbcc; margin-bottom:0.35rem;">TITEL / THEMA DER RECHERCHE *</label>
+                  <input type="text" id="researchFormTitle" class="lcars-input" placeholder="z.B. Evaluation Open-Source Speech Models für LCARS" required style="width:100%;">
+                </div>
+                <div style="margin-bottom:1rem;">
+                  <label for="researchFormTopic" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem;">SCHWERPUNKT / ZIELSETZUNG</label>
+                  <input type="text" id="researchFormTopic" class="lcars-input" placeholder="z.B. Latenz, VRAM-Verbrauch, Whisper-Alternativen" style="width:100%;">
+                </div>
+                <div style="margin-bottom:1rem;">
+                  <label for="researchFormTags" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-gold); margin-bottom:0.35rem;">TAGS (KOMMAGETRENNT)</label>
+                  <input type="text" id="researchFormTags" class="lcars-input" placeholder="ai, speech, benchmark, open-source" style="width:100%;">
+                </div>
+                <div style="margin-bottom:1.25rem;">
+                  <label for="researchFormNotes" style="display:block; font-size:0.85rem; font-weight:700; color:var(--c-secondary); margin-bottom:0.35rem;">NOTIZEN &amp; INSTRUKTIONEN AN RESEARCHER-BOT</label>
+                  <textarea id="researchFormNotes" class="lcars-input" rows="5" placeholder="Konkrete Fragen, gewünschte Quellen, Vergleichskriterien..." style="width:100%; resize:vertical; font-family:var(--mono-family); font-size:0.85rem;"></textarea>
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap:0.6rem; align-items:center;">
+                  <button type="button" class="left-action-btn" onclick="closeResearchTriggerModal()" style="border-color:#666; color:#aaa; padding:0.4rem 1rem;">ABBRECHEN</button>
+                  <button type="submit" class="left-action-btn" id="btnResearchSubmitTrigger" style="border-color:#33bbcc; color:#33bbcc; font-weight:700; padding:0.4rem 1.2rem;">
+                    <span id="researchSubmitSpinner" style="display:none;" class="spin">⟳</span>
+                    <span>AUFTRAG AN RESEARCHER-BOT SENDEN</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
       </main>
     </div>
   </div>
@@ -9715,6 +10179,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   var currentCategory = 'system';
   var categoryHistory = ['system'];
   var categoryHistoryIndex = 0;
+  var currentLcarsUser = {{ current_user_json | default('null') | safe }};
+
+  function isUserAllowedSection(secId) {
+    if (!currentLcarsUser) return true;
+    if (currentLcarsUser.is_super_admin) return true;
+    const allowed = currentLcarsUser.allowed_sections || [];
+    if (allowed.includes('*') || allowed.includes('all') || allowed.includes(secId)) return true;
+    const svcs = currentLcarsUser.allowed_services || [];
+    if (svcs.includes('*') || svcs.includes('all') || svcs.includes(secId)) return true;
+    return false;
+  }
 
   function navigateCategoryHistory(delta) {
     const targetIndex = categoryHistoryIndex + delta;
@@ -9954,7 +10429,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     'cycle': 'LCARS BIO-TELEMETRIE // PARTNERINNEN-ZYKLUS',
     'pulsecast': 'LCARS PULSECAST // MEDIA & DOWNLOAD HUB',
     'gemini_live': 'LCARS SUBRAUM COMM // CACTUS NEEDLE 3',
-    'devteam': 'DEV-TEAM // KANBAN WORKFLOW ENGINE'
+    'devteam': 'DEV-TEAM // KANBAN WORKFLOW ENGINE',
+    'knowledge': 'LCARS WISSENSDATENBANK // QA, REVIEWS & ADRS'
   };
 
   let aiNavExpanded = false;
@@ -9976,7 +10452,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       toggleAiNav();
     } else {
       toggleAiNav(true);
-      switchCategory('ai');
+      if (typeof isUserAllowedSection === 'function' && isUserAllowedSection('ai')) {
+        switchCategory('ai');
+      } else {
+        const aiSubs = ['9router', 'hermes', 'ide', 'ai-info', 'gemini_live'];
+        const first = aiSubs.find(s => isUserAllowedSection(s));
+        if (first) switchCategory(first);
+      }
     }
   }
 
@@ -10029,7 +10511,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       togglePersonalNav();
     } else {
       togglePersonalNav(true);
-      switchCategory('personal');
+      if (typeof isUserAllowedSection === 'function' && isUserAllowedSection('personal')) {
+        switchCategory('personal');
+      } else {
+        const persSubs = ['fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast'];
+        const first = persSubs.find(s => isUserAllowedSection(s));
+        if (first) switchCategory(first);
+      }
     }
   }
 
@@ -10135,6 +10623,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   function switchCategory(catId, skipHistory = false) {
     if (catId === 'agents') {
       catId = '9router';
+    }
+
+    if (typeof isUserAllowedSection === 'function' && !isUserAllowedSection(catId)) {
+      playLcarsBeep(300, 150);
+      return;
     }
 
     if (typeof isCategoryLocked === 'function' && isCategoryLocked(catId)) {
@@ -10308,6 +10801,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     if (catId === 'devteam') {
       fetchDevteamData(true);
+    }
+    if (catId === 'knowledge') {
+      fetchKnowledgeData(true);
+    }
+    if (catId === 'research') {
+      fetchResearchData(true);
     }
   }
 
@@ -14331,17 +14830,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     try {
       window.speechSynthesis.cancel();
 
-      let clean = rawText.replace(/```[\\s\\S]*?```/g, 'Codeblock im Hauptfenster.');
+      let clean = rawText.replace(/```[\s\S]*?```/g, 'Codeblock im Hauptfenster.');
       clean = clean.replace(/[*_`#]/g, '');
-      clean = clean.replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, '$1');
-      clean = clean.replace(/https?:\\/\\/\\S+/g, 'Link');
+      clean = clean.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+      clean = clean.replace(/https?:\/\/\S+/g, 'Link');
       clean = clean.replace(/%/g, ' Prozent');
       clean = clean.replace(/°C?/g, ' Grad');
-      clean = clean.replace(/\\b([0-9]+)\\s*W\\b/g, '$1 Watt');
-      clean = clean.replace(/\\b([0-9]+)\\s*kW\\b/g, '$1 Kilowatt');
-      clean = clean.replace(/\\b([0-9]+)\\s*Wh\\b/g, '$1 Wattstunden');
-      clean = clean.replace(/\\b([0-9]+)\\s*kWh\\b/g, '$1 Kilowattstunden');
-      clean = clean.replace(/\\s+/g, ' ').trim();
+      clean = clean.replace(/\b([0-9]+)\s*W\b/g, '$1 Watt');
+      clean = clean.replace(/\b([0-9]+)\s*kW\b/g, '$1 Kilowatt');
+      clean = clean.replace(/\b([0-9]+)\s*Wh\b/g, '$1 Wattstunden');
+      clean = clean.replace(/\b([0-9]+)\s*kWh\b/g, '$1 Kilowattstunden');
+      clean = clean.replace(/\s+/g, ' ').trim();
 
       if (!clean) {
         if (onComplete) onComplete();
@@ -15218,9 +15717,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // ==========================================================================
   var currentLockedSections = ['cycle'];
   var pendingUnlockCategory = null;
-  var currentAuthCode = sessionStorage.getItem('lcars_auth_code') || '0901';
+  var currentAuthCode = sessionStorage.getItem('lcars_auth_code') || '';
 
   function isCategoryLocked(catId) {
+    if (typeof isUserAllowedSection === 'function' && isUserAllowedSection(catId)) {
+      return false;
+    }
     const isUnlocked = (sessionStorage.getItem('lcars_auth_unlocked') === 'true');
     return currentLockedSections.includes(catId) && !isUnlocked;
   }
@@ -15242,87 +15744,124 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function applyPermissionsVisibility() {
     const isUnlocked = (sessionStorage.getItem('lcars_auth_unlocked') === 'true');
-    const allSections = ['system', 'services', 'ai', '9router', 'hermes', 'ide', 'agents', 'ai-info', 'config', 'fantasy', 'personal', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'devteam'];
+    const isSuperAdmin = Boolean(currentLcarsUser && (currentLcarsUser.is_super_admin || currentLcarsUser.username === 'cb' || (currentLcarsUser.username && currentLcarsUser.username.toLowerCase() === 'cb')));
 
-    allSections.forEach(secId => {
+    function canAccess(secId) {
+      if (typeof isUserAllowedSection === 'function') {
+        return isUserAllowedSection(secId);
+      }
+      return !currentLockedSections.includes(secId) || isUnlocked;
+    }
+
+    // Top-level main sections
+    const sysBtn = document.getElementById('btn-cat-system');
+    if (sysBtn) sysBtn.style.display = canAccess('system') ? '' : 'none';
+
+    const srvBtn = document.getElementById('btn-cat-services');
+    if (srvBtn) srvBtn.style.display = canAccess('services') ? '' : 'none';
+
+    const cfgBtn = document.getElementById('btn-cat-config');
+    if (cfgBtn) cfgBtn.style.display = canAccess('config') ? '' : 'none';
+
+    const devteamBtn = document.getElementById('btn-cat-devteam');
+    if (devteamBtn) devteamBtn.style.display = canAccess('devteam') ? '' : 'none';
+
+    const knowledgeBtn = document.getElementById('btn-cat-knowledge');
+    if (knowledgeBtn) knowledgeBtn.style.display = canAccess('knowledge') ? '' : 'none';
+
+    const researchBtn = document.getElementById('btn-cat-research');
+    if (researchBtn) researchBtn.style.display = canAccess('research') ? '' : 'none';
+
+    // AI sub-sections
+    const aiSubSections = ['9router', 'hermes', 'ide', 'ai-info', 'gemini_live', 'agents'];
+    let anyAiAllowed = canAccess('ai');
+    aiSubSections.forEach(secId => {
       const btn = document.getElementById('btn-cat-' + secId);
       if (!btn) return;
-
       if (secId === 'agents') {
         btn.style.display = 'none';
         return;
       }
+      const allowed = canAccess(secId);
+      if (allowed) anyAiAllowed = true;
+      btn.style.display = allowed ? '' : 'none';
+    });
+    const aiGroup = document.getElementById('nav-ai-group');
+    if (aiGroup) aiGroup.style.display = anyAiAllowed ? '' : 'none';
 
-      const isLocked = currentLockedSections.includes(secId);
-      if (isLocked && !isUnlocked) {
-        btn.style.display = 'none';
+    // Personal sub-sections
+    const personalSubSections = ['fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast'];
+    let anyPersonalAllowed = canAccess('personal');
+    personalSubSections.forEach(secId => {
+      const btn = document.getElementById('btn-cat-' + secId);
+      if (!btn) return;
+      const allowed = canAccess(secId);
+      if (allowed) anyPersonalAllowed = true;
+      if (secId === 'homeassistant' && allowed) {
+        checkHomeAssistantConfig();
       } else {
-        if (secId === 'homeassistant') {
-          checkHomeAssistantConfig();
-          return;
-        }
-        btn.style.display = '';
+        btn.style.display = allowed ? '' : 'none';
       }
     });
+    const personalGroup = document.getElementById('nav-personal-group');
+    if (personalGroup) personalGroup.style.display = anyPersonalAllowed ? '' : 'none';
 
-    // Update Auth button in left pillar
-    const authBtnLabel = document.getElementById('authBtnLabel');
-    const authBtnIcon = document.getElementById('authBtnIcon');
-    const authBtn = document.getElementById('btn-auth-toggle');
-    if (isUnlocked) {
-      if (authBtnLabel) authBtnLabel.textContent = 'SPERREN';
-      if (authBtnIcon) authBtnIcon.textContent = '🔓';
-      if (authBtn) authBtn.style.backgroundColor = 'var(--c-red)';
-    } else {
-      if (authBtnLabel) authBtnLabel.textContent = 'CODE';
-      if (authBtnIcon) authBtnIcon.textContent = '🔒';
-      if (authBtn) authBtn.style.backgroundColor = 'var(--c-almond)';
-    }
+
 
     // Update Config Rechteverwaltung Card
-    updateConfigPermUI(isUnlocked);
+    updateConfigPermUI(isUnlocked || isSuperAdmin);
 
-    // If current category is locked and not unlocked, fallback to system
-    if (!isUnlocked && currentLockedSections.includes(currentCategory)) {
-      switchCategory('system');
+    // If current category is not allowed, switch to first allowed category
+    if (!canAccess(currentCategory)) {
+      const priorityOrder = [
+        'system', 'services', 'ai', '9router', 'hermes', 'ide', 'ai-info', 'gemini_live',
+        'config', 'personal', 'fantasy', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'devteam'
+      ];
+      const fallback = priorityOrder.find(cat => canAccess(cat));
+      if (fallback) {
+        switchCategory(fallback, true);
+      }
     }
   }
 
   function updateConfigPermUI(isUnlocked) {
-    const lockedView = document.getElementById('permLockedView');
     const unlockedView = document.getElementById('permUnlockedView');
     const badge = document.getElementById('permStatusBadge');
     const icon = document.getElementById('permHeadIcon');
+    const isSuperAdmin = Boolean(currentLcarsUser && (currentLcarsUser.is_super_admin || currentLcarsUser.username === 'cb' || (currentLcarsUser.username && currentLcarsUser.username.toLowerCase() === 'cb')));
 
-    if (isUnlocked) {
-      if (lockedView) lockedView.style.display = 'none';
-      if (unlockedView) unlockedView.style.display = 'block';
-      if (badge) {
-        badge.textContent = 'ENTSPERRT // STUFE ALPHA';
-        badge.style.backgroundColor = '#44dd88';
-        badge.style.color = '#000000';
+    if (unlockedView) unlockedView.style.display = 'block';
+    if (badge) {
+      badge.textContent = 'AKTIV // ZENTRALE AUTH';
+      badge.style.backgroundColor = '#44dd88';
+      badge.style.color = '#000000';
+    }
+    if (icon) icon.textContent = '🛡️';
+
+    // Check the checkboxes for currentLockedSections
+    const allSections = ['system', 'services', 'ai', '9router', 'hermes', 'ide', 'agents', 'ai-info', 'config', 'fantasy', 'personal', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'devteam', 'knowledge', 'research'];
+    allSections.forEach(secId => {
+      const cb = document.getElementById('permLock_' + secId);
+      if (cb) {
+        cb.checked = currentLockedSections.includes(secId);
       }
-      if (icon) icon.textContent = '🔓';
-
-      // Check the checkboxes for currentLockedSections
-      const allSections = ['system', 'services', 'ai', '9router', 'hermes', 'ide', 'agents', 'ai-info', 'config', 'fantasy', 'personal', 'solar', 'homeassistant', 'cycle', 'pulsecast', 'gemini_live', 'devteam'];
-      allSections.forEach(secId => {
-        const cb = document.getElementById('permLock_' + secId);
-        if (cb) {
-          cb.checked = currentLockedSections.includes(secId);
-        }
-      });
+    });
+    if (isSuperAdmin) {
       loadLcarsUsers();
       loadLcarsAuditLog();
-    } else {
-      if (lockedView) lockedView.style.display = 'block';
-      if (unlockedView) unlockedView.style.display = 'none';
-      if (badge) {
-        badge.textContent = 'GESPERRT // STUFE 1';
-        badge.style.backgroundColor = 'var(--c-red)';
-        badge.style.color = '#ffffff';
+    }
+
+    // Nur für Admins (cb / Super Admin) sichtbar
+    const mgmtSec = document.getElementById('lcarsUserManagementSection');
+    const mgmtNotice = document.getElementById('lcarsUserMgmtRestrictedNotice');
+    if (mgmtSec) {
+      if (isSuperAdmin) {
+        mgmtSec.style.display = 'block';
+        if (mgmtNotice) mgmtNotice.style.display = 'none';
+      } else {
+        mgmtSec.style.display = 'none';
+        if (mgmtNotice) mgmtNotice.style.display = 'block';
       }
-      if (icon) icon.textContent = '🔒';
     }
   }
 
@@ -15417,53 +15956,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  function appendConfigPin(digit) {
-    playLcarsBeep(1200, 1600);
-    const inp = document.getElementById('configPinInput');
-    if (inp && inp.value.length < 10) {
-      inp.value += digit;
-    }
-  }
 
-  function clearConfigPin() {
-    playLcarsBeep(500, 300);
-    const inp = document.getElementById('configPinInput');
-    if (inp) inp.value = '';
-    const err = document.getElementById('configPinError');
-    if (err) err.style.display = 'none';
-  }
-
-  async function verifyConfigPin() {
-    const inp = document.getElementById('configPinInput');
-    const code = inp ? inp.value.trim() : '';
-    if (!code) return;
-
-    try {
-      const resp = await fetch('/api/permissions/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code })
-      });
-      const res = await resp.json();
-      if (res.valid) {
-        sessionStorage.setItem('lcars_auth_unlocked', 'true');
-        sessionStorage.setItem('lcars_auth_code', code);
-        currentAuthCode = code;
-        playLcarsAcknowledge();
-        applyPermissionsVisibility();
-      } else {
-        playLcarsBeep(300, 150);
-        const err = document.getElementById('configPinError');
-        if (err) err.style.display = 'block';
-        if (inp) {
-          inp.value = '';
-          inp.focus();
-        }
-      }
-    } catch (e) {
-      alert('Fehler bei der Authentifizierung: ' + e);
-    }
-  }
 
   function lockPermissionsSession() {
     playLcarsBeep(440, 220);
@@ -15499,7 +15992,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     const payload = {
-      code: sessionStorage.getItem('lcars_auth_code') || currentAuthCode || '0901',
+      code: sessionStorage.getItem('lcars_auth_code') || currentAuthCode || '',
       locked_sections: lockedSections
     };
     if (newCode) {
@@ -15544,35 +16037,62 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // ==========================================================================
   var lcarsUsersList = [];
   var lcarsAvailableServices = [
-    { key: 'pulsecast', name: 'PulseCast', subdomain: 'cast' },
     { key: 'telemetryvault', name: 'TelemetryVault', subdomain: 'tele' },
     { key: 'matter', name: 'Matter Server', subdomain: 'mat' },
     { key: 'headroom', name: 'Headroom AI', subdomain: 'head' },
     { key: 'cups', name: 'CUPS Drucker', subdomain: 'port' }
   ];
+  var lcarsCategoriesList = [
+    { key: 'system', name: 'System Status', group: 'main' },
+    { key: 'services', name: 'Services Übersicht', group: 'main' },
+    { key: 'ai', name: 'KI (Hauptbereich)', group: 'ai' },
+    { key: '9router', name: '9Router', group: 'ai' },
+    { key: 'hermes', name: 'Hermes Agent', group: 'ai' },
+    { key: 'ide', name: 'Antigravity IDE', group: 'ai' },
+    { key: 'ai-info', name: 'KI-Info', group: 'ai' },
+    { key: 'gemini_live', name: 'Subraum Comm', group: 'ai' },
+    { key: 'config', name: 'Config & Benutzer', group: 'main' },
+    { key: 'personal', name: 'Persönlich (Alle)', group: 'personal' },
+    { key: 'fantasy', name: 'Fantasy Bundesliga', group: 'personal' },
+    { key: 'solar', name: 'Solar Ertrag', group: 'personal' },
+    { key: 'homeassistant', name: 'Home Assistant', group: 'personal' },
+    { key: 'cycle', name: 'Zyklus-Tracker', group: 'personal' },
+    { key: 'pulsecast', name: 'PulseCast Hub', group: 'personal' },
+    { key: 'devteam', name: 'Dev-Team Kanban', group: 'main' },
+    { key: 'knowledge', name: 'Wissensdatenbank', group: 'main' },
+    { key: 'research', name: 'Research-Rubrik', group: 'main' }
+  ];
 
-  function renderUserServicesCheckboxes(services) {
+  function renderUserServicesCheckboxes(services, categories) {
     const grid = document.getElementById('userServicesGrid');
     if (!grid) return;
     if (Array.isArray(services) && services.length > 0) {
       lcarsAvailableServices = services;
     }
-    const svcs = (lcarsAvailableServices && lcarsAvailableServices.length > 0)
-      ? lcarsAvailableServices
-      : [
-          { key: 'pulsecast', name: 'PulseCast', subdomain: 'cast' },
-          { key: 'telemetryvault', name: 'TelemetryVault', subdomain: 'tele' },
-          { key: 'matter', name: 'Matter Server', subdomain: 'mat' },
-          { key: 'headroom', name: 'Headroom AI', subdomain: 'head' },
-          { key: 'cups', name: 'CUPS Drucker', subdomain: 'port' }
-        ];
+    if (Array.isArray(categories) && categories.length > 0) {
+      lcarsCategoriesList = categories;
+    }
 
-    let html = '<label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">' +
+    let html = '<div style="grid-column: 1 / -1; margin-bottom: 0.4rem;">' +
+      '<label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">' +
       '<input type="checkbox" id="userSvc_all" value="*" class="user-svc-cb" onchange="handleUserSvcAllToggle()">' +
-      '<span style="font-family:var(--mono-family); font-size:0.85rem; color:var(--c-primary); font-weight:700;">★ Alle Dienste (*)</span>' +
-      '</label>';
+      '<span style="font-family:var(--mono-family); font-size:0.85rem; color:var(--c-primary); font-weight:700;">★ ALLE KATEGORIEN & WEBSERVICES (*) [VOLLZUGRIFF]</span>' +
+      '</label></div>';
 
-    svcs.forEach(s => {
+    html += '<div style="grid-column: 1 / -1; font-size:0.75rem; font-weight:700; color:var(--c-secondary); margin-top:0.4rem; margin-bottom:0.25rem; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:2px;">' +
+      'DASHBOARD KATEGORIEN & SEKTIONEN</div>';
+
+    lcarsCategoriesList.forEach(c => {
+      html += '<label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">' +
+        '<input type="checkbox" id="userSvc_' + escapeHtml(c.key) + '" value="' + escapeHtml(c.key) + '" class="user-svc-cb">' +
+        '<span style="font-family:var(--mono-family); font-size:0.82rem;">' + escapeHtml(c.name || c.key) + '</span>' +
+        '</label>';
+    });
+
+    html += '<div style="grid-column: 1 / -1; font-size:0.75rem; font-weight:700; color:var(--c-gold); margin-top:0.6rem; margin-bottom:0.25rem; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:2px;">' +
+      'EXTERNE WEBSERVICES (*.PIMMEL.SITE)</div>';
+
+    lcarsAvailableServices.forEach(s => {
       const subLabel = s.subdomain ? ' (' + escapeHtml(s.subdomain) + ')' : '';
       html += '<label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">' +
         '<input type="checkbox" id="userSvc_' + escapeHtml(s.key) + '" value="' + escapeHtml(s.key) + '" class="user-svc-cb">' +
@@ -15584,10 +16104,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function getLcarsAuthHeader() {
-    const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '0901');
     return {
-      'Content-Type': 'application/json',
-      'X-Command-Code': code
+      'Content-Type': 'application/json'
     };
   }
 
@@ -15599,12 +16117,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (resp.ok) {
         const data = await resp.json();
         lcarsUsersList = data.users || [];
-        if (data.services) {
-          renderUserServicesCheckboxes(data.services);
+        if (data.services || data.categories) {
+          renderUserServicesCheckboxes(data.services, data.categories);
         }
         renderLcarsUsersTable(lcarsUsersList);
       } else if (resp.status === 403) {
-        tbody.innerHTML = '<tr><td colspan="6" style="padding:1.5rem; text-align:center; color:var(--c-red); font-family:var(--mono-family);">AUTORISIERUNG FEHLGESCHLAGEN // COMMAND CODE 0901 ERFORDERLICH</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="padding:1.5rem; text-align:center; color:var(--c-red); font-family:var(--mono-family);">AUTORISIERUNG FEHLGESCHLAGEN // KEINE ADMIN-BERECHTIGUNG</td></tr>';
       } else {
         tbody.innerHTML = '<tr><td colspan="6" style="padding:1.5rem; text-align:center; color:var(--c-red); font-family:var(--mono-family);">FEHLER BEIM LADEN DER BENUTZERDATEN</td></tr>';
       }
@@ -15612,6 +16130,33 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       console.warn('loadLcarsUsers error:', e);
       tbody.innerHTML = '<tr><td colspan="6" style="padding:1.5rem; text-align:center; color:var(--c-red); font-family:var(--mono-family);">NETZWERKFEHLER BEIM LADEN</td></tr>';
     }
+  }
+
+  function copyLcarsApiKey(key) {
+    if (!key) return;
+    playLcarsBeep(880, 1400);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(key).then(() => {
+        alert('Access-Key in Zwischenablage kopiert:\\n' + key);
+      }).catch(() => {
+        prompt('Access-Key:', key);
+      });
+    } else {
+      prompt('Access-Key:', key);
+    }
+  }
+
+  function generateFormUserApiKey() {
+    playLcarsBeep(900, 1200);
+    const key = 'lcars_' + Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join('');
+    const inp = document.getElementById('formUserApiKey');
+    if (inp) inp.value = key;
+  }
+
+  function clearFormUserApiKey() {
+    playLcarsBeep(440, 220);
+    const inp = document.getElementById('formUserApiKey');
+    if (inp) inp.value = '';
   }
 
   function renderLcarsUsersTable(users) {
@@ -15623,9 +16168,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     const serviceLabels = {
-      '*': 'ALLE DIENSTE',
-      'all': 'ALLE DIENSTE',
+      '*': 'VOLLZUGRIFF (*)',
+      'all': 'VOLLZUGRIFF (*)',
+      'system': 'SYSTEM',
+      'services': 'SERVICES',
+      'ai': 'KI (ALLE)',
+      '9router': '9ROUTER',
+      'hermes': 'HERMES',
+      'ide': 'IDE',
+      'ai-info': 'KI-INFO',
+      'gemini_live': 'SUBRAUM',
+      'config': 'CONFIG',
+      'personal': 'PERSÖNLICH (ALLE)',
+      'fantasy': 'FANTASY',
+      'solar': 'SOLAR',
+      'homeassistant': 'ASSISTANT',
+      'cycle': 'ZYKLUS',
       'pulsecast': 'PULSECAST',
+      'devteam': 'DEV-TEAM',
       'telemetryvault': 'TELEMETRY',
       'matter': 'MATTER',
       'headroom': 'HEADROOM',
@@ -15633,6 +16193,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     };
     (lcarsAvailableServices || []).forEach(s => {
       serviceLabels[s.key] = (s.name || s.key).toUpperCase();
+    });
+    (lcarsCategoriesList || []).forEach(c => {
+      serviceLabels[c.key] = (c.name || c.key).toUpperCase();
     });
 
     let html = '';
@@ -15645,7 +16208,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       let permsHtml = '';
       const sList = u.allowed_services || [];
       if (sList.includes('*') || sList.includes('all')) {
-        permsHtml = '<span style="background:rgba(235,148,58,0.2); border:1px solid var(--c-primary); color:var(--c-primary); padding:1px 6px; border-radius:3px; font-family:var(--mono-family); font-size:0.75rem; font-weight:700;">★ ALLE DIENSTE (*)</span>';
+        permsHtml = '<span style="background:rgba(235,148,58,0.2); border:1px solid var(--c-primary); color:var(--c-primary); padding:1px 6px; border-radius:3px; font-family:var(--mono-family); font-size:0.75rem; font-weight:700;">★ ALLE KATEGORIEN & DIENSTE (*)</span>';
       } else if (sList.length === 0) {
         permsHtml = '<span style="color:#666; font-size:0.75rem; font-family:var(--mono-family);">KEINE</span>';
       } else {
@@ -15659,15 +16222,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const displayName = u.display_name ? '<strong>' + escapeHtml(u.display_name) + '</strong>' : '';
       const notes = u.notes ? '<div style="font-size:0.75rem; color:#888;">' + escapeHtml(u.notes) + '</div>' : '';
 
+      const keySnippet = u.api_key
+        ? '<div style="font-family:var(--mono-family); font-size:0.72rem; color:var(--c-gold); margin-top:2px;">' +
+            '<span>🔑 </span><span style="cursor:pointer; text-decoration:underline;" data-key="' + escapeHtml(u.api_key) + '" onclick="copyLcarsApiKey(this.dataset.key)" title="Kopieren">' + escapeHtml(u.api_key.substring(0, 10)) + '... 📋</span>' +
+          '</div>'
+        : '<div style="font-family:var(--mono-family); font-size:0.7rem; color:#666; margin-top:2px;">KEIN KEY</div>';
+
       html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.06);">' +
         '<td style="padding:0.6rem 0.75rem; vertical-align:middle;">' + statusBadge + '</td>' +
-        '<td style="padding:0.6rem 0.75rem; vertical-align:middle; font-family:var(--mono-family); font-size:0.95rem; font-weight:700; color:var(--c-gold);">' + escapeHtml(u.username) + '</td>' +
+        '<td style="padding:0.6rem 0.75rem; vertical-align:middle;">' +
+          '<div style="font-family:var(--mono-family); font-size:0.95rem; font-weight:700; color:var(--c-gold);">' + escapeHtml(u.username) + '</div>' +
+          keySnippet +
+        '</td>' +
         '<td style="padding:0.6rem 0.75rem; vertical-align:middle;">' + displayName + ' ' + notes + '</td>' +
         '<td style="padding:0.6rem 0.75rem; vertical-align:middle;">' + permsHtml + '</td>' +
         '<td style="padding:0.6rem 0.75rem; vertical-align:middle; font-family:var(--mono-family); font-size:0.8rem; color:#bbb;">' + lastLogin + '</td>' +
         '<td style="padding:0.6rem 0.75rem; vertical-align:middle; text-align:right; white-space:nowrap;">' +
           '<button type="button" class="left-action-btn" onclick="openEditUserModal(' + u.id + ')" style="padding:0.25rem 0.5rem; font-size:0.75rem; border-color:var(--c-primary); color:var(--c-primary);" title="Bearbeiten"><span>✏️</span></button> ' +
-          '<button type="button" class="left-action-btn" onclick="openChangePasswordModal(' + u.id + ')" style="padding:0.25rem 0.5rem; font-size:0.75rem; border-color:var(--c-gold); color:var(--c-gold);" title="Passwort ändern"><span>🔑</span></button> ' +
+          '<button type="button" class="left-action-btn" onclick="openChangePasswordModal(' + u.id + ')" style="padding:0.25rem 0.5rem; font-size:0.75rem; border-color:var(--c-gold); color:var(--c-gold);" title="Passwort & Key verwalten"><span>🔑</span></button> ' +
           '<button type="button" class="left-action-btn" onclick="toggleUserActive(' + u.id + ', ' + (isActive ? 'true' : 'false') + ')" style="padding:0.25rem 0.5rem; font-size:0.75rem; border-color:' + (isActive ? 'var(--c-almond)' : '#44dd88') + '; color:' + (isActive ? 'var(--c-almond)' : '#44dd88') + ';" title="' + (isActive ? 'Sperren' : 'Aktivieren') + '"><span>' + (isActive ? '⛔' : '✓') + '</span></button> ' +
           '<button type="button" class="left-action-btn" onclick="deleteLcarsUser(' + u.id + ')" style="padding:0.25rem 0.5rem; font-size:0.75rem; border-color:var(--c-red); color:var(--c-red);" title="Löschen"><span>🗑️</span></button>' +
         '</td>' +
@@ -15695,12 +16267,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     const dInput = document.getElementById('formUserDisplayName');
     if (dInput) dInput.value = '';
+    const kInput = document.getElementById('formUserApiKey');
+    if (kInput) kInput.value = '';
     const nInput = document.getElementById('formUserNotes');
     if (nInput) nInput.value = '';
     const aInput = document.getElementById('formUserIsActive');
     if (aInput) aInput.checked = true;
 
-    renderUserServicesCheckboxes(lcarsAvailableServices);
+    renderUserServicesCheckboxes(lcarsAvailableServices, lcarsCategoriesList);
     document.querySelectorAll('.user-svc-cb').forEach(cb => { cb.checked = false; });
     const allCb = document.getElementById('userSvc_all');
     if (allCb) allCb.checked = true;
@@ -15730,12 +16304,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     const dInput = document.getElementById('formUserDisplayName');
     if (dInput) dInput.value = user.display_name || '';
+    const kInput = document.getElementById('formUserApiKey');
+    if (kInput) kInput.value = user.api_key || '';
     const nInput = document.getElementById('formUserNotes');
     if (nInput) nInput.value = user.notes || '';
     const aInput = document.getElementById('formUserIsActive');
     if (aInput) aInput.checked = user.is_active;
 
-    renderUserServicesCheckboxes(lcarsAvailableServices);
+    renderUserServicesCheckboxes(lcarsAvailableServices, lcarsCategoriesList);
     const svcs = user.allowed_services || [];
     const isAll = svcs.includes('*') || svcs.includes('all');
     const allCb = document.getElementById('userSvc_all');
@@ -15758,11 +16334,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function handleUserSvcAllToggle() {
     const allCb = document.getElementById('userSvc_all');
-    if (allCb && allCb.checked) {
-      document.querySelectorAll('.user-svc-cb').forEach(cb => {
-        if (cb.id !== 'userSvc_all') cb.checked = true;
-      });
-    }
+    const shouldCheck = allCb && allCb.checked;
+    document.querySelectorAll('.user-svc-cb').forEach(cb => {
+      if (cb.id !== 'userSvc_all') cb.checked = shouldCheck;
+    });
   }
 
   async function submitUserForm(event) {
@@ -15772,6 +16347,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     const username = document.getElementById('formUserUsername').value.trim();
     const displayName = document.getElementById('formUserDisplayName').value.trim();
+    const apiKey = (document.getElementById('formUserApiKey')?.value || '').trim();
     const notes = document.getElementById('formUserNotes').value.trim();
     const isActive = document.getElementById('formUserIsActive').checked;
 
@@ -15796,6 +16372,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             display_name: displayName,
             is_active: isActive,
             allowed_services: services,
+            api_key: apiKey,
             notes: notes
           })
         });
@@ -15818,6 +16395,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             password: password,
             display_name: displayName,
             allowed_services: services,
+            api_key: apiKey,
             notes: notes
           })
         });
@@ -15866,6 +16444,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (nameEl) nameEl.textContent = username;
     const pInput = document.getElementById('pwdModalNewPassword');
     if (pInput) pInput.value = '';
+    const kInput = document.getElementById('pwdModalApiKey');
+    if (kInput) kInput.value = (user && user.api_key) ? user.api_key : '';
+    const statEl = document.getElementById('pwdModalStatus');
+    if (statEl) statEl.style.display = 'none';
     const modal = document.getElementById('userPasswordModal');
     if (modal) modal.style.display = 'flex';
     if (pInput) pInput.focus();
@@ -15875,6 +16457,75 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     playLcarsBeep(440, 220);
     const modal = document.getElementById('userPasswordModal');
     if (modal) modal.style.display = 'none';
+  }
+
+  function generatePwdModalKey() {
+    playLcarsBeep(900, 1200);
+    const key = 'lcars_' + Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join('');
+    const inp = document.getElementById('pwdModalApiKey');
+    if (inp) inp.value = key;
+  }
+
+  async function saveUserApiKey() {
+    const userId = document.getElementById('pwdModalUserId').value;
+    const key = (document.getElementById('pwdModalApiKey')?.value || '').trim();
+    const statEl = document.getElementById('pwdModalStatus');
+    try {
+      const resp = await fetch('/api/users/' + userId + '/key', {
+        method: 'POST',
+        headers: getLcarsAuthHeader(),
+        body: JSON.stringify({ api_key: key })
+      });
+      const res = await resp.json();
+      if (resp.ok && res.success) {
+        playLcarsAcknowledge();
+        if (statEl) {
+          statEl.style.display = 'block';
+          statEl.style.background = 'rgba(68,221,136,0.15)';
+          statEl.style.border = '1px solid #44dd88';
+          statEl.style.color = '#44dd88';
+          statEl.textContent = '✓ ACCESS-KEY ERFOLGREICH GESPEICHERT';
+        }
+        loadLcarsUsers();
+        loadLcarsAuditLog();
+      } else {
+        alert('Fehler beim Speichern des Keys: ' + (res.error || 'Unbekannt'));
+      }
+    } catch (err) {
+      alert('Netzwerkfehler: ' + err);
+    }
+  }
+
+  async function deleteUserApiKey() {
+    const userId = document.getElementById('pwdModalUserId').value;
+    const statEl = document.getElementById('pwdModalStatus');
+    playLcarsBeep(300, 150);
+    if (!confirm('Soll der Access-Key für diesen Benutzer wirklich gelöscht werden?')) return;
+    try {
+      const resp = await fetch('/api/users/' + userId + '/key', {
+        method: 'DELETE',
+        headers: getLcarsAuthHeader()
+      });
+      const res = await resp.json();
+      if (resp.ok && res.success) {
+        playLcarsAcknowledge();
+        const inp = document.getElementById('pwdModalApiKey');
+        if (inp) inp.value = '';
+        if (statEl) {
+          statEl.style.display = 'block';
+          statEl.style.background = 'rgba(235,148,58,0.15)';
+          statEl.style.border = '1px solid var(--c-primary)';
+          statEl.style.color = 'var(--c-primary)';
+          statEl.textContent = '✓ ACCESS-KEY GELÖSCHT';
+        }
+        loadLcarsUsers();
+        loadLcarsAuditLog();
+      } else {
+        alert('Fehler beim Löschen des Keys: ' + (res.error || 'Unbekannt'));
+      }
+    } catch (err) {
+      alert('Netzwerkfehler: ' + err);
+    }
   }
 
   async function submitChangeUserPassword(event) {
@@ -15894,7 +16545,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const res = await resp.json();
       if (resp.ok && res.success) {
         playLcarsAcknowledge();
-        closeChangePasswordModal();
+        const statEl = document.getElementById('pwdModalStatus');
+        if (statEl) {
+          statEl.style.display = 'block';
+          statEl.style.background = 'rgba(68,221,136,0.15)';
+          statEl.style.border = '1px solid #44dd88';
+          statEl.style.color = '#44dd88';
+          statEl.textContent = '✓ PASSWORT ERFOLGREICH AKTUALISIERT';
+        }
         loadLcarsAuditLog();
         alert('Passwort für Benutzer erfolgreich aktualisiert!');
       } else {
@@ -15927,6 +16585,174 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     } catch (err) {
       alert('Netzwerkfehler: ' + err);
+    }
+  }
+
+  // ==========================================================================
+  // LCARS IN-DASHBOARD LOGIN OVERLAY CONTROLLER
+  // ==========================================================================
+  let overlayAuthMode = 'credentials';
+
+  function openLcarsLoginOverlay() {
+    playLcarsBeep(700, 900);
+    const modal = document.getElementById('lcarsLoginOverlay');
+    const stat = document.getElementById('overlayStatusBox');
+    if (stat) stat.style.display = 'none';
+    const form = document.getElementById('lcarsOverlayLoginForm');
+    if (form) form.reset();
+    switchOverlayLoginMode('credentials');
+    if (modal) modal.style.display = 'flex';
+    const u = document.getElementById('overlayUsername');
+    if (u) u.focus();
+  }
+
+  function closeLcarsLoginOverlay() {
+    playLcarsBeep(440, 220);
+    const modal = document.getElementById('lcarsLoginOverlay');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function switchOverlayLoginMode(mode) {
+    overlayAuthMode = mode;
+    playLcarsBeep(700, 900);
+    const tabCred = document.getElementById('overlayTabCredentials');
+    const tabKey = document.getElementById('overlayTabKey');
+    const grpCred = document.getElementById('overlayCredentialsGroup');
+    const grpKey = document.getElementById('overlayKeyGroup');
+    const stat = document.getElementById('overlayStatusBox');
+    if (stat) stat.style.display = 'none';
+
+    if (mode === 'credentials') {
+      if (tabCred) {
+        tabCred.style.background = 'var(--c-primary)';
+        tabCred.style.color = '#000';
+        tabCred.style.borderColor = 'var(--c-primary)';
+      }
+      if (tabKey) {
+        tabKey.style.background = 'transparent';
+        tabKey.style.color = 'var(--c-gold)';
+        tabKey.style.borderColor = 'var(--c-gold)';
+      }
+      if (grpCred) grpCred.style.display = 'block';
+      if (grpKey) grpKey.style.display = 'none';
+      const u = document.getElementById('overlayUsername');
+      if (u) u.focus();
+    } else {
+      if (tabKey) {
+        tabKey.style.background = 'var(--c-gold)';
+        tabKey.style.color = '#000';
+        tabKey.style.borderColor = 'var(--c-gold)';
+      }
+      if (tabCred) {
+        tabCred.style.background = 'transparent';
+        tabCred.style.color = 'var(--c-primary)';
+        tabCred.style.borderColor = 'var(--c-primary)';
+      }
+      if (grpCred) grpCred.style.display = 'none';
+      if (grpKey) grpKey.style.display = 'block';
+      const k = document.getElementById('overlayApiKey');
+      if (k) k.focus();
+    }
+  }
+
+  async function submitLcarsLoginOverlay(event) {
+    if (event) event.preventDefault();
+    playLcarsBeep(880, 1100);
+
+    const btn = document.getElementById('overlaySubmitBtn');
+    const stat = document.getElementById('overlayStatusBox');
+    const remember = document.getElementById('overlayRemember')?.checked || false;
+
+    let payload = { remember: remember, return_to: '/' };
+
+    if (overlayAuthMode === 'credentials') {
+      const username = (document.getElementById('overlayUsername')?.value || '').trim();
+      const password = document.getElementById('overlayPassword')?.value || '';
+      if (!username || !password) {
+        if (stat) {
+          stat.style.display = 'block';
+          stat.style.background = 'rgba(207,79,79,0.2)';
+          stat.style.border = '1px solid var(--c-red)';
+          stat.style.color = '#ff8888';
+          stat.textContent = 'BENUTZERNAME UND PASSWORT ERFORDERLICH';
+        }
+        playLcarsBeep(300, 150);
+        return;
+      }
+      payload.username = username;
+      payload.password = password;
+    } else {
+      const apiKey = (document.getElementById('overlayApiKey')?.value || '').trim();
+      if (!apiKey) {
+        if (stat) {
+          stat.style.display = 'block';
+          stat.style.background = 'rgba(207,79,79,0.2)';
+          stat.style.border = '1px solid var(--c-red)';
+          stat.style.color = '#ff8888';
+          stat.textContent = 'ACCESS-KEY ERFORDERLICH';
+        }
+        playLcarsBeep(300, 150);
+        return;
+      }
+      payload.api_key = apiKey;
+    }
+
+    if (btn) btn.disabled = true;
+    if (stat) {
+      stat.style.display = 'block';
+      stat.style.background = 'rgba(136,153,255,0.15)';
+      stat.style.border = '1px solid var(--c-blue)';
+      stat.style.color = 'var(--c-blue)';
+      stat.textContent = 'AUTORISIERUNG WIRD GEPRÜFT...';
+    }
+
+    try {
+      const resp = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await resp.json();
+
+      if (resp.ok && data.success) {
+        playLcarsAcknowledge();
+        if (stat) {
+          stat.style.display = 'block';
+          stat.style.background = 'rgba(68,221,136,0.2)';
+          stat.style.border = '1px solid #44dd88';
+          stat.style.color = '#44dd88';
+          stat.textContent = 'AUTORISIERUNG ERFOLGREICH // ANMELDUNG AKTIV';
+        }
+        setTimeout(() => {
+          closeLcarsLoginOverlay();
+          checkLcarsAuthUser();
+          fetchPermissionsStatus();
+          if (currentCategory === 'config') {
+            loadLcarsUsers();
+            loadLcarsAuditLog();
+          }
+        }, 500);
+      } else {
+        playLcarsBeep(300, 150);
+        if (stat) {
+          stat.style.display = 'block';
+          stat.style.background = 'rgba(207,79,79,0.2)';
+          stat.style.border = '1px solid var(--c-red)';
+          stat.style.color = '#ff8888';
+          stat.textContent = data.error || 'ZUGRIFF VERWEIGERT // UNGÜLTIGE ANMELDEDATEN';
+        }
+        if (btn) btn.disabled = false;
+      }
+    } catch (err) {
+      playLcarsBeep(300, 150);
+      if (stat) {
+        stat.style.display = 'block';
+        stat.style.background = 'rgba(207,79,79,0.2)';
+        stat.style.border = '1px solid var(--c-red)';
+        stat.style.color = '#ff8888';
+        stat.textContent = 'NETZWERKFEHLER: ' + err;
+      }
+      if (btn) btn.disabled = false;
     }
   }
 
@@ -16660,10 +17486,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function getPulsecastHeaders() {
-    const code = sessionStorage.getItem('lcars_auth_code') || currentAuthCode || '0901';
     return {
-      'Content-Type': 'application/json',
-      'X-Command-Code': code
+      'Content-Type': 'application/json'
     };
   }
 
@@ -18224,7 +19048,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (titleEl) titleEl.textContent = cleanTitle;
     if (metaEl) metaEl.textContent = `DATEI: ${filename} // HTTP RANGE NATIVE STREAM`;
 
-    const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '0901');
+    const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '');
     const cleanFn = (filename || '').replace(/^[/]+/, '');
     const streamUrl = `${window.location.origin}/api/pulsecast/media/stream/${encodeURI(cleanFn)}${code ? `?code=${encodeURIComponent(code)}` : ''}`;
     currentPulsecastStreamUrl = streamUrl;
@@ -18291,7 +19115,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       playLcarsBeep(1100, 1400);
       container.style.display = 'flex';
 
-      const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '0901');
+      const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '');
       const cleanFn = (currentPulsecastFilename || '').replace(/^[/]+/, '');
 
       updatePulsecastAudioUI(true, '🔍 Analysiere Audio-Codecs via PulseCast Probe...');
@@ -18326,7 +19150,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const videoEl = document.getElementById('pulsecastWebPlayerVideo');
     if (!videoEl || !currentPulsecastFilename) return;
 
-    const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '0901');
+    const code = sessionStorage.getItem('lcars_auth_code') || (typeof currentAuthCode !== 'undefined' ? currentAuthCode : '');
     const cleanFn = (currentPulsecastFilename || '').replace(/^[/]+/, '');
 
     let targetSrc = '';
@@ -18824,8 +19648,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       console.warn('[Subraum] Web Audio API Analyser nicht verfügbar oder bereits verbunden:', err);
     }
 
-    const authCode = sessionStorage.getItem('lcars_auth_code') || '0901';
-    const streamUrl = `/api/voice/stream?code=${encodeURIComponent(authCode)}&format=mp3&t=${Date.now()}`;
+    const streamUrl = `/api/voice/stream?format=mp3&t=${Date.now()}`;
     subspaceLiveAudioEl.src = streamUrl;
     subspaceLiveAudioEl.play().catch(err => {
       console.warn('[Subraum] Audio Playback Startfehler:', err);
@@ -19183,15 +20006,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const modePrefix = cactusExecutionMode === 'live' ? '[🔴 LIVE]' : '[🧪 TEST]';
     appendGeminiLog('user', `${modePrefix} ${promptText}`);
 
-    const authCode = sessionStorage.getItem('lcars_auth_code') || '0901';
-
     try {
       const resp = await fetch('/api/cactus/process', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'X-Command-Code': authCode,
-          'X-Auth-Code': authCode
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           prompt: promptText,
@@ -19425,7 +20244,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (turnInd) turnInd.textContent = 'WHISPER BASE INFERENZ (LOKAL)...';
     updateGeminiConnBadge('STT INFERENZ...', 'var(--c-gold)', '#000');
 
-    const authCode = sessionStorage.getItem('lcars_auth_code') || '0901';
     const formData = new FormData();
     formData.append('audio', audioBlob, 'subraum_speech.webm');
     formData.append('mode', cactusExecutionMode);
@@ -19435,10 +20253,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     try {
       const resp = await fetch('/api/voice/transcribe', {
         method: 'POST',
-        headers: {
-          'X-Command-Code': authCode,
-          'X-Auth-Code': authCode
-        },
         body: formData
       });
 
@@ -20224,6 +21038,790 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }, 30000);
   }
 
+  // -------------------------------------------------------------------------
+  // KNOWLEDGE BASE (WISSEN) CONTROLLER & MARKDOWN RENDERER
+  // -------------------------------------------------------------------------
+  let currentKnowledgeCategory = 'all';
+  let currentKnowledgeSearch = '';
+  let activeKnowledgeArticles = [];
+  let currentKnowledgeArticleId = null;
+  let knowledgeSearchTimeout = null;
+  let knowledgeRefreshInterval = null;
+
+  function renderLcarsMarkdown(md) {
+    if (!md) return '';
+    let text = String(md);
+
+    // Escape raw HTML first
+    text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    // Code blocks: ```lang ... ```
+    text = text.replace(/```([a-zA-Z0-9_-]*)\\n?([\\s\\S]*?)```/g, function(match, lang, code) {
+      return '<pre style="background:#0a0a14; border:1px solid rgba(255,255,255,0.15); border-left:4px solid var(--c-secondary); border-radius:4px; padding:0.8rem; overflow-x:auto; font-family:var(--mono-family); font-size:0.85rem; color:#44dd88; margin:0.8rem 0;"><code>' + code.trim() + '</code></pre>';
+    });
+
+    // Inline code: `...`
+    text = text.replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.08); padding:0.15rem 0.35rem; border-radius:3px; font-family:var(--mono-family); color:#ffcc66; font-size:0.88em;">$1</code>');
+
+    // Headings
+    text = text.replace(/^### (.*$)/gim, '<h4 style="color:var(--c-gold); font-size:1rem; margin:1rem 0 0.4rem 0; font-family:var(--font-family); text-transform:uppercase;">$1</h4>');
+    text = text.replace(/^## (.*$)/gim, '<h3 style="color:var(--c-primary); font-size:1.15rem; margin:1.2rem 0 0.5rem 0; font-family:var(--font-family); text-transform:uppercase; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:0.3rem;">$1</h3>');
+    text = text.replace(/^# (.*$)/gim, '<h2 style="color:var(--c-secondary); font-size:1.35rem; margin:1.2rem 0 0.6rem 0; font-family:var(--font-family); text-transform:uppercase; border-bottom:2px solid var(--c-secondary); padding-bottom:0.4rem;">$1</h2>');
+
+    // Bold & Italic
+    text = text.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong style="color:#fff; font-weight:700;">$1</strong>');
+    text = text.replace(/\\*([^*]+)\\*/g, '<em style="color:#ddd;">$1</em>');
+
+    // Blockquotes
+    text = text.replace(/^> (.*$)/gim, '<blockquote style="border-left:3px solid var(--c-gold); margin:0.6rem 0; padding:0.4rem 0.8rem; background:rgba(255,255,255,0.02); color:#bbb; font-style:italic;">$1</blockquote>');
+
+    // Horizontal Rule
+    text = text.replace(/^---$/gim, '<hr style="border:none; border-top:1px solid rgba(255,255,255,0.15); margin:1rem 0;">');
+
+    // Unordered lists (- or *)
+    text = text.replace(/^\\s*[-*]\\s+(.*$)/gim, '<li style="margin-left:1.4rem; list-style-type:square; color:#ddd; margin-bottom:0.25rem;">$1</li>');
+
+    // Ordered lists (1. )
+    text = text.replace(/^\\s*\\d+\\.\\s+(.*$)/gim, '<li style="margin-left:1.4rem; list-style-type:decimal; color:#ddd; margin-bottom:0.25rem;">$1</li>');
+
+    // Paragraph linebreaks (convert double newlines to p, single to br when not inside lists/blocks)
+    const lines = text.split(String.fromCharCode(10));
+    let inList = false;
+    let html = '';
+    for (let i = 0; i < lines.length; i++) {
+      let l = lines[i];
+      if (l.startsWith('<li')) {
+        if (!inList) { html += '<ul style="margin:0.5rem 0; padding:0;">'; inList = true; }
+        html += l;
+      } else {
+        if (inList) { html += '</ul>'; inList = false; }
+        if (l.trim() === '') {
+          html += '<div style="height:0.6rem;"></div>';
+        } else if (l.startsWith('<h') || l.startsWith('<pre') || l.startsWith('<blockquote') || l.startsWith('<hr')) {
+          html += l;
+        } else {
+          html += '<p style="margin:0 0 0.4rem 0; line-height:1.5; color:#ccc;">' + l + '</p>';
+        }
+      }
+    }
+    if (inList) html += '</ul>';
+
+    return html;
+  }
+
+  function getKnowledgeCategoryBadge(cat) {
+    const c = (cat || 'allgemein').toLowerCase();
+    switch (c) {
+      case 'qa':
+        return { label: 'QA-REPORT', bg: '#0099ff', color: '#fff' };
+      case 'review':
+        return { label: 'CODE-REVIEW', bg: 'var(--c-butterscotch)', color: '#000' };
+      case 'architecture':
+      case 'adr':
+        return { label: 'ADR', bg: '#44dd88', color: '#000' };
+      case 'runbook':
+        return { label: 'RUNBOOK', bg: 'var(--c-gold)', color: '#000' };
+      default:
+        return { label: c.toUpperCase(), bg: 'var(--c-secondary)', color: '#000' };
+    }
+  }
+
+  async function fetchKnowledgeData(force = false) {
+    try {
+      let url = '/api/knowledge?limit=100';
+      if (currentKnowledgeCategory && currentKnowledgeCategory !== 'all') {
+        url += '&category=' + encodeURIComponent(currentKnowledgeCategory);
+      }
+      if (currentKnowledgeSearch) {
+        url += '&q=' + encodeURIComponent(currentKnowledgeSearch);
+      }
+
+      const [listRes, statsRes] = await Promise.all([
+        fetch(url),
+        fetch('/api/knowledge/stats')
+      ]);
+
+      if (statsRes.ok) {
+        const stats = await statsRes.json();
+        renderKnowledgeStats(stats);
+      }
+
+      if (listRes.ok) {
+        const articles = await listRes.json();
+        activeKnowledgeArticles = Array.isArray(articles) ? articles : [];
+        renderKnowledgeArticles(activeKnowledgeArticles);
+      }
+
+      const syncEl = document.getElementById('knowledgeLastSyncText');
+      if (syncEl) {
+        const now = new Date();
+        syncEl.textContent = 'SYNC: ' + now.toLocaleTimeString('de-DE');
+      }
+    } catch (e) {
+      console.warn('Fehler beim Laden der Knowledge-Base Daten:', e);
+    }
+  }
+
+  function renderKnowledgeStats(stats) {
+    const totEl = document.getElementById('knowledgeStatTotal');
+    const qaEl = document.getElementById('knowledgeStatQa');
+    const revEl = document.getElementById('knowledgeStatReview');
+    const adrEl = document.getElementById('knowledgeStatAdr');
+
+    const byCat = stats?.by_category || {};
+    if (totEl) totEl.textContent = stats?.total ?? 0;
+    if (qaEl) qaEl.textContent = byCat['qa'] || 0;
+    if (revEl) revEl.textContent = byCat['review'] || 0;
+    if (adrEl) adrEl.textContent = (byCat['architecture'] || 0) + (byCat['adr'] || 0);
+  }
+
+  function renderKnowledgeArticles(articles) {
+    const listEl = document.getElementById('knowledgeArticleList');
+    if (!listEl) return;
+
+    if (!articles || articles.length === 0) {
+      listEl.innerHTML = '<div style="text-align:center; padding:3rem 1rem; color:#777; font-family:var(--mono-family); font-style:italic;">Keine Wissensartikel gefunden. Erstellen Sie einen Eintrag oder senden Sie Testberichte via API.</div>';
+      return;
+    }
+
+    let html = '';
+    articles.forEach(art => {
+      const badge = getKnowledgeCategoryBadge(art.category);
+      const tags = Array.isArray(art.tags) ? art.tags : [];
+      const tagsHtml = tags.map(t => `<span style="background:rgba(255,255,255,0.06); color:#aaa; padding:0.1rem 0.4rem; border-radius:3px; font-size:0.7rem; font-family:var(--mono-family);">#${escapeHtml(t)}</span>`).join(' ');
+      const dateStr = art.updated_at ? new Date(art.updated_at * 1000).toLocaleString('de-DE') : '--';
+      const summaryText = art.summary || art.snippet || '';
+
+      html += `
+        <div class="devteam-task-card" onclick="openKnowledgeArticleDetail('${escapeHtml(art.id)}')"
+             style="background:#141424; border:1px solid rgba(255,255,255,0.08); border-left:5px solid ${badge.bg}; border-radius:0 8px 8px 0; padding:1rem; cursor:pointer; transition:transform 0.15s, border-color 0.15s; display:flex; flex-direction:column; gap:0.5rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+            <div style="display:flex; align-items:center; gap:0.6rem;">
+              <span style="display:inline-block; font-size:0.72rem; font-weight:700; font-family:var(--mono-family); text-transform:uppercase; padding:0.15rem 0.55rem; border-radius:4px; background:${badge.bg}; color:${badge.color};">
+                ${badge.label}
+              </span>
+              <span style="font-family:var(--mono-family); font-size:0.75rem; color:#888;">ID: ${escapeHtml(art.id)}</span>
+            </div>
+            <div style="font-size:0.75rem; font-family:var(--mono-family); color:#aaa;">
+              <span>👤 ${escapeHtml(art.author || 'system')}</span> &bull; <span>🕒 ${dateStr}</span>
+            </div>
+          </div>
+          <div style="font-weight:700; font-size:1.05rem; color:#fff; font-family:var(--font-family); letter-spacing:0.02em;">
+            ${escapeHtml(art.title)}
+          </div>
+          ${summaryText ? `<div style="font-size:0.85rem; color:#bbb; line-height:1.4; max-height:2.8rem; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(summaryText)}</div>` : ''}
+          ${tagsHtml ? `<div style="display:flex; gap:0.4rem; flex-wrap:wrap; margin-top:0.2rem;">${tagsHtml}</div>` : ''}
+        </div>
+      `;
+    });
+
+    listEl.innerHTML = html;
+  }
+
+  function filterKnowledgeCategory(cat) {
+    currentKnowledgeCategory = cat;
+    document.querySelectorAll('.kb-filter-btn').forEach(btn => {
+      if (btn.getAttribute('data-cat') === cat) {
+        btn.classList.add('active');
+        btn.style.borderColor = 'var(--c-secondary)';
+        btn.style.color = 'var(--c-secondary)';
+        btn.style.fontWeight = '700';
+      } else {
+        btn.classList.remove('active');
+        btn.style.borderColor = 'rgba(255,255,255,0.2)';
+        btn.style.color = '#bbb';
+        btn.style.fontWeight = 'normal';
+      }
+    });
+    fetchKnowledgeData(false);
+  }
+
+  function handleKnowledgeSearchInput() {
+    if (knowledgeSearchTimeout) clearTimeout(knowledgeSearchTimeout);
+    knowledgeSearchTimeout = setTimeout(() => {
+      const inp = document.getElementById('knowledgeSearchInput');
+      currentKnowledgeSearch = (inp?.value || '').trim();
+      fetchKnowledgeData(false);
+    }, 250);
+  }
+
+  function clearKnowledgeSearch() {
+    const inp = document.getElementById('knowledgeSearchInput');
+    if (inp) inp.value = '';
+    currentKnowledgeSearch = '';
+    fetchKnowledgeData(false);
+  }
+
+  async function openKnowledgeArticleDetail(articleId) {
+    playLcarsBeep(880, 1400);
+    currentKnowledgeArticleId = articleId;
+    const modal = document.getElementById('knowledgeDetailModal');
+    const modalTitle = document.getElementById('knowledgeDetailModalTitle');
+    const modalMeta = document.getElementById('knowledgeDetailModalMeta');
+    const modalBody = document.getElementById('knowledgeDetailModalBody');
+    if (!modal || !modalBody) return;
+
+    if (modalTitle) modalTitle.textContent = 'LADE ARTIKEL...';
+    modalBody.innerHTML = '<div style="padding:2rem; text-align:center; color:#aaa; font-family:var(--mono-family);">Lade Inhalt aus ODN Archiv...</div>';
+    modal.style.display = 'flex';
+
+    try {
+      const resp = await fetch('/api/knowledge/' + encodeURIComponent(articleId));
+      if (!resp.ok) {
+        modalBody.innerHTML = '<div style="padding:2rem; color:var(--c-red); font-family:var(--mono-family);">Fehler beim Laden des Artikels (Status ' + resp.status + ')</div>';
+        return;
+      }
+      const art = await resp.json();
+      if (modalTitle) modalTitle.textContent = art.title || 'WISSENSARTIKEL';
+
+      const badge = getKnowledgeCategoryBadge(art.category);
+      const tags = Array.isArray(art.tags) ? art.tags : [];
+      const tagsHtml = tags.map(t => `<span style="background:rgba(255,255,255,0.1); color:#fff; padding:0.15rem 0.45rem; border-radius:3px; font-size:0.75rem; font-family:var(--mono-family);">#${escapeHtml(t)}</span>`).join(' ');
+      const dateStr = art.updated_at ? new Date(art.updated_at * 1000).toLocaleString('de-DE') : '--';
+
+      if (modalMeta) {
+        modalMeta.textContent = `KATEGORIE: ${badge.label} // AUTOR: ${art.author || 'system'} // STAND: ${dateStr}`;
+      }
+
+      let contentHtml = renderLcarsMarkdown(art.content || '*Kein Inhalt hinterlegt.*');
+
+      let metaSection = '';
+      if (art.metadata && Object.keys(art.metadata).length > 0) {
+        metaSection = `
+          <div style="margin-top:1.5rem; padding:0.8rem; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.08); border-radius:4px;">
+            <div style="font-size:0.78rem; font-family:var(--mono-family); color:var(--c-gold); font-weight:700; text-transform:uppercase; margin-bottom:0.4rem;">METADATEN / SYSTEM-ATTRIBUTES</div>
+            <pre style="margin:0; font-family:var(--mono-family); font-size:0.75rem; color:#aaa; overflow-x:auto;">${escapeHtml(JSON.stringify(art.metadata, null, 2))}</pre>
+          </div>
+        `;
+      }
+
+      modalBody.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:1.2rem; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:0.75rem;">
+          <div style="display:flex; align-items:center; gap:0.6rem;">
+            <span style="display:inline-block; font-size:0.75rem; font-weight:700; font-family:var(--mono-family); text-transform:uppercase; padding:0.2rem 0.6rem; border-radius:4px; background:${badge.bg}; color:${badge.color};">
+              ${badge.label}
+            </span>
+            <span style="font-family:var(--mono-family); font-size:0.78rem; color:#888;">ID: ${escapeHtml(art.id)}</span>
+          </div>
+          <div>${tagsHtml}</div>
+        </div>
+        <div style="line-height:1.6; font-size:0.95rem; color:#e0e0e0;">
+          ${contentHtml}
+        </div>
+        ${metaSection}
+      `;
+    } catch (e) {
+      modalBody.innerHTML = '<div style="padding:2rem; color:var(--c-red); font-family:var(--mono-family);">Fehler: ' + escapeHtml(String(e)) + '</div>';
+    }
+  }
+
+  function closeKnowledgeDetailModal() {
+    playLcarsBeep(600, 100);
+    const modal = document.getElementById('knowledgeDetailModal');
+    if (modal) modal.style.display = 'none';
+    currentKnowledgeArticleId = null;
+  }
+
+  function handleKnowledgeDetailModalBackdrop(event) {
+    if (event.target && event.target.id === 'knowledgeDetailModal') {
+      closeKnowledgeDetailModal();
+    }
+  }
+
+  async function deleteCurrentKnowledgeArticle() {
+    if (!currentKnowledgeArticleId) return;
+    if (!confirm('Diesen Wissensartikel wirklich unwiderruflich aus dem Archiv löschen?')) return;
+    try {
+      const resp = await fetch('/api/knowledge/' + encodeURIComponent(currentKnowledgeArticleId), { method: 'DELETE' });
+      if (resp.ok) {
+        closeKnowledgeDetailModal();
+        fetchKnowledgeData(true);
+      } else {
+        const d = await resp.json();
+        alert('Fehler beim Löschen: ' + (d.error || 'Serverfehler'));
+      }
+    } catch (e) {
+      alert('Fehler: ' + e);
+    }
+  }
+
+  function openKnowledgeNewModal() {
+    playLcarsBeep(980, 1400);
+    const form = document.getElementById('knowledgeNewForm');
+    if (form) form.reset();
+    const modal = document.getElementById('knowledgeNewModal');
+    if (modal) modal.style.display = 'flex';
+  }
+
+  function closeKnowledgeNewModal() {
+    playLcarsBeep(600, 100);
+    const modal = document.getElementById('knowledgeNewModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function handleKnowledgeNewModalBackdrop(event) {
+    if (event.target && event.target.id === 'knowledgeNewModal') {
+      closeKnowledgeNewModal();
+    }
+  }
+
+  async function submitKnowledgeNewArticle(event) {
+    event.preventDefault();
+    const title = (document.getElementById('knowledgeFormTitle')?.value || '').trim();
+    const category = document.getElementById('knowledgeFormCategory')?.value || 'allgemein';
+    const tagsStr = document.getElementById('knowledgeFormTags')?.value || '';
+    const summary = (document.getElementById('knowledgeFormSummary')?.value || '').trim();
+    const content = (document.getElementById('knowledgeFormContent')?.value || '').trim();
+
+    if (!title || !content) {
+      alert('Titel und Inhalt sind Pflichtfelder.');
+      return;
+    }
+
+    const tags = tagsStr.split(',').map(s => s.trim()).filter(Boolean);
+    const spinner = document.getElementById('knowledgeSubmitSpinner');
+    const btn = document.getElementById('btnKnowledgeSubmitArticle');
+    if (spinner) spinner.style.display = 'inline-block';
+    if (btn) btn.disabled = true;
+
+    try {
+      const resp = await fetch('/api/knowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: title,
+          category: category,
+          tags: tags,
+          summary: summary,
+          content: content,
+          metadata: { created_via: 'lcars_ui' }
+        })
+      });
+
+      if (resp.ok) {
+        closeKnowledgeNewModal();
+        await fetchKnowledgeData(true);
+      } else {
+        const d = await resp.json();
+        alert('Fehler beim Speichern: ' + (d.error || 'Serverfehler'));
+      }
+    } catch (e) {
+      alert('Fehler: ' + e);
+    } finally {
+      if (spinner) spinner.style.display = 'none';
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function startKnowledgeAutoRefresh() {
+    if (knowledgeRefreshInterval) clearInterval(knowledgeRefreshInterval);
+    knowledgeRefreshInterval = setInterval(() => {
+      if (currentCategory === 'knowledge') {
+        fetchKnowledgeData(false);
+      }
+    }, 30000);
+  }
+
+  // -------------------------------------------------------------------------
+  // RESEARCH RUBRIK CONTROLLER & TAB MANAGER
+  // -------------------------------------------------------------------------
+  let currentResearchStatus = 'all';
+  let currentResearchSearch = '';
+  let activeResearchReports = [];
+  let currentResearchReportId = null;
+  let currentResearchReportData = null;
+  let activeResearchDetailTab = 'summary';
+  let researchSearchTimeout = null;
+  let researchRefreshInterval = null;
+
+  function getResearchStatusBadge(status) {
+    const s = (status || 'completed').toLowerCase();
+    switch (s) {
+      case 'running':
+      case 'laufend':
+        return { label: 'LAUFEND', bg: 'var(--c-butterscotch)', color: '#000' };
+      case 'planned':
+      case 'geplant':
+        return { label: 'GEPLANT', bg: 'var(--c-secondary)', color: '#000' };
+      case 'completed':
+      case 'abgeschlossen':
+      default:
+        return { label: 'ABGESCHLOSSEN', bg: '#44dd88', color: '#000' };
+    }
+  }
+
+  async function fetchResearchData(force = false) {
+    try {
+      let url = '/api/research?limit=100';
+      if (currentResearchStatus && currentResearchStatus !== 'all') {
+        url += '&status=' + encodeURIComponent(currentResearchStatus);
+      }
+      if (currentResearchSearch) {
+        url += '&q=' + encodeURIComponent(currentResearchSearch);
+      }
+
+      const [listRes, statsRes] = await Promise.all([
+        fetch(url),
+        fetch('/api/research/stats')
+      ]);
+
+      if (statsRes.ok) {
+        const stats = await statsRes.json();
+        renderResearchStats(stats);
+      }
+
+      if (listRes.ok) {
+        const reports = await listRes.json();
+        activeResearchReports = Array.isArray(reports) ? reports : [];
+        renderResearchReports(activeResearchReports);
+      }
+
+      const syncEl = document.getElementById('researchLastSyncText');
+      if (syncEl) {
+        const now = new Date();
+        syncEl.textContent = 'SYNC: ' + now.toLocaleTimeString('de-DE');
+      }
+    } catch (e) {
+      console.warn('Fehler beim Laden der Research-Daten:', e);
+    }
+  }
+
+  function renderResearchStats(stats) {
+    const totEl = document.getElementById('researchStatTotal');
+    const compEl = document.getElementById('researchStatCompleted');
+    const runEl = document.getElementById('researchStatRunning');
+    const planEl = document.getElementById('researchStatPlanned');
+
+    const byStatus = stats?.by_status || {};
+    if (totEl) totEl.textContent = stats?.total ?? 0;
+    if (compEl) compEl.textContent = byStatus['completed'] || byStatus['abgeschlossen'] || 0;
+    if (runEl) runEl.textContent = byStatus['running'] || byStatus['laufend'] || 0;
+    if (planEl) planEl.textContent = byStatus['planned'] || byStatus['geplant'] || 0;
+  }
+
+  function renderResearchReports(reports) {
+    const listEl = document.getElementById('researchReportList');
+    if (!listEl) return;
+
+    if (!reports || reports.length === 0) {
+      listEl.innerHTML = '<div style="text-align:center; padding:3rem 1rem; color:#777; font-family:var(--mono-family); font-style:italic;">Keine Recherche-Berichte vorhanden. Starten Sie eine neue Recherche über "+ RECHERCHE STARTEN" oder lassen Sie den Bot Ergebnisse pushen.</div>';
+      return;
+    }
+
+    let html = '';
+    reports.forEach(rep => {
+      const badge = getResearchStatusBadge(rep.status);
+      const tags = Array.isArray(rep.tags) ? rep.tags : [];
+      const tagsHtml = tags.map(t => `<span style="background:rgba(255,255,255,0.06); color:#aaa; padding:0.1rem 0.4rem; border-radius:3px; font-size:0.7rem; font-family:var(--mono-family);">#${escapeHtml(t)}</span>`).join(' ');
+      const dateStr = rep.updated_at ? new Date(rep.updated_at * 1000).toLocaleString('de-DE') : '--';
+      const summaryText = rep.summary || rep.snippet || rep.topic || '';
+      const takeawaysCount = Array.isArray(rep.key_takeaways) ? rep.key_takeaways.length : 0;
+      const sourcesCount = Array.isArray(rep.sources) ? rep.sources.length : 0;
+
+      html += `
+        <div class="devteam-task-card" onclick="openResearchReportDetail('${escapeHtml(rep.id)}')"
+             style="background:#141424; border:1px solid rgba(255,255,255,0.08); border-left:5px solid ${badge.bg}; border-radius:0 8px 8px 0; padding:1rem; cursor:pointer; transition:transform 0.15s, border-color 0.15s; display:flex; flex-direction:column; gap:0.5rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+            <div style="display:flex; align-items:center; gap:0.6rem;">
+              <span style="display:inline-block; font-size:0.72rem; font-weight:700; font-family:var(--mono-family); text-transform:uppercase; padding:0.15rem 0.55rem; border-radius:4px; background:${badge.bg}; color:${badge.color};">
+                ${badge.label}
+              </span>
+              <span style="font-family:var(--mono-family); font-size:0.75rem; color:#888;">ID: ${escapeHtml(rep.id)}</span>
+            </div>
+            <div style="font-size:0.75rem; font-family:var(--mono-family); color:#aaa;">
+              <span>🤖 ${escapeHtml(rep.author || 'researcher')}</span> &bull; <span>🕒 ${dateStr}</span>
+            </div>
+          </div>
+          <div style="font-weight:700; font-size:1.05rem; color:#fff; font-family:var(--font-family); letter-spacing:0.02em;">
+            ${escapeHtml(rep.title)}
+          </div>
+          ${summaryText ? `<div style="font-size:0.85rem; color:#bbb; line-height:1.4; max-height:2.8rem; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(summaryText)}</div>` : ''}
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-top:0.2rem;">
+            ${tagsHtml ? `<div style="display:flex; gap:0.4rem; flex-wrap:wrap;">${tagsHtml}</div>` : '<div></div>'}
+            <div style="display:flex; gap:0.8rem; font-size:0.75rem; font-family:var(--mono-family); color:#88bbcc;">
+              <span>💡 ${takeawaysCount} Takeaways</span>
+              <span>🔗 ${sourcesCount} Quellen</span>
+            </div>
+          </div>
+        </div>
+      `;
+    });
+
+    listEl.innerHTML = html;
+  }
+
+  function filterResearchStatus(status) {
+    currentResearchStatus = status;
+    document.querySelectorAll('.res-filter-btn').forEach(btn => {
+      if (btn.getAttribute('data-status') === status) {
+        btn.classList.add('active');
+        btn.style.borderColor = '#33bbcc';
+        btn.style.color = '#33bbcc';
+        btn.style.fontWeight = '700';
+      } else {
+        btn.classList.remove('active');
+        btn.style.borderColor = 'rgba(255,255,255,0.2)';
+        btn.style.color = '#bbb';
+        btn.style.fontWeight = 'normal';
+      }
+    });
+    fetchResearchData(false);
+  }
+
+  function handleResearchSearchInput() {
+    if (researchSearchTimeout) clearTimeout(researchSearchTimeout);
+    researchSearchTimeout = setTimeout(() => {
+      const inp = document.getElementById('researchSearchInput');
+      currentResearchSearch = (inp?.value || '').trim();
+      fetchResearchData(false);
+    }, 250);
+  }
+
+  function clearResearchSearch() {
+    const inp = document.getElementById('researchSearchInput');
+    if (inp) inp.value = '';
+    currentResearchSearch = '';
+    fetchResearchData(false);
+  }
+
+  async function openResearchReportDetail(reportId) {
+    playLcarsBeep(880, 1400);
+    currentResearchReportId = reportId;
+    activeResearchDetailTab = 'summary';
+    const modal = document.getElementById('researchDetailModal');
+    const modalTitle = document.getElementById('researchDetailModalTitle');
+    const modalMeta = document.getElementById('researchDetailModalMeta');
+    const modalBody = document.getElementById('researchDetailModalBody');
+    if (!modal || !modalBody) return;
+
+    if (modalTitle) modalTitle.textContent = 'LADE BERICHT...';
+    modalBody.innerHTML = '<div style="padding:2rem; text-align:center; color:#aaa; font-family:var(--mono-family);">Lade Recherche-Bericht aus ODN Archiv...</div>';
+    modal.style.display = 'flex';
+
+    try {
+      const resp = await fetch('/api/research/' + encodeURIComponent(reportId));
+      if (!resp.ok) {
+        modalBody.innerHTML = '<div style="padding:2rem; color:var(--c-red); font-family:var(--mono-family);">Fehler beim Laden des Berichts (Status ' + resp.status + ')</div>';
+        return;
+      }
+      currentResearchReportData = await resp.json();
+      if (modalTitle) modalTitle.textContent = currentResearchReportData.title || 'RECHERCHE-BERICHT';
+      if (modalMeta) {
+        const badge = getResearchStatusBadge(currentResearchReportData.status);
+        const dt = currentResearchReportData.updated_at ? new Date(currentResearchReportData.updated_at * 1000).toLocaleString('de-DE') : '--';
+        modalMeta.innerHTML = `<span style="color:${badge.bg}; font-weight:700;">[${badge.label}]</span> &bull; <span>AUTOR: ${escapeHtml(currentResearchReportData.author || 'researcher')}</span> &bull; <span>STAND: ${dt}</span> &bull; <span>ID: ${escapeHtml(currentResearchReportData.id)}</span>`;
+      }
+      switchResearchDetailTab('summary');
+    } catch (e) {
+      modalBody.innerHTML = '<div style="padding:2rem; color:var(--c-red); font-family:var(--mono-family);">Netzwerkfehler: ' + escapeHtml(String(e)) + '</div>';
+    }
+  }
+
+  function switchResearchDetailTab(tabName) {
+    activeResearchDetailTab = tabName;
+    document.querySelectorAll('.res-detail-tab-btn').forEach(btn => {
+      if (btn.getAttribute('data-tab') === tabName) {
+        btn.classList.add('active');
+        btn.style.borderColor = '#33bbcc';
+        btn.style.color = '#33bbcc';
+        btn.style.fontWeight = '700';
+      } else {
+        btn.classList.remove('active');
+        btn.style.borderColor = 'rgba(255,255,255,0.2)';
+        btn.style.color = '#bbb';
+        btn.style.fontWeight = 'normal';
+      }
+    });
+    renderResearchDetailTabContent();
+  }
+
+  function renderResearchDetailTabContent() {
+    const modalBody = document.getElementById('researchDetailModalBody');
+    if (!modalBody || !currentResearchReportData) return;
+    const rep = currentResearchReportData;
+
+    if (activeResearchDetailTab === 'summary') {
+      const takeaways = Array.isArray(rep.key_takeaways) ? rep.key_takeaways : [];
+      let takeawaysHtml = '';
+      if (takeaways.length > 0) {
+        takeawaysHtml = `
+          <div style="margin-top:1.2rem; background:rgba(51, 187, 204, 0.08); border-left:4px solid #33bbcc; border-radius:4px; padding:1rem;">
+            <div style="font-weight:700; color:#33bbcc; font-size:0.95rem; margin-bottom:0.6rem; font-family:var(--font-family); text-transform:uppercase;">
+              💡 KEY TAKEAWAYS & KERNPUNKTE
+            </div>
+            <ul style="margin:0; padding-left:1.2rem; color:#ddd; line-height:1.5;">
+              ${takeaways.map(t => `<li style="margin-bottom:0.4rem;">${escapeHtml(t)}</li>`).join('')}
+            </ul>
+          </div>
+        `;
+      }
+      modalBody.innerHTML = `
+        <div style="line-height:1.6; color:#ccc;">
+          <div style="font-size:1.1rem; color:#fff; font-weight:700; margin-bottom:0.8rem;">
+            ${escapeHtml(rep.title)}
+          </div>
+          <div style="font-size:0.95rem; color:#eee; background:rgba(0,0,0,0.3); padding:1rem; border-radius:6px; border:1px solid rgba(255,255,255,0.08);">
+            ${rep.summary ? escapeHtml(rep.summary).replace(/\\n/g, '<br>') : '<em>Keine Kurzzusammenfassung angegeben.</em>'}
+          </div>
+          ${takeawaysHtml}
+        </div>
+      `;
+    } else if (activeResearchDetailTab === 'details') {
+      modalBody.innerHTML = `
+        <div class="knowledge-content" style="line-height:1.6; color:#ddd; font-size:0.92rem;">
+          ${renderLcarsMarkdown(rep.content || '*Kein ausführlicher Inhalt hinterlegt.*')}
+        </div>
+      `;
+    } else if (activeResearchDetailTab === 'sources') {
+      const sources = Array.isArray(rep.sources) ? rep.sources : [];
+      if (sources.length === 0) {
+        modalBody.innerHTML = '<div style="padding:2rem; text-align:center; color:#777; font-family:var(--mono-family);">Keine Quellen für diesen Bericht hinterlegt.</div>';
+        return;
+      }
+      let html = '<div style="display:flex; flex-direction:column; gap:0.6rem;">';
+      sources.forEach((src, idx) => {
+        const isUrl = typeof src === 'string' && (src.startsWith('http://') || src.startsWith('https://'));
+        html += `
+          <div style="background:#141424; border:1px solid rgba(255,255,255,0.08); border-left:4px solid var(--c-gold); padding:0.8rem 1rem; border-radius:4px; display:flex; align-items:center; gap:0.75rem;">
+            <span style="font-family:var(--mono-family); color:var(--c-gold); font-size:0.85rem; font-weight:700;">[${idx + 1}]</span>
+            <div style="flex:1; min-width:0; font-family:var(--mono-family); font-size:0.88rem; overflow:hidden; text-overflow:ellipsis;">
+              ${isUrl ? `<a href="${escapeHtml(src)}" target="_blank" rel="noopener noreferrer" style="color:#66ccff; text-decoration:none;">${escapeHtml(src)} ↗</a>` : `<span style="color:#eee;">${escapeHtml(String(src))}</span>`}
+            </div>
+          </div>
+        `;
+      });
+      html += '</div>';
+      modalBody.innerHTML = html;
+    } else if (activeResearchDetailTab === 'raw') {
+      const rawObj = {
+        id: rep.id,
+        title: rep.title,
+        status: rep.status,
+        topic: rep.topic,
+        tags: rep.tags,
+        author: rep.author,
+        summary: rep.summary,
+        key_takeaways: rep.key_takeaways,
+        sources: rep.sources,
+        structured_data: rep.structured_data,
+        created_at: rep.created_at,
+        updated_at: rep.updated_at
+      };
+      modalBody.innerHTML = `
+        <div style="margin-bottom:0.75rem; font-size:0.8rem; color:#888; font-family:var(--mono-family);">
+          JSON STRUKTURDATEN // LCARS EXPORT
+        </div>
+        <pre style="background:#0a0a14; border:1px solid rgba(255,255,255,0.12); border-left:4px solid #33bbcc; border-radius:4px; padding:1rem; overflow-x:auto; font-family:var(--mono-family); font-size:0.82rem; color:#44dd88;">${escapeHtml(JSON.stringify(rawObj, null, 2))}</pre>
+      `;
+    }
+  }
+
+  function closeResearchDetailModal() {
+    playLcarsBeep(600, 100);
+    const modal = document.getElementById('researchDetailModal');
+    if (modal) modal.style.display = 'none';
+    currentResearchReportId = null;
+    currentResearchReportData = null;
+  }
+
+  function handleResearchDetailModalBackdrop(event) {
+    if (event.target && event.target.id === 'researchDetailModal') {
+      closeResearchDetailModal();
+    }
+  }
+
+  async function deleteCurrentResearchReport() {
+    if (!currentResearchReportId) return;
+    if (!confirm('Diesen Recherche-Bericht wirklich unwiderruflich aus dem Archiv löschen?')) return;
+    try {
+      const resp = await fetch('/api/research/' + encodeURIComponent(currentResearchReportId), { method: 'DELETE' });
+      if (resp.ok) {
+        closeResearchDetailModal();
+        fetchResearchData(true);
+      } else {
+        const d = await resp.json();
+        alert('Fehler beim Löschen: ' + (d.error || 'Serverfehler'));
+      }
+    } catch (e) {
+      alert('Fehler: ' + e);
+    }
+  }
+
+  function openResearchTriggerModal() {
+    playLcarsBeep(980, 1400);
+    const form = document.getElementById('researchTriggerForm');
+    if (form) form.reset();
+    const modal = document.getElementById('researchTriggerModal');
+    if (modal) modal.style.display = 'flex';
+  }
+
+  function closeResearchTriggerModal() {
+    playLcarsBeep(600, 100);
+    const modal = document.getElementById('researchTriggerModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function handleResearchTriggerModalBackdrop(event) {
+    if (event.target && event.target.id === 'researchTriggerModal') {
+      closeResearchTriggerModal();
+    }
+  }
+
+  async function submitResearchTrigger(event) {
+    event.preventDefault();
+    const title = (document.getElementById('researchFormTitle')?.value || '').trim();
+    const topic = (document.getElementById('researchFormTopic')?.value || '').trim();
+    const tagsStr = document.getElementById('researchFormTags')?.value || '';
+    const notes = (document.getElementById('researchFormNotes')?.value || '').trim();
+
+    if (!title) {
+      alert('Titel der Recherche ist ein Pflichtfeld.');
+      return;
+    }
+
+    const tags = tagsStr.split(',').map(s => s.trim()).filter(Boolean);
+    const spinner = document.getElementById('researchSubmitSpinner');
+    const btn = document.getElementById('btnResearchSubmitTrigger');
+    if (spinner) spinner.style.display = 'inline-block';
+    if (btn) btn.disabled = true;
+
+    try {
+      const resp = await fetch('/api/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: title,
+          topic: topic,
+          tags: tags,
+          notes: notes,
+          action: 'trigger'
+        })
+      });
+
+      if (resp.ok) {
+        closeResearchTriggerModal();
+        await fetchResearchData(true);
+      } else {
+        const d = await resp.json();
+        alert('Fehler beim Starten der Recherche: ' + (d.error || 'Serverfehler'));
+      }
+    } catch (e) {
+      alert('Fehler: ' + e);
+    } finally {
+      if (spinner) spinner.style.display = 'none';
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function startResearchAutoRefresh() {
+    if (researchRefreshInterval) clearInterval(researchRefreshInterval);
+    researchRefreshInterval = setInterval(() => {
+      if (currentCategory === 'research') {
+        fetchResearchData(false);
+      }
+    }, 30000);
+  }
+
   // Initialer Boot-Ablauf
   function bootDashboard() {
     renderStats(initialStats);
@@ -20249,6 +21847,58 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     checkPulsecastStatus();
     checkGeminiLiveStatus();
     startDevteamAutoRefresh();
+    startKnowledgeAutoRefresh();
+    startResearchAutoRefresh();
+    checkLcarsAuthUser();
+  }
+
+  async function checkLcarsAuthUser() {
+    try {
+      const resp = await fetch('/api/auth/me');
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.authenticated && data.user) {
+          currentLcarsUser = data.user;
+          const uname = (data.user.display_name || data.user.username || 'CB').toUpperCase();
+          const el = document.getElementById('topUserDisplay');
+          if (el) el.textContent = uname;
+          const pfx = document.getElementById('topUserPrefix');
+          if (pfx) pfx.textContent = 'ANGEMELDET ALS:';
+          const logoutBtn = document.getElementById('topLogoutBtn');
+          if (logoutBtn) {
+            logoutBtn.style.display = 'inline-block';
+            logoutBtn.style.backgroundColor = 'var(--c-red)';
+            logoutBtn.style.color = '#ffffff';
+            logoutBtn.textContent = '⏻ LOGOUT';
+            logoutBtn.onclick = lcarsLogout;
+          }
+          applyPermissionsVisibility();
+        } else {
+          currentLcarsUser = null;
+          const el = document.getElementById('topUserDisplay');
+          if (el) el.textContent = 'GAST';
+          const pfx = document.getElementById('topUserPrefix');
+          if (pfx) pfx.textContent = 'STATUS:';
+          const logoutBtn = document.getElementById('topLogoutBtn');
+          if (logoutBtn) {
+            logoutBtn.style.display = 'inline-block';
+            logoutBtn.style.backgroundColor = 'var(--c-primary)';
+            logoutBtn.style.color = '#000000';
+            logoutBtn.textContent = '🔓 LOGIN';
+            logoutBtn.onclick = openLcarsLoginOverlay;
+          }
+          applyPermissionsVisibility();
+        }
+      }
+    } catch (_) {}
+  }
+
+  async function lcarsLogout() {
+    playLcarsBeep(600, 300);
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (_) {}
+    window.location.href = '/login';
   }
 
   if (document.readyState === 'loading') {
@@ -20343,11 +21993,125 @@ if USE_FLASK:
         resp.headers["Cache-Control"] = "public, max-age=86400"
         return resp
 
+    def _get_current_user():
+        # 1. Check Session Cookie
+        session_id = request.cookies.get("lcars_session")
+        if session_id:
+            if permissions_service and hasattr(permissions_service, "validate_session"):
+                s = permissions_service.validate_session(session_id)
+                if s:
+                    return s
+            elif user_service and user_service.validate_session(session_id):
+                s = user_service.validate_session(session_id)
+                if s:
+                    return s
+
+        # 2. Authorization Header (Bearer token / API key)
+        auth_hdr = request.headers.get("Authorization", "")
+        if auth_hdr.startswith("Bearer "):
+            token = auth_hdr.split(" ", 1)[1].strip()
+            if permissions_service and hasattr(permissions_service, "validate_session"):
+                s = permissions_service.validate_session(token)
+                if s:
+                    return s
+            elif user_service and user_service.validate_session(token):
+                s = user_service.validate_session(token)
+                if s:
+                    return s
+            if permissions_service and hasattr(permissions_service, "verify_api_key"):
+                u = permissions_service.verify_api_key(token)
+                if u:
+                    return u
+            elif user_service and hasattr(user_service, "verify_api_key"):
+                u = user_service.verify_api_key(token)
+                if u:
+                    return u
+
+        # 3. Custom Headers: X-Session-ID, X-API-Key
+        x_session = request.headers.get("X-Session-ID")
+        if x_session:
+            if permissions_service and hasattr(permissions_service, "validate_session"):
+                s = permissions_service.validate_session(x_session)
+                if s:
+                    return s
+            elif user_service:
+                s = user_service.validate_session(x_session)
+                if s:
+                    return s
+
+        x_key = request.headers.get("X-API-Key")
+        if x_key:
+            if permissions_service and hasattr(permissions_service, "verify_api_key"):
+                u = permissions_service.verify_api_key(x_key)
+                if u:
+                    return u
+            elif user_service and hasattr(user_service, "verify_api_key"):
+                u = user_service.verify_api_key(x_key)
+                if u:
+                    return u
+
+        # 4. Query Parameters
+        q_token = request.args.get("token")
+        if q_token:
+            if permissions_service and hasattr(permissions_service, "validate_session"):
+                s = permissions_service.validate_session(q_token)
+                if s:
+                    return s
+            elif user_service:
+                s = user_service.validate_session(q_token)
+                if s:
+                    return s
+
+        q_key = request.args.get("key") or request.args.get("api_key")
+        if q_key:
+            if permissions_service and hasattr(permissions_service, "verify_api_key"):
+                u = permissions_service.verify_api_key(q_key)
+                if u:
+                    return u
+            elif user_service and hasattr(user_service, "verify_api_key"):
+                u = user_service.verify_api_key(q_key)
+                if u:
+                    return u
+
+        return None
+
+    def _is_dashboard_authenticated():
+        return _get_current_user() is not None
+
+    def _is_section_authorized(section):
+        user = _get_current_user()
+        if user:
+            if permissions_service:
+                if permissions_service.is_super_admin(user):
+                    return True
+                return permissions_service.check_permission(user, section)
+            elif user_service:
+                if user_service.is_super_admin(user):
+                    return True
+                return user_service.check_service_permission(user, section)
+            return False
+
+        return False
+
     @app.route("/")
     def index():
+        if not _is_dashboard_authenticated():
+            if LOGIN_HTML:
+                return Response(LOGIN_HTML, mimetype="text/html")
+            return redirect("/login")
+        user = _get_current_user()
+        allowed_sections = permissions_service.get_allowed_sections(user) if permissions_service else ["*"]
+        user_json = json.dumps({
+            "id": user.get("id") if user else None,
+            "username": user.get("username", "") if user else "",
+            "display_name": user.get("display_name", "") if user else "",
+            "allowed_services": user.get("allowed_services", []) if user else [],
+            "allowed_sections": allowed_sections,
+            "is_super_admin": permissions_service.is_super_admin(user) if permissions_service else True,
+        })
         stats = get_system_stats(include_history=True)
         stats_json = json.dumps(stats)
-        return render_template_string(DASHBOARD_HTML, stats=stats, stats_json=stats_json)
+        return render_template_string(DASHBOARD_HTML, stats=stats, stats_json=stats_json, current_user_json=user_json)
 
     @app.route("/api/stats")
     def api_stats():
@@ -20402,6 +22166,8 @@ if USE_FLASK:
 
     @app.route("/api/services/stop", methods=["POST"])
     def api_stop_service():
+        if not _is_section_authorized("services"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Services nicht berechtigt"}), 403
         data = request.get_json(silent=True) or {}
         pid = data.get("pid")
         port = data.get("port")
@@ -20468,6 +22234,8 @@ if USE_FLASK:
 
     @app.route("/api/hermes/profiles", methods=["GET", "POST"])
     def api_hermes_profiles_route():
+        if not _is_section_authorized("hermes"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Hermes nicht berechtigt"}), 403
         if request.method == "POST":
             data = request.get_json(silent=True) or {}
             name = data.get("name", "")
@@ -20480,6 +22248,8 @@ if USE_FLASK:
 
     @app.route("/api/hermes/chat", methods=["POST"])
     def api_hermes_chat_route():
+        if not _is_section_authorized("hermes"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Hermes nicht berechtigt"}), 403
         data = request.get_json(silent=True) or {}
         profile = data.get("profile", "default")
         message = data.get("message", "")
@@ -20488,6 +22258,8 @@ if USE_FLASK:
 
     @app.route("/api/config/ide-url", methods=["GET", "POST"])
     def api_ide_url_route():
+        if not _is_section_authorized("ide"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion IDE nicht berechtigt"}), 403
         if request.method == "POST":
             data = request.get_json(silent=True) or {}
             url = data.get("url", "").strip()
@@ -20499,18 +22271,24 @@ if USE_FLASK:
 
     @app.route("/api/fantasy")
     def api_fantasy():
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"error": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         if espn_client:
             return jsonify(espn_client.fetch(force=False))
         return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
 
     @app.route("/api/fantasy/refresh", methods=["GET", "POST"])
     def api_fantasy_refresh():
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"error": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         if espn_client:
             return jsonify(espn_client.fetch(force=True))
         return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
 
     @app.route("/api/fantasy/test-flash", methods=["GET", "POST"])
     def api_fantasy_test_flash():
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"error": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         data = request.get_json(silent=True) if request.method == "POST" else {}
         if not data:
             data = {}
@@ -20544,6 +22322,8 @@ if USE_FLASK:
     # =========================================================================
     @app.route("/api/espn/mode", methods=["GET", "POST"])
     def api_espn_mode():
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"status": "error", "message": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         if not espn_client:
             return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
         if request.method == "POST":
@@ -20563,6 +22343,8 @@ if USE_FLASK:
 
     @app.route("/api/espn/settings", methods=["GET", "POST"])
     def api_espn_settings():
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"status": "error", "message": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         if not espn_client:
             return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
         if request.method == "POST":
@@ -20583,6 +22365,8 @@ if USE_FLASK:
 
     @app.route("/api/espn/ai-stats", methods=["GET"])
     def api_espn_ai_stats():
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"status": "error", "message": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         if not espn_client:
             return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
         stats = espn_client.get_ai_stats()
@@ -20590,6 +22374,8 @@ if USE_FLASK:
 
     @app.route("/api/espn/proposals", methods=["GET"])
     def api_espn_proposals():
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"status": "error", "message": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         if not espn_client:
             return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
         only_pending = request.args.get("pending", "false").lower() in ("true", "1")
@@ -20598,6 +22384,8 @@ if USE_FLASK:
 
     @app.route("/api/espn/proposals/<proposal_id>/apply", methods=["POST"])
     def api_espn_proposal_apply(proposal_id):
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"status": "error", "message": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         if not espn_client:
             return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
         res = espn_client.apply_proposal(proposal_id)
@@ -20606,6 +22394,8 @@ if USE_FLASK:
 
     @app.route("/api/espn/proposals/<proposal_id>/dismiss", methods=["POST"])
     def api_espn_proposal_dismiss(proposal_id):
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"status": "error", "message": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         if not espn_client:
             return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
         found = espn_client.dismiss_proposal(proposal_id)
@@ -20615,6 +22405,8 @@ if USE_FLASK:
 
     @app.route("/api/espn/analyze", methods=["POST"])
     def api_espn_analyze():
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"status": "error", "message": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         if not espn_client:
             return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
         res = espn_client.analyze_roster_with_ai(force=True)
@@ -20622,6 +22414,8 @@ if USE_FLASK:
 
     @app.route("/api/espn/history", methods=["GET"])
     def api_espn_history():
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"status": "error", "message": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         if not espn_client:
             return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
         try:
@@ -20634,6 +22428,8 @@ if USE_FLASK:
 
     @app.route("/api/espn/lineup/move", methods=["POST"])
     def api_espn_lineup_move():
+        if not _is_section_authorized("fantasy"):
+            return jsonify({"status": "error", "message": "LCARS Zugriff verweigert: Sektion Fantasy nicht berechtigt"}), 403
         if not espn_client:
             return jsonify({"status": "error", "message": "ESPN Service nicht verfügbar"}), 503
         data = request.get_json(silent=True) or {}
@@ -20649,12 +22445,16 @@ if USE_FLASK:
 
     @app.route("/api/homeassistant/config", methods=["GET"])
     def api_ha_config():
+        if not _is_section_authorized("homeassistant"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Home Assistant nicht berechtigt"}), 403
         if ha_service:
             return jsonify(ha_service.get_config(safe=True))
         return jsonify({"configured": False, "error": "ha_service nicht verfügbar"}), 503
 
     @app.route("/api/config/homeassistant", methods=["POST"])
     def api_config_ha():
+        if not _is_section_authorized("homeassistant"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Home Assistant nicht berechtigt"}), 403
         if not ha_service:
             return jsonify({"success": False, "error": "ha_service nicht verfügbar"}), 503
         data = request.get_json(silent=True) or {}
@@ -20663,6 +22463,8 @@ if USE_FLASK:
 
     @app.route("/api/homeassistant/test", methods=["POST"])
     def api_ha_test():
+        if not _is_section_authorized("homeassistant"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Home Assistant nicht berechtigt"}), 403
         if not ha_service:
             return jsonify({"success": False, "error": "ha_service nicht verfügbar"}), 503
         data = request.get_json(silent=True) or {}
@@ -20676,12 +22478,16 @@ if USE_FLASK:
 
     @app.route("/api/homeassistant/data", methods=["GET"])
     def api_ha_data():
+        if not _is_section_authorized("homeassistant"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Home Assistant nicht berechtigt"}), 403
         if not ha_service:
             return jsonify({"success": False, "error": "ha_service nicht verfügbar"}), 503
         return jsonify(ha_service.get_rooms_and_entities())
 
     @app.route("/api/homeassistant/service", methods=["POST"])
     def api_ha_service():
+        if not _is_section_authorized("homeassistant"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Home Assistant nicht berechtigt"}), 403
         if not ha_service:
             return jsonify({"success": False, "error": "ha_service nicht verfügbar"}), 503
         data = request.get_json(silent=True) or {}
@@ -20695,38 +22501,35 @@ if USE_FLASK:
 
     @app.route("/api/solar/data", methods=["GET"])
     def api_solar_data():
+        if not _is_section_authorized("solar"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Solar nicht berechtigt"}), 403
         if not ha_service:
             return jsonify({"success": False, "error": "ha_service nicht verfügbar"}), 503
         return jsonify(ha_service.get_solar_data())
 
     @app.route("/api/permissions/status", methods=["GET"])
     def api_permissions_status():
-        if permissions_service:
-            return jsonify(permissions_service.get_public_status())
-        return jsonify({"locked_sections": ["cycle"], "has_code": True})
+        user = _get_current_user()
+        allowed = permissions_service.get_allowed_sections(user) if permissions_service else ["*"]
+        return jsonify({"allowed_sections": allowed, "has_code": False})
 
     @app.route("/api/permissions/verify", methods=["POST"])
     def api_permissions_verify():
-        if not permissions_service:
-            return jsonify({"valid": False, "error": "Service nicht verfügbar"}), 503
-        data = request.get_json(silent=True) or {}
-        code = data.get("code", "")
-        valid = permissions_service.verify_code(code)
-        return jsonify({"valid": valid, "locked_sections": permissions_service.locked_sections if valid else []})
+        user = _get_current_user()
+        if user:
+            return jsonify({"valid": True, "user": user})
+        return jsonify({"valid": False, "error": "Nicht authentifiziert"}), 401
 
     @app.route("/api/permissions/config", methods=["POST"])
     def api_permissions_config():
-        if not permissions_service:
-            return jsonify({"success": False, "error": "Service nicht verfügbar"}), 503
-        data = request.get_json(silent=True) or {}
-        current_code = data.get("code") or data.get("current_code") or ""
-        new_code = data.get("new_code")
-        locked_sections = data.get("locked_sections")
-        res = permissions_service.update_permissions(current_code, new_code=new_code, locked_sections=locked_sections)
-        return jsonify(res)
+        if not _is_lcars_user_management_authorized():
+            return jsonify({"success": False, "error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)"}), 403
+        return jsonify({"success": True})
 
     @app.route("/api/cycle/partners", methods=["GET", "POST"])
     def api_cycle_partners():
+        if not _is_section_authorized("cycle"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Zyklus nicht berechtigt"}), 403
         if not cycle_service:
             return jsonify({"success": False, "error": "Service nicht verfügbar"}), 503
         if request.method == "POST":
@@ -20743,6 +22546,8 @@ if USE_FLASK:
 
     @app.route("/api/cycle/partners/<partner_id>", methods=["PUT", "DELETE"])
     def api_cycle_partner_detail(partner_id):
+        if not _is_section_authorized("cycle"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Zyklus nicht berechtigt"}), 403
         if not cycle_service:
             return jsonify({"success": False, "error": "Service nicht verfügbar"}), 503
         if request.method == "DELETE":
@@ -20752,6 +22557,8 @@ if USE_FLASK:
 
     @app.route("/api/cycle/partners/<partner_id>/start-cycle", methods=["POST"])
     def api_cycle_start_new(partner_id):
+        if not _is_section_authorized("cycle"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Zyklus nicht berechtigt"}), 403
         if not cycle_service:
             return jsonify({"success": False, "error": "Service nicht verfügbar"}), 503
         data = request.get_json(silent=True) or {}
@@ -20763,28 +22570,11 @@ if USE_FLASK:
     PULSECAST_BASE_URL = "http://127.0.0.1:3000"
 
     def _pulsecast_authorized():
-        if not permissions_service:
-            return True
-        with permissions_service.lock:
-            if "pulsecast" not in permissions_service.locked_sections:
-                return True
-        code = (
-            request.headers.get("X-Command-Code")
-            or request.headers.get("X-Auth-Code")
-            or request.args.get("code")
-        )
-        if not code and request.is_json:
-            b = request.get_json(silent=True) or {}
-            code = b.get("code")
-        if not code:
-            auth_hdr = request.headers.get("Authorization", "")
-            if auth_hdr.startswith("Bearer "):
-                code = auth_hdr.split(" ", 1)[1].strip()
-        return permissions_service.verify_code(code)
+        return _is_section_authorized("pulsecast")
 
     def _pulsecast_proxy(method, endpoint, params=None, json_data=None, timeout=12):
         if not _pulsecast_authorized():
-            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Command Code Autorisierung erforderlich", "locked": True}), 403
+            return jsonify({"success": False, "error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)", "locked": True}), 403
         url = f"{PULSECAST_BASE_URL}{endpoint}"
         if not requests:
             return jsonify({"success": False, "error": "requests Bibliothek nicht verfügbar"}), 500
@@ -20978,7 +22768,7 @@ if USE_FLASK:
     @app.route("/api/pulsecast/media/stream.m3u", methods=["GET"])
     def api_pulsecast_media_m3u():
         if not _pulsecast_authorized():
-            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Command Code Autorisierung erforderlich", "locked": True}), 403
+            return jsonify({"success": False, "error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)", "locked": True}), 403
 
         filename = request.args.get("filename", "").strip()
         if not filename:
@@ -20992,21 +22782,13 @@ if USE_FLASK:
             base = os.path.basename(clean_filename)
             display_title = os.path.splitext(base)[0]
 
-        code = (
-            request.args.get("code")
-            or request.headers.get("X-Command-Code")
-            or request.headers.get("X-Auth-Code")
-            or ""
-        ).strip()
-
         scheme = request.headers.get("X-Forwarded-Proto") or request.scheme
         host_url = f"{scheme}://{request.host}".rstrip("/")
         if not request.headers.get("X-Forwarded-Proto") and request.host_url:
             host_url = request.host_url.rstrip("/")
 
         safe_encoded_fn = urllib.parse.quote(clean_filename, safe="/")
-        code_query = f"?code={urllib.parse.quote(code)}" if code else ""
-        full_stream_url = f"{host_url}/api/pulsecast/media/stream/{safe_encoded_fn}{code_query}"
+        full_stream_url = f"{host_url}/api/pulsecast/media/stream/{safe_encoded_fn}"
 
         clean_title = re.sub(r'[^\w\-\.]+', '_', display_title).strip('_') or "stream"
         m3u_content = f"#EXTM3U\n#EXTINF:-1 tvg-name=\"{display_title}\",{display_title}\n{full_stream_url}\n"
@@ -21020,7 +22802,7 @@ if USE_FLASK:
     @app.route("/api/pulsecast/media/stream/<path:filename>", methods=["GET", "HEAD"])
     def api_pulsecast_media_stream(filename):
         if not _pulsecast_authorized():
-            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Command Code Autorisierung erforderlich", "locked": True}), 403
+            return jsonify({"success": False, "error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)", "locked": True}), 403
 
         safe_filename = urllib.parse.quote(filename, safe="/")
         target_url = f"{PULSECAST_BASE_URL}/api/media/stream/{safe_filename}"
@@ -21029,7 +22811,7 @@ if USE_FLASK:
     @app.route("/api/pulsecast/media/transcode/<path:filename>", methods=["GET", "HEAD"])
     def api_pulsecast_media_transcode(filename):
         if not _pulsecast_authorized():
-            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Command Code Autorisierung erforderlich", "locked": True}), 403
+            return jsonify({"success": False, "error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)", "locked": True}), 403
 
         safe_filename = urllib.parse.quote(filename, safe="/")
         target_url = f"{PULSECAST_BASE_URL}/api/media/transcode/{safe_filename}"
@@ -21056,74 +22838,82 @@ if USE_FLASK:
         return None
 
     def _is_lcars_user_management_authorized():
-        # 1. Header or Query Code check (e.g. 0901)
-        code = (
-            request.headers.get("X-Command-Code")
-            or request.headers.get("X-Auth-Code")
-            or request.args.get("code")
-        )
-        if not code and request.is_json:
-            b = request.get_json(silent=True) or {}
-            code = b.get("code")
-        if not code:
-            auth_hdr = request.headers.get("Authorization", "")
-            if auth_hdr.startswith("Bearer "):
-                code = auth_hdr.split(" ", 1)[1].strip()
-        if code:
-            if permissions_service and permissions_service.verify_code(code):
+        # Check active session user or super admin: only cb / super admin can manage users
+        user = _get_current_user()
+        if user:
+            if user.get("is_super_admin") or user.get("username", "").lower() in ("cb", "admin"):
                 return True
-            if code == "0901":
+            if permissions_service and permissions_service.is_super_admin(user):
                 return True
-
-        # 2. Session check (User with all / * permissions)
-        session_id = request.cookies.get("lcars_session")
-        if session_id and user_service:
-            s = user_service.validate_session(session_id)
-            if s:
-                svcs = s.get("allowed_services", [])
-                if "*" in svcs or "all" in svcs:
-                    return True
         return False
 
     @app.route("/login", methods=["GET"])
     def lcars_login():
-        session_id = request.cookies.get("lcars_session")
         return_to = request.args.get("return_to", "/")
-        if session_id and user_service:
-            s = user_service.validate_session(session_id)
-            if s:
-                return redirect(return_to)
+        if _is_dashboard_authenticated():
+            return redirect(return_to)
         if LOGIN_HTML:
             return Response(LOGIN_HTML, mimetype="text/html")
         return "LCARS Login nicht verfügbar", 500
 
     @app.route("/api/auth/login", methods=["POST"])
     def api_auth_login():
-        if not user_service:
+        if not user_service and not permissions_service:
             return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
 
         data = request.get_json(silent=True) or {}
         username = (data.get("username") or "").strip()
         password = data.get("password") or ""
+        api_key = (data.get("api_key") or data.get("key") or request.headers.get("X-API-Key") or "").strip()
         remember = bool(data.get("remember", False))
         return_to = data.get("return_to") or "/"
 
         ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.remote_addr or ""
         ua = request.headers.get("User-Agent", "")
 
-        auth_res = user_service.authenticate(username, password, ip=ip, user_agent=ua)
-        if not auth_res.get("success"):
-            return jsonify({"success": False, "error": auth_res.get("error", "Zugriff verweigert")}), 401
+        user_info = None
 
-        user_info = auth_res["user"]
+        if api_key:
+            if permissions_service and hasattr(permissions_service, "verify_api_key"):
+                user_info = permissions_service.verify_api_key(api_key)
+            elif user_service and hasattr(user_service, "verify_api_key"):
+                user_info = user_service.verify_api_key(api_key)
+
+            if not user_info:
+                return jsonify({"success": False, "error": "Ungültiger API-Key"}), 401
+        else:
+            auth_res = None
+            if permissions_service and hasattr(permissions_service, "authenticate"):
+                auth_res = permissions_service.authenticate(username, password, ip=ip, user_agent=ua)
+            elif user_service:
+                auth_res = user_service.authenticate(username, password, ip=ip, user_agent=ua)
+
+            if not auth_res or not auth_res.get("success"):
+                err_msg = auth_res.get("error", "Zugriff verweigert") if auth_res else "Zugriff verweigert"
+                return jsonify({"success": False, "error": err_msg}), 401
+
+            user_info = auth_res["user"]
+
         duration = getattr(user_service, "REMEMBER_SESSION_DURATION", 2592000) if remember else getattr(user_service, "DEFAULT_SESSION_DURATION", 86400)
-        session_id = user_service.create_session(user_info["id"], duration_seconds=duration, ip=ip, user_agent=ua)
+        session_id = None
+        if user_service and user_info.get("username"):
+            db_u = user_service.get_user_by_username(user_info["username"])
+            uid = int(db_u["id"]) if db_u else int(user_info.get("id") or 1)
+            session_id = user_service.create_session(uid, duration_seconds=duration, ip=ip, user_agent=ua)
+        elif user_service and user_info.get("id"):
+            session_id = user_service.create_session(int(user_info["id"]), duration_seconds=duration, ip=ip, user_agent=ua)
+        else:
+            session_id = secrets.token_urlsafe(32)
 
         resp = jsonify({
             "success": True,
+            "session_id": session_id,
+            "token": session_id,
             "redirect_url": return_to,
             "user": user_info
         })
+        resp.headers["X-Session-ID"] = session_id
+        resp.headers["Authorization"] = f"Bearer {session_id}"
 
         cookie_domain = _get_lcars_cookie_domain()
         is_secure = cookie_domain is not None
@@ -21142,10 +22932,19 @@ if USE_FLASK:
     @app.route("/api/auth/logout", methods=["POST"])
     def api_auth_logout():
         session_id = request.cookies.get("lcars_session")
+        if not session_id:
+            auth_hdr = request.headers.get("Authorization", "")
+            if auth_hdr.startswith("Bearer "):
+                session_id = auth_hdr.split(" ", 1)[1].strip()
+            if not session_id:
+                session_id = request.headers.get("X-Session-ID")
+            if not session_id and request.is_json:
+                session_id = (request.get_json(silent=True) or {}).get("session_id")
+
         if session_id and user_service:
             user_service.delete_session(session_id)
 
-        resp = jsonify({"success": True})
+        resp = jsonify({"success": True, "message": "Erfolgreich abgemeldet"})
         resp.delete_cookie("lcars_session", path="/")
         cookie_domain = _get_lcars_cookie_domain()
         if cookie_domain:
@@ -21154,32 +22953,36 @@ if USE_FLASK:
 
     @app.route("/api/auth/me", methods=["GET"])
     def api_auth_me():
-        session_id = request.cookies.get("lcars_session")
-        if not session_id or not user_service:
-            return jsonify({"authenticated": False, "user": None})
-        session_data = user_service.validate_session(session_id)
-        if not session_data:
-            return jsonify({"authenticated": False, "user": None})
-        return jsonify({"authenticated": True, "user": session_data})
+        user = _get_current_user()
+        if user:
+            is_sa = permissions_service.is_super_admin(user) if permissions_service else False
+            allowed_secs = permissions_service.get_allowed_sections(user) if permissions_service else ["*"]
+            user_data = dict(user)
+            user_data["is_super_admin"] = is_sa
+            user_data["allowed_sections"] = allowed_secs
+            return jsonify({"authenticated": True, "user": user_data})
+        return jsonify({"authenticated": False, "user": None})
 
     @app.route("/api/user-services", methods=["GET"])
     def api_user_services():
         if not user_service:
             return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
         services = user_service.list_services() if hasattr(user_service, "list_services") else []
-        return jsonify({"success": True, "services": services})
+        categories = permissions_service.list_categories() if permissions_service else []
+        return jsonify({"success": True, "services": services, "categories": categories})
 
     @app.route("/api/users", methods=["GET", "POST"])
     def api_users():
         if not user_service:
             return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
         if not _is_lcars_user_management_authorized():
-            return jsonify({"success": False, "error": "LCARS Autorisierung erforderlich (Command Code 0901)"}), 403
+            return jsonify({"success": False, "error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)"}), 403
 
         if request.method == "GET":
             users = user_service.list_users()
             services = user_service.list_services() if hasattr(user_service, "list_services") else []
-            return jsonify({"success": True, "users": users, "services": services})
+            categories = permissions_service.list_categories() if permissions_service else []
+            return jsonify({"success": True, "users": users, "services": services, "categories": categories})
 
         # POST: Neuer Benutzer anlegen
         data = request.get_json(silent=True) or {}
@@ -21187,6 +22990,7 @@ if USE_FLASK:
         password = data.get("password") or ""
         display_name = (data.get("display_name") or "").strip()
         allowed_services = data.get("allowed_services", [])
+        api_key = (data.get("api_key") or "").strip() or None
         notes = (data.get("notes") or "").strip()
 
         res = user_service.create_user(
@@ -21194,7 +22998,8 @@ if USE_FLASK:
             password=password,
             display_name=display_name,
             allowed_services=allowed_services,
-            notes=notes
+            notes=notes,
+            api_key=api_key,
         )
         if res.get("success"):
             return jsonify(res), 201
@@ -21205,7 +23010,7 @@ if USE_FLASK:
         if not user_service:
             return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
         if not _is_lcars_user_management_authorized():
-            return jsonify({"success": False, "error": "LCARS Autorisierung erforderlich (Command Code 0901)"}), 403
+            return jsonify({"success": False, "error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)"}), 403
 
         if request.method == "DELETE":
             res = user_service.delete_user(user_id)
@@ -21220,14 +23025,42 @@ if USE_FLASK:
         allowed_services = data.get("allowed_services")
         notes = data.get("notes")
 
-        res = user_service.update_user(
-            user_id=user_id,
+        update_kwargs = dict(
             display_name=display_name,
             is_active=is_active,
             allowed_services=allowed_services,
-            notes=notes
+            notes=notes,
+        )
+        if "api_key" in data:
+            update_kwargs["api_key"] = data.get("api_key")
+
+        res = user_service.update_user(
+            user_id=user_id,
+            **update_kwargs
         )
         if res.get("success"):
+            return jsonify(res)
+        return jsonify(res), 400
+
+    @app.route("/api/users/<int:user_id>/key", methods=["POST", "DELETE"])
+    def api_user_key(user_id):
+        if not user_service:
+            return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
+        if not _is_lcars_user_management_authorized():
+            return jsonify({"success": False, "error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)"}), 403
+
+        if request.method == "DELETE":
+            res = user_service.update_user(user_id=user_id, api_key="")
+            return jsonify(res)
+
+        data = request.get_json(silent=True) or {}
+        new_key = (data.get("api_key") or "").strip()
+        if not new_key:
+            new_key = f"lcars_{secrets.token_hex(16)}"
+
+        res = user_service.update_user(user_id=user_id, api_key=new_key)
+        if res.get("success"):
+            res["api_key"] = new_key
             return jsonify(res)
         return jsonify(res), 400
 
@@ -21236,7 +23069,7 @@ if USE_FLASK:
         if not user_service:
             return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
         if not _is_lcars_user_management_authorized():
-            return jsonify({"success": False, "error": "LCARS Autorisierung erforderlich (Command Code 0901)"}), 403
+            return jsonify({"success": False, "error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)"}), 403
 
         data = request.get_json(silent=True) or {}
         new_password = data.get("new_password") or ""
@@ -21253,7 +23086,7 @@ if USE_FLASK:
         if not user_service:
             return jsonify({"success": False, "error": "User Service nicht verfügbar"}), 503
         if not _is_lcars_user_management_authorized():
-            return jsonify({"success": False, "error": "LCARS Autorisierung erforderlich (Command Code 0901)"}), 403
+            return jsonify({"success": False, "error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)"}), 403
 
         limit = request.args.get("limit", 50)
         try:
@@ -21291,26 +23124,7 @@ if USE_FLASK:
         return res
 
     def _gemini_live_authorized(req_code=None):
-        if not permissions_service:
-            return True
-        with permissions_service.lock:
-            if "gemini_live" not in permissions_service.locked_sections:
-                return True
-        code = req_code
-        if not code:
-            code = (
-                request.args.get("code")
-                or request.headers.get("X-Command-Code")
-                or request.headers.get("X-Auth-Code")
-            )
-        if not code and request.is_json:
-            b = request.get_json(silent=True) or {}
-            code = b.get("code")
-        if not code:
-            auth_hdr = request.headers.get("Authorization", "")
-            if auth_hdr.startswith("Bearer "):
-                code = auth_hdr.split(" ", 1)[1].strip()
-        return permissions_service.verify_code(code)
+        return _is_section_authorized("gemini_live")
 
     CACTUS_AGENT = None
     def get_cactus_agent():
@@ -21651,9 +23465,8 @@ if USE_FLASK:
     @app.route("/api/voice/transcribe", methods=["POST"])
     @app.route("/api/cactus/transcribe", methods=["POST"])
     def api_voice_transcribe():
-        code = request.headers.get("X-Command-Code") or request.headers.get("X-Auth-Code") or request.args.get("code") or request.form.get("code")
-        if not _gemini_live_authorized(code):
-            return jsonify({"error": "LCARS Zugriff verweigert", "locked": True}), 403
+        if not _gemini_live_authorized():
+            return jsonify({"error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)", "locked": True}), 403
 
         audio_bytes = None
         if "audio" in request.files:
@@ -21729,12 +23542,8 @@ if USE_FLASK:
 
     @app.route("/api/cactus/process", methods=["POST"])
     def api_cactus_process():
-        code = request.headers.get("X-Command-Code") or request.headers.get("X-Auth-Code") or request.args.get("code")
-        if not _gemini_live_authorized(code):
-            if request.is_json:
-                b = request.get_json(silent=True) or {}
-                if not _gemini_live_authorized(b.get("code")):
-                    return jsonify({"error": "LCARS Zugriff verweigert", "locked": True}), 403
+        if not _gemini_live_authorized():
+            return jsonify({"error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)", "locked": True}), 403
         data = request.get_json(silent=True) or {}
         prompt = data.get("prompt", "").strip()
         if not prompt:
@@ -21825,9 +23634,8 @@ if USE_FLASK:
     @app.route("/api/voice/stream", methods=["GET"])
     @app.route("/api/audio/live", methods=["GET"])
     def api_voice_stream():
-        code = request.headers.get("X-Command-Code") or request.headers.get("X-Auth-Code") or request.args.get("code")
-        if not _gemini_live_authorized(code):
-            return jsonify({"error": "LCARS Zugriff verweigert", "locked": True}), 403
+        if not _gemini_live_authorized():
+            return jsonify({"error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)", "locked": True}), 403
 
         source = request.args.get("source", "default").strip() or "default"
         fmt = request.args.get("format", "mp3").strip().lower()
@@ -21933,12 +23741,11 @@ if USE_FLASK:
     if USE_SOCK and sock:
         @sock.route("/api/gemini-live/ws")
         def api_gemini_live_ws(ws):
-            code = request.args.get("code", "")
-            if not _gemini_live_authorized(code):
+            if not _gemini_live_authorized():
                 try:
                     ws.send(json.dumps({
                         "type": "error",
-                        "error": "LCARS Zugriff verweigert: Ungültiger Command Code (Autorisierung erforderlich)",
+                        "error": "Zugriff verweigert (Keine Berechtigung für diesen Bereich)",
                         "locked": True
                     }))
                 except Exception:
@@ -22293,6 +24100,55 @@ if USE_FLASK:
                     pass
                 return
 
+    @app.route("/devteam/report", methods=["GET"])
+    def devteam_report_form():
+        if not _is_dashboard_authenticated():
+            return redirect("/login")
+        return render_template("devteam-report.html")
+
+    @app.route("/api/devteam/report", methods=["POST"])
+    def api_devteam_report_issue():
+        if not _is_section_authorized("devteam"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Dev-Team nicht berechtigt"}), 403
+        data = request.get_json(silent=True) or {}
+        title = (data.get("title") or "").strip()
+        if not title:
+            return jsonify({"success": False, "error": "Issue-Titel ist erforderlich"}), 400
+        body = data.get("body") or ""
+        component = (data.get("component") or "general").strip().lower()
+        urgency = (data.get("urgency") or "medium").strip().lower()
+        
+        # Prefix title for bug reports
+        prefixed_title = f"[BUG] {title}"
+        
+        # Construct detailed body with metadata
+        detailed_body = f"""{body}
+
+---
+**Komponente:** {component}
+**Dringlichkeit:** {urgency}
+**Gemeldet von:** {request.headers.get('User-Agent', 'Unknown')}
+**Zeitstempel:** {datetime.datetime.now().isoformat()}
+"""
+        
+        assignee = "coder"
+        
+        hermes_bin = shutil.which("hermes") or "/home/cb/.local/share/mise/installs/pipx-hermes-agent/0.19.0/hermes-agent/bin/hermes"
+        cmd = [hermes_bin, "kanban", "--board", "dev-team", "create", prefixed_title,
+               "--body", detailed_body, "--assignee", assignee, "--priority", "1" if urgency == "high" else "0"]
+        
+        try:
+            env = os.environ.copy()
+            env["HERMES_KANBAN_BOARD"] = "dev-team"
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+            if res.returncode == 0:
+                return jsonify({"success": True, "output": res.stdout.strip()})
+            else:
+                return jsonify({"success": False, "error": res.stderr.strip() or res.stdout.strip() or "Fehler beim Erstellen des Issues"}), 500
+        except Exception as e:
+            print(f"[WARN] api_devteam_report_issue Fehler: {e}", file=sys.stderr)
+            return jsonify({"success": False, "error": str(e)}), 500
+
     # -----------------------------------------------------------------------
     # DEV-TEAM Kanban Board Endpoints
     # -----------------------------------------------------------------------
@@ -22300,6 +24156,8 @@ if USE_FLASK:
 
     @app.route("/api/devteam/tasks", methods=["GET"])
     def api_devteam_tasks():
+        if not _is_section_authorized("devteam"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Dev-Team nicht berechtigt"}), 403
         if not os.path.exists(DEVTEAM_DB_PATH):
             return jsonify([])
         try:
@@ -22334,6 +24192,8 @@ if USE_FLASK:
 
     @app.route("/api/devteam/stats", methods=["GET"])
     def api_devteam_stats():
+        if not _is_section_authorized("devteam"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Dev-Team nicht berechtigt"}), 403
         if not os.path.exists(DEVTEAM_DB_PATH):
             return jsonify({
                 "by_status": {},
@@ -22375,6 +24235,8 @@ if USE_FLASK:
 
     @app.route("/api/devteam/task/<task_id>", methods=["GET"])
     def api_devteam_task_detail(task_id):
+        if not _is_section_authorized("devteam"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Dev-Team nicht berechtigt"}), 403
         if not os.path.exists(DEVTEAM_DB_PATH):
             return jsonify({"error": "Datenbank nicht gefunden"}), 404
         try:
@@ -22408,6 +24270,8 @@ if USE_FLASK:
 
     @app.route("/api/devteam/task", methods=["POST"])
     def api_devteam_create_task():
+        if not _is_section_authorized("devteam"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Dev-Team nicht berechtigt"}), 403
         data = request.get_json(silent=True) or {}
         title = (data.get("title") or "").strip()
         if not title:
@@ -22436,6 +24300,8 @@ if USE_FLASK:
 
     @app.route("/api/devteam/dispatch", methods=["POST"])
     def api_devteam_dispatch():
+        if not _is_section_authorized("devteam"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Dev-Team nicht berechtigt"}), 403
         hermes_bin = shutil.which("hermes") or "/home/cb/.local/share/mise/installs/pipx-hermes-agent/0.19.0/hermes-agent/bin/hermes"
         cmd = [hermes_bin, "kanban", "--board", "dev-team", "dispatch"]
         try:
@@ -22449,6 +24315,232 @@ if USE_FLASK:
         except Exception as e:
             print(f"[WARN] api_devteam_dispatch Fehler: {e}", file=sys.stderr)
             return jsonify({"success": False, "error": str(e)}), 500
+
+    # -----------------------------------------------------------------------
+    # LCARS Knowledge Base Endpoints
+    # -----------------------------------------------------------------------
+    @app.route("/api/knowledge", methods=["GET"])
+    def api_knowledge_list():
+        if not _is_section_authorized("knowledge"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Wissen nicht berechtigt"}), 403
+        if not knowledge_service:
+            return jsonify([])
+        category = request.args.get("category")
+        tag = request.args.get("tag")
+        query = request.args.get("q") or request.args.get("query")
+        limit = int(request.args.get("limit", 100))
+        offset = int(request.args.get("offset", 0))
+        articles = knowledge_service.list_articles(category=category, tag=tag, query=query, limit=limit, offset=offset)
+        return jsonify(articles)
+
+    @app.route("/api/knowledge/stats", methods=["GET"])
+    def api_knowledge_stats():
+        if not _is_section_authorized("knowledge"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Wissen nicht berechtigt"}), 403
+        if not knowledge_service:
+            return jsonify({"total": 0, "by_category": {}})
+        return jsonify(knowledge_service.get_stats())
+
+    @app.route("/api/knowledge/<article_id>", methods=["GET"])
+    def api_knowledge_detail(article_id):
+        if not _is_section_authorized("knowledge"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Wissen nicht berechtigt"}), 403
+        if not knowledge_service:
+            return jsonify({"error": "Knowledge Service nicht verfügbar"}), 503
+        article = knowledge_service.get_article(article_id)
+        if not article:
+            return jsonify({"error": "Wissensartikel nicht gefunden"}), 404
+        return jsonify(article)
+
+    @app.route("/api/knowledge", methods=["POST"])
+    def api_knowledge_create():
+        if not _is_section_authorized("knowledge"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Wissen nicht berechtigt"}), 403
+        if not knowledge_service:
+            return jsonify({"success": False, "error": "Knowledge Service nicht verfügbar"}), 503
+        data = request.get_json(silent=True) or {}
+        title = (data.get("title") or "").strip()
+        if not title:
+            return jsonify({"success": False, "error": "Titel ist erforderlich"}), 400
+        content = (data.get("content") or "").strip()
+        if not content:
+            return jsonify({"success": False, "error": "Inhalt ist erforderlich"}), 400
+        category = (data.get("category") or "allgemein").strip().lower()
+        tags = data.get("tags") or []
+        user = _get_current_user()
+        author = data.get("author") or (user.get("username") if user else "bot") or "bot"
+        summary = (data.get("summary") or "").strip()
+        metadata = data.get("metadata") or {}
+        article_id = data.get("id")
+
+        try:
+            art = knowledge_service.create_article(
+                title=title,
+                content=content,
+                category=category,
+                tags=tags,
+                author=author,
+                summary=summary,
+                metadata=metadata,
+                article_id=article_id,
+            )
+            return jsonify({"success": True, "article": art}), 201
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @app.route("/api/knowledge/<article_id>", methods=["PUT"])
+    def api_knowledge_update(article_id):
+        if not _is_section_authorized("knowledge"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Wissen nicht berechtigt"}), 403
+        if not knowledge_service:
+            return jsonify({"success": False, "error": "Knowledge Service nicht verfügbar"}), 503
+        data = request.get_json(silent=True) or {}
+        art = knowledge_service.update_article(
+            article_id=article_id,
+            title=data.get("title"),
+            content=data.get("content"),
+            category=data.get("category"),
+            tags=data.get("tags"),
+            author=data.get("author"),
+            summary=data.get("summary"),
+            metadata=data.get("metadata"),
+        )
+        if not art:
+            return jsonify({"success": False, "error": "Wissensartikel nicht gefunden"}), 404
+        return jsonify({"success": True, "article": art})
+
+    @app.route("/api/knowledge/<article_id>", methods=["DELETE"])
+    def api_knowledge_delete(article_id):
+        if not _is_section_authorized("knowledge"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Wissen nicht berechtigt"}), 403
+        if not knowledge_service:
+            return jsonify({"success": False, "error": "Knowledge Service nicht verfügbar"}), 503
+        deleted = knowledge_service.delete_article(article_id)
+        if not deleted:
+            return jsonify({"success": False, "error": "Wissensartikel nicht gefunden"}), 404
+        return jsonify({"success": True, "deleted": article_id})
+
+    # -----------------------------------------------------------------------
+    # LCARS Research Endpoints
+    # -----------------------------------------------------------------------
+    @app.route("/api/research", methods=["GET"])
+    def api_research_list():
+        if not _is_section_authorized("research"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Research nicht berechtigt"}), 403
+        if not research_service:
+            return jsonify([])
+        status = request.args.get("status")
+        tag = request.args.get("tag")
+        query = request.args.get("q") or request.args.get("query")
+        limit = int(request.args.get("limit", 100))
+        offset = int(request.args.get("offset", 0))
+        reports = research_service.list_reports(status=status, tag=tag, query=query, limit=limit, offset=offset)
+        return jsonify(reports)
+
+    @app.route("/api/research/stats", methods=["GET"])
+    def api_research_stats():
+        if not _is_section_authorized("research"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Research nicht berechtigt"}), 403
+        if not research_service:
+            return jsonify({"total": 0, "by_status": {}})
+        return jsonify(research_service.get_stats())
+
+    @app.route("/api/research/<report_id>", methods=["GET"])
+    def api_research_detail(report_id):
+        if not _is_section_authorized("research"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Research nicht berechtigt"}), 403
+        if not research_service:
+            return jsonify({"error": "Research Service nicht verfügbar"}), 503
+        report = research_service.get_report(report_id)
+        if not report:
+            return jsonify({"error": "Recherche-Bericht nicht gefunden"}), 404
+        return jsonify(report)
+
+    @app.route("/api/research", methods=["POST"])
+    def api_research_create():
+        if not _is_section_authorized("research"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Research nicht berechtigt"}), 403
+        if not research_service:
+            return jsonify({"success": False, "error": "Research Service nicht verfügbar"}), 503
+        data = request.get_json(silent=True) or {}
+        title = (data.get("title") or "").strip()
+        if not title:
+            return jsonify({"success": False, "error": "Titel ist erforderlich"}), 400
+
+        action = (data.get("action") or "").strip().lower()
+        if action == "trigger":
+            # Start new assignment to researcher bot & kanban
+            topic = (data.get("topic") or "").strip()
+            tags = data.get("tags") or []
+            notes = (data.get("notes") or "").strip()
+            rep = research_service.trigger_research_task(title=title, topic=topic, tags=tags, notes=notes)
+            return jsonify({"success": True, "report": rep}), 201
+
+        # Regular creation or automated report push by researcher bot
+        content = (data.get("content") or "").strip()
+        status = (data.get("status") or "completed").strip().lower()
+        topic = (data.get("topic") or "").strip()
+        tags = data.get("tags") or []
+        user = _get_current_user()
+        author = data.get("author") or (user.get("username") if user else "researcher") or "researcher"
+        summary = (data.get("summary") or "").strip()
+        key_takeaways = data.get("key_takeaways") or []
+        sources = data.get("sources") or []
+        structured_data = data.get("structured_data") or {}
+        report_id = data.get("id")
+
+        try:
+            rep = research_service.create_report(
+                title=title,
+                content=content,
+                status=status,
+                topic=topic,
+                tags=tags,
+                author=author,
+                summary=summary,
+                key_takeaways=key_takeaways,
+                sources=sources,
+                structured_data=structured_data,
+                report_id=report_id,
+            )
+            return jsonify({"success": True, "report": rep}), 201
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @app.route("/api/research/<report_id>", methods=["PUT"])
+    def api_research_update(report_id):
+        if not _is_section_authorized("research"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Research nicht berechtigt"}), 403
+        if not research_service:
+            return jsonify({"success": False, "error": "Research Service nicht verfügbar"}), 503
+        data = request.get_json(silent=True) or {}
+        rep = research_service.update_report(
+            report_id=report_id,
+            title=data.get("title"),
+            content=data.get("content"),
+            status=data.get("status"),
+            topic=data.get("topic"),
+            tags=data.get("tags"),
+            author=data.get("author"),
+            summary=data.get("summary"),
+            key_takeaways=data.get("key_takeaways"),
+            sources=data.get("sources"),
+            structured_data=data.get("structured_data"),
+        )
+        if not rep:
+            return jsonify({"success": False, "error": "Recherche-Bericht nicht gefunden"}), 404
+        return jsonify({"success": True, "report": rep})
+
+    @app.route("/api/research/<report_id>", methods=["DELETE"])
+    def api_research_delete(report_id):
+        if not _is_section_authorized("research"):
+            return jsonify({"success": False, "error": "LCARS Zugriff verweigert: Sektion Research nicht berechtigt"}), 403
+        if not research_service:
+            return jsonify({"success": False, "error": "Research Service nicht verfügbar"}), 503
+        deleted = research_service.delete_report(report_id)
+        if not deleted:
+            return jsonify({"success": False, "error": "Recherche-Bericht nicht gefunden"}), 404
+        return jsonify({"success": True, "deleted": report_id})
 
     def run_server():
         print("[START] Starte System Dashboard Server auf http://0.0.0.0:5000 ...", flush=True)

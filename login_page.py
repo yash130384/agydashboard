@@ -261,14 +261,33 @@ LOGIN_HTML = """<!DOCTYPE html>
       </div>
 
       <form id="lcarsLoginForm" onsubmit="handleLoginSubmit(event)">
-        <div class="form-group">
-          <label class="form-label" for="loginUsername">BENUTZERKENNUNG</label>
-          <input type="text" id="loginUsername" name="username" class="lcars-input" autocomplete="username" autofocus required placeholder="OFFICER ID">
+        <!-- LCARS Mode Selector -->
+        <div style="display:flex; gap:0.5rem; margin-bottom:1.35rem;">
+          <button type="button" id="tabModeCredentials" class="lcars-btn" onclick="setLoginMode('credentials')" style="flex:1; padding:0.5rem; font-size:1rem; background-color:var(--c-primary); color:#000;">
+            <span>OFFICER ID + CODE</span>
+          </button>
+          <button type="button" id="tabModeKey" class="lcars-btn" onclick="setLoginMode('key')" style="flex:1; padding:0.5rem; font-size:1rem; background-color:transparent; color:var(--c-gold); border:1px solid var(--c-gold);">
+            <span>ACCESS-KEY</span>
+          </button>
         </div>
 
-        <div class="form-group">
-          <label class="form-label" for="loginPassword">AUTORISIERUNGSCODE</label>
-          <input type="password" id="loginPassword" name="password" class="lcars-input" autocomplete="current-password" required placeholder="••••••••••••">
+        <div id="groupCredentials">
+          <div class="form-group">
+            <label class="form-label" for="loginUsername">BENUTZERKENNUNG</label>
+            <input type="text" id="loginUsername" name="username" class="lcars-input" autocomplete="username" autofocus placeholder="OFFICER ID">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="loginPassword">AUTORISIERUNGSCODE</label>
+            <input type="password" id="loginPassword" name="password" class="lcars-input" autocomplete="current-password" placeholder="••••••••••••">
+          </div>
+        </div>
+
+        <div id="groupKey" style="display:none;">
+          <div class="form-group">
+            <label class="form-label" for="loginApiKey">SUBRAUM ACCESS-KEY / API-KEY</label>
+            <input type="text" id="loginApiKey" name="api_key" class="lcars-input" autocomplete="off" placeholder="lcars_... / Access-Key">
+          </div>
         </div>
 
         <label class="checkbox-row">
@@ -356,6 +375,47 @@ LOGIN_HTML = """<!DOCTYPE html>
       } catch (e) {}
     }
 
+    let currentAuthMode = 'credentials';
+
+    function setLoginMode(mode) {
+      currentAuthMode = mode;
+      playBeep(700, 900, 0.08);
+      const tabCred = document.getElementById('tabModeCredentials');
+      const tabKey = document.getElementById('tabModeKey');
+      const grpCred = document.getElementById('groupCredentials');
+      const grpKey = document.getElementById('groupKey');
+      const statusBox = document.getElementById('statusBox');
+      if (statusBox) statusBox.style.display = 'none';
+
+      if (mode === 'credentials') {
+        tabCred.style.backgroundColor = 'var(--c-primary)';
+        tabCred.style.color = '#000';
+        tabCred.style.border = 'none';
+
+        tabKey.style.backgroundColor = 'transparent';
+        tabKey.style.color = 'var(--c-gold)';
+        tabKey.style.border = '1px solid var(--c-gold)';
+
+        grpCred.style.display = 'block';
+        grpKey.style.display = 'none';
+        const u = document.getElementById('loginUsername');
+        if (u) u.focus();
+      } else {
+        tabKey.style.backgroundColor = 'var(--c-gold)';
+        tabKey.style.color = '#000';
+        tabKey.style.border = 'none';
+
+        tabCred.style.backgroundColor = 'transparent';
+        tabCred.style.color = 'var(--c-primary)';
+        tabCred.style.border = '1px solid var(--c-primary)';
+
+        grpCred.style.display = 'none';
+        grpKey.style.display = 'block';
+        const k = document.getElementById('loginApiKey');
+        if (k) k.focus();
+      }
+    }
+
     function showStatus(msg, type) {
       const box = document.getElementById('statusBox');
       box.className = 'status-box status-' + type;
@@ -367,7 +427,11 @@ LOGIN_HTML = """<!DOCTYPE html>
       playBeep(440, 220, 0.1);
       document.getElementById('lcarsLoginForm').reset();
       document.getElementById('statusBox').style.display = 'none';
-      document.getElementById('loginUsername').focus();
+      if (currentAuthMode === 'credentials') {
+        document.getElementById('loginUsername').focus();
+      } else {
+        document.getElementById('loginApiKey').focus();
+      }
     }
 
     async function handleLoginSubmit(e) {
@@ -375,14 +439,28 @@ LOGIN_HTML = """<!DOCTYPE html>
       playBeep(900, 1200, 0.06);
 
       const submitBtn = document.getElementById('btnLoginSubmit');
-      const username = document.getElementById('loginUsername').value.trim();
-      const password = document.getElementById('loginPassword').value;
       const remember = document.getElementById('loginRemember').checked;
+      let payload = { remember: remember, return_to: returnTo };
 
-      if (!username || !password) {
-        showStatus('BENUTZERNAME UND PASSWORT ERFORDERLICH', 'error');
-        playError();
-        return;
+      if (currentAuthMode === 'credentials') {
+        const username = document.getElementById('loginUsername').value.trim();
+        const password = document.getElementById('loginPassword').value;
+
+        if (!username || !password) {
+          showStatus('BENUTZERNAME UND PASSWORT ERFORDERLICH', 'error');
+          playError();
+          return;
+        }
+        payload.username = username;
+        payload.password = password;
+      } else {
+        const apiKey = document.getElementById('loginApiKey').value.trim();
+        if (!apiKey) {
+          showStatus('ACCESS-KEY / API-KEY ERFORDERLICH', 'error');
+          playError();
+          return;
+        }
+        payload.api_key = apiKey;
       }
 
       submitBtn.disabled = true;
@@ -392,12 +470,7 @@ LOGIN_HTML = """<!DOCTYPE html>
         const resp = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: username,
-            password: password,
-            remember: remember,
-            return_to: returnTo
-          })
+          body: JSON.stringify(payload)
         });
 
         const data = await resp.json();
@@ -411,8 +484,12 @@ LOGIN_HTML = """<!DOCTYPE html>
         } else {
           playError();
           showStatus(data.error || 'ZUGRIFF VERWEIGERT // UNGÜLTIGE ANMELDEDATEN', 'error');
-          document.getElementById('loginPassword').value = '';
-          document.getElementById('loginPassword').focus();
+          if (currentAuthMode === 'credentials') {
+            document.getElementById('loginPassword').value = '';
+            document.getElementById('loginPassword').focus();
+          } else {
+            document.getElementById('loginApiKey').focus();
+          }
           submitBtn.disabled = false;
         }
       } catch (err) {

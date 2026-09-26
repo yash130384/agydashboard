@@ -125,6 +125,20 @@ class TestFlaskAuthEndpoints(unittest.TestCase):
         cls.client = app.test_client()
         cls.test_username = f"officer_unit_{int(time.time())}"
         cls.test_password = "unit_test_password_47"
+        try:
+            from user_service import user_service
+            if user_service:
+                user_service.ensure_default_admins()
+                cb_user = user_service.get_user_by_username("cb")
+                if cb_user:
+                    user_service.update_password(cb_user["id"], "09010901")
+        except Exception:
+            pass
+
+        login_res = cls.client.post("/api/auth/login", json={"username": "cb", "password": "09010901"})
+        token = login_res.get_json()["token"]
+        cls.admin_headers = {"Authorization": f"Bearer {token}"}
+        cls.client.delete_cookie("lcars_session")
 
     def test_01_login_page_renders(self):
         resp = self.client.get("/login")
@@ -155,7 +169,7 @@ class TestFlaskAuthEndpoints(unittest.TestCase):
         resp = self.client.post(
             "/api/users",
             json=payload,
-            headers={"X-Command-Code": "0901"}
+            headers=self.admin_headers
         )
         self.assertEqual(resp.status_code, 201)
         data = resp.get_json()
@@ -163,7 +177,7 @@ class TestFlaskAuthEndpoints(unittest.TestCase):
         self.__class__.created_user_id = data["user_id"]
 
     def test_05_list_users_with_command_code(self):
-        resp = self.client.get("/api/users", headers={"X-Command-Code": "0901"})
+        resp = self.client.get("/api/users", headers=self.admin_headers)
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertTrue(data.get("success"))
@@ -204,10 +218,11 @@ class TestFlaskAuthEndpoints(unittest.TestCase):
             "allowed_services": ["*"],
             "notes": "Promoted to Captain"
         }
+        self.client.delete_cookie("lcars_session")
         resp = self.client.put(
             f"/api/users/{uid}",
             json=payload,
-            headers={"X-Command-Code": "0901"}
+            headers=self.admin_headers
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
@@ -217,17 +232,19 @@ class TestFlaskAuthEndpoints(unittest.TestCase):
         uid = getattr(self.__class__, "created_user_id", None)
         self.assertIsNotNone(uid)
         payload = {"new_password": "captain_new_secure_pwd_47"}
+        self.client.delete_cookie("lcars_session")
         resp = self.client.post(
             f"/api/users/{uid}/password",
             json=payload,
-            headers={"X-Command-Code": "0901"}
+            headers=self.admin_headers
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertTrue(data.get("success"))
 
     def test_10_audit_log_endpoint(self):
-        resp = self.client.get("/api/users/audit-log?limit=10", headers={"X-Command-Code": "0901"})
+        self.client.delete_cookie("lcars_session")
+        resp = self.client.get("/api/users/audit-log?limit=10", headers=self.admin_headers)
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertTrue(data.get("success"))
@@ -246,10 +263,102 @@ class TestFlaskAuthEndpoints(unittest.TestCase):
     def test_12_delete_user(self):
         uid = getattr(self.__class__, "created_user_id", None)
         self.assertIsNotNone(uid)
-        resp = self.client.delete(f"/api/users/{uid}", headers={"X-Command-Code": "0901"})
+        resp = self.client.delete(f"/api/users/{uid}", headers=self.admin_headers)
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertTrue(data.get("success"))
+
+    def test_13_dashboard_unauthenticated_returns_login_screen(self):
+        self.client.delete_cookie("lcars_session")
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("LCARS ACCESS AUTHORIZATION", html)
+        self.assertNotIn("id=\"topUserBadge\"", html)
+
+    def test_14_dashboard_authenticated_via_cookie(self):
+        login_resp = self.client.post(
+            "/api/auth/login",
+            json={"username": "cb", "password": "09010901"}
+        )
+        self.assertEqual(login_resp.status_code, 200)
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("id=\"topUserBadge\"", html)
+        self.assertIn("SYSTEM & SENSOR VERLAUF", html)
+
+    def test_15_dashboard_authenticated_via_bearer_header(self):
+        login_resp = self.client.post(
+            "/api/auth/login",
+            json={"username": "cb", "password": "09010901"}
+        )
+        sid = login_resp.get_json()["session_id"]
+        self.client.delete_cookie("lcars_session")
+        resp = self.client.get("/", headers={"Authorization": f"Bearer {sid}"})
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("id=\"topUserBadge\"", html)
+
+    def test_16_dashboard_authenticated_via_api_key(self):
+        self.client.delete_cookie("lcars_session")
+        resp = self.client.get("/", headers={"X-API-Key": "lcars_cb_sec_token_0901"})
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("id=\"topUserBadge\"", html)
+
+    def test_17_dashboard_authenticated_via_command_code(self):
+        self.client.delete_cookie("lcars_session")
+        resp = self.client.get("/", headers={"X-Command-Code": "0901"})
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("LCARS ACCESS AUTHORIZATION", html)
+
+    def test_18_dashboard_authenticated_via_query_code(self):
+        self.client.delete_cookie("lcars_session")
+        resp = self.client.get("/?code=0901")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("LCARS ACCESS AUTHORIZATION", html)
+
+    def test_19_login_via_api_key(self):
+        resp = self.client.post("/api/auth/login", json={"api_key": "lcars_cb_sec_token_0901"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data.get("success"))
+        self.assertIn("session_id", data)
+        self.assertIn("token", data)
+        self.assertEqual(resp.headers.get("X-Session-ID"), data["session_id"])
+        self.assertEqual(resp.headers.get("Authorization"), f"Bearer {data['session_id']}")
+
+    def test_20_logout_via_header(self):
+        login_resp = self.client.post("/api/auth/login", json={"username": "cb", "password": "09010901"})
+        sid = login_resp.get_json()["session_id"]
+        self.client.delete_cookie("lcars_session")
+
+        logout_resp = self.client.post("/api/auth/logout", headers={"Authorization": f"Bearer {sid}"})
+        self.assertEqual(logout_resp.status_code, 200)
+        self.assertTrue(logout_resp.get_json().get("success"))
+
+        me_resp = self.client.get("/api/auth/me", headers={"Authorization": f"Bearer {sid}"})
+        self.assertFalse(me_resp.get_json().get("authenticated"))
+
+    def test_21_permissions_service_multi_user_and_super_admin(self):
+        from permissions_service import PermissionsService
+        ps = PermissionsService()
+        self.assertTrue(ps.is_super_admin({"username": "cb"}))
+        self.assertTrue(ps.is_super_admin({"username": "admin"}))
+        self.assertTrue(ps.check_permission({"username": "cb"}, "pulsecast"))
+        self.assertTrue(ps.check_permission({"username": "cb"}, "cycle"))
+        self.assertTrue(ps.check_permission({"username": "cb"}, "devteam"))
+        self.assertTrue(ps.verify_code("0901"))
+
+        # Verify API key resolution
+        key_user = ps.verify_api_key("lcars_cb_sec_token_0901")
+        self.assertIsNotNone(key_user)
+        if key_user:
+            self.assertEqual(key_user["username"], "cb")
+            self.assertIn("*", key_user["allowed_services"])
 
 
 class TestLcarsAuthProxy(unittest.TestCase):

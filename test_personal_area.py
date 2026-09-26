@@ -18,6 +18,7 @@ class TestPersonalArea(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = app.test_client()
+        cls.client.set_cookie("lcars_session", "0901")
 
     def test_permissions_valid_sections(self):
         self.assertIn("personal", VALID_SECTIONS)

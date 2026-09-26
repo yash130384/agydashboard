@@ -16,6 +16,7 @@ class TestAiAccordionAndNavigation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = app.test_client()
+        cls.client.set_cookie("lcars_session", "0901")
 
     def test_left_pillar_ai_accordion_rendered(self):
         resp = self.client.get("/")

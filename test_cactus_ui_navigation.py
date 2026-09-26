@@ -20,7 +20,9 @@ class TestCactusUiNavigation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = app.test_client()
-        cls.auth_headers = {"X-Command-Code": "0901"}
+        login_res = cls.client.post("/api/auth/login", json={"username": "cb", "password": "09010901"})
+        token = login_res.get_json()["token"]
+        cls.auth_headers = {"Authorization": f"Bearer {token}"}
 
     def test_navigate_section_direct(self):
         prompts = [

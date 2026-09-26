@@ -1,0 +1,45 @@
+{
+  "title": "Report / Problem melden",
+  "description": "Melde ein Problem oder einen Fehler im System",
+  "fields": [
+    {
+      "name": "title",
+      "label": "Titel",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "body",
+      "label": "Beschreibung / Fehlerbild",
+      "type": "textarea",
+      "required": true
+    },
+    {
+      "name": "component",
+      "label": "Betroffene Komponente",
+      "type": "select",
+      "options": [
+        {"value": "agydashboard", "label": "agydashboard"},
+        {"value": "9router", "label": "9router"},
+        {"value": "hermes", "label": "hermes"},
+        {"value": "system", "label": "system"}
+      ],
+      "required": true
+    },
+    {
+      "name": "urgency",
+      "label": "Dringlichkeit",
+      "type": "select",
+      "options": [
+        {"value": "low", "label": "Niedrig"},
+        {"value": "medium", "label": "Mittel"},
+        {"value": "high", "label": "Hoch"}
+      ],
+      "required": true
+    }
+  ],
+  "submit": {
+    "url": "/api/devteam/report",
+    "method": "POST"
+  }
+}
