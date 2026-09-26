@@ -8119,8 +8119,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <button class="left-action-btn" onclick="refreshPulsecastData(true)" style="padding:0.35rem 0.85rem; font-size:0.82rem; border-color:var(--c-butterscotch); color:var(--c-butterscotch); font-weight:700;">
                 <span>🔄</span> <span>AKTUALISIEREN</span>
               </button>
+              <button class="left-action-btn" id="pulsecastSyncBtn" onclick="triggerPulsecastSync()" style="padding:0.35rem 0.85rem; font-size:0.82rem; border-color:var(--c-butterscotch); color:var(--c-butterscotch); font-weight:700;" title="Xtream Metadaten-Synchronisierung sofort anstoßen">
+                <span id="pulsecastSyncSpinner" style="display:none; margin-right:4px;">⏳</span><span>📡 SYNC METADATEN</span>
+              </button>
             </div>
           </div>
+          <div id="pulsecastToast" style="display:none; position:fixed; bottom:24px; right:24px; z-index:10000; padding:0.65rem 1.2rem; font-family:var(--font-family); font-weight:700; font-size:0.9rem; letter-spacing:0.05em; border-radius:4px; box-shadow:0 4px 18px rgba(0,0,0,0.7); text-transform:uppercase; transition:opacity 0.25s ease;"></div>
 
           <!-- PERSÖNLICHER BEREICH SUBNAV -->
           <div class="lcars-subnav-bar" style="margin-top:0.6rem;">
@@ -8902,6 +8906,52 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                   <div id="geminiOutMeter" class="lcars-meter-track" style="display: flex; gap: 3px; height: 22px; background: rgba(0,0,0,0.6); padding: 3px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">
                     <!-- 12 Segment Bars -->
                   </div>
+                </div>
+
+                <!-- LCARS LIVE-AUDIO MONITOR // USB-MIKROFON (STREAM) -->
+                <div style="background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 0.85rem; display: flex; flex-direction: column; gap: 0.65rem;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                    <div style="display: flex; align-items: center; gap: 0.45rem;">
+                      <span style="font-size: 1.05rem;">📻</span>
+                      <span style="font-family: var(--font-family); font-weight: 700; font-size: 0.82rem; color: var(--c-butterscotch); letter-spacing: 0.06em; text-transform: uppercase;">
+                        USB-MIKROFON LIVE-AUDIO MONITOR
+                      </span>
+                    </div>
+                    <span id="subspaceAudioStreamStatus" class="lcars-pill-tag" style="background: rgba(255,255,255,0.08); color: #888; font-family: var(--mono-family); font-size: 0.72rem; font-weight: 700;">
+                      STREAM: GETRENNT
+                    </span>
+                  </div>
+
+                  <!-- Audio-Player Steuerung (Play / Mute / Volume) -->
+                  <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                    <button type="button" class="left-action-btn" id="btnSubspaceStreamPlay" onclick="toggleSubspaceLiveAudio()" style="height: 34px; padding: 0 0.9rem; font-size: 0.8rem; font-weight: 800; border-color: #44dd88; color: #44dd88;">
+                      ▶ STREAM STARTEN
+                    </button>
+                    <button type="button" class="left-action-btn" id="btnSubspaceStreamMute" onclick="toggleSubspaceStreamMute()" style="height: 34px; padding: 0 0.75rem; font-size: 0.8rem; border-color: var(--c-secondary); color: var(--c-secondary);">
+                      🔊 TON AN
+                    </button>
+
+                    <!-- Volume Regler -->
+                    <div style="display: flex; align-items: center; gap: 0.4rem; margin-left: auto; background: rgba(255,255,255,0.04); padding: 3px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.08);">
+                      <span style="font-size: 0.7rem; color: #888; font-family: var(--mono-family);">VOL:</span>
+                      <input type="range" id="subspaceStreamVolume" min="0" max="1" step="0.05" value="0.8" oninput="setSubspaceStreamVolume(this.value)" style="width: 75px; accent-color: var(--c-butterscotch); cursor: pointer;">
+                      <span id="subspaceStreamVolText" style="font-size: 0.7rem; color: var(--c-butterscotch); font-family: var(--mono-family); min-width: 30px;">80%</span>
+                    </div>
+                  </div>
+
+                  <!-- Stream Level Meter (AnalyserNode) -->
+                  <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem; font-size: 0.7rem; font-family: var(--mono-family);">
+                      <span style="color: #aaa;">STREAM-SIGNAL (ANALYSER):</span>
+                      <span id="subspaceStreamMeterText" style="color: var(--c-butterscotch); font-weight: 700;">0%</span>
+                    </div>
+                    <div id="subspaceStreamMeter" class="lcars-meter-track" style="display: flex; gap: 2px; height: 14px; background: rgba(0,0,0,0.6); padding: 2px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.1);">
+                      <!-- 12 Segment Bars -->
+                    </div>
+                  </div>
+
+                  <!-- Audio-Element -->
+                  <audio id="subspaceLiveAudio" preload="none" style="display: none;"></audio>
                 </div>
 
                 <!-- PTT Action Button / Live Status Indicator -->
@@ -10095,6 +10145,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     if (catId !== 'pulsecast' && typeof stopPulsecastPolling === 'function') {
       stopPulsecastPolling();
+    }
+    if (catId !== 'gemini_live' && typeof stopSubspaceLiveAudio === 'function') {
+      stopSubspaceLiveAudio();
     }
 
     playLcarsBeep(980, 1400);
@@ -16680,6 +16733,75 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     initPulsecastSection();
   }
 
+  let pulsecastToastTimeout = null;
+
+  function showPulsecastToast(message, isError = false, timeout = 3500) {
+    let toast = document.getElementById('pulsecastToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'pulsecastToast';
+      document.body.appendChild(toast);
+    }
+    toast.style.cssText = 'position:fixed; bottom:24px; right:24px; z-index:10000; padding:0.65rem 1.2rem; font-family:var(--font-family); font-weight:700; font-size:0.9rem; letter-spacing:0.05em; border-radius:4px; box-shadow:0 4px 18px rgba(0,0,0,0.7); text-transform:uppercase; transition:opacity 0.25s ease; background:' + (isError ? 'var(--c-red)' : 'var(--c-butterscotch)') + '; color:#000; display:block; opacity:1;';
+    toast.textContent = message;
+    if (pulsecastToastTimeout) clearTimeout(pulsecastToastTimeout);
+    pulsecastToastTimeout = setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => { toast.style.display = 'none'; }, 250);
+    }, timeout);
+  }
+
+  async function triggerPulsecastSync() {
+    playLcarsBeep(1200, 1600);
+    const btn = document.getElementById('pulsecastSyncBtn');
+    const spinner = document.getElementById('pulsecastSyncSpinner');
+
+    if (btn) {
+      btn.disabled = true;
+      btn.style.opacity = '0.6';
+    }
+    if (spinner) spinner.style.display = 'inline-block';
+
+    showPulsecastToast('Sync gestartet...');
+
+    try {
+      const resp = await fetch('/api/pulsecast/sync', {
+        method: 'POST',
+        headers: getPulsecastHeaders(),
+        body: JSON.stringify({ xtreamSyncIntervalHours: 2 })
+      });
+
+      if (!resp.ok) {
+        let errMsg = 'Sync fehlgeschlagen';
+        try {
+          const errData = await resp.json();
+          if (errData && errData.error) errMsg = errData.error;
+        } catch (_) {}
+        showPulsecastToast(`Fehler: ${errMsg}`, true);
+        return;
+      }
+
+      if (typeof loadPulsecastCatalog === 'function') {
+        await loadPulsecastCatalog(pulsecastCatalogPage || 1);
+      }
+      if (typeof loadPulsecastLocalCounts === 'function') {
+        loadPulsecastLocalCounts();
+      }
+      if (pulsecastActiveSubtab === 'local' && typeof loadPulsecastLocal === 'function') {
+        loadPulsecastLocal(pulsecastLocalPage || 1);
+      }
+    } catch (e) {
+      console.error('PulseCast sync error:', e);
+      showPulsecastToast('Netzwerkfehler beim Sync', true);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+      }
+      if (spinner) spinner.style.display = 'none';
+    }
+  }
+
   function switchPulsecastSubtab(subtab) {
     playLcarsBeep(1100, 1400);
     pulsecastActiveSubtab = subtab;
@@ -17653,10 +17775,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const season = sel ? sel.value : 'all';
     let filtered = pulsecastCurrentSeriesEpisodes;
     if (season !== 'all') {
-      const prefix = season.toUpperCase();
+      const seasonNum = parseInt(String(season).replace(/^S/i, ''), 10);
       filtered = pulsecastCurrentSeriesEpisodes.filter(ep => {
-        const se = (ep.metadata?.seasonEpisode || '').toUpperCase();
-        return se.startsWith(prefix);
+        const se = ep.metadata?.seasonEpisode || '';
+        const m = se.match(/^S(\\d+)/i);
+        return m ? parseInt(m[1], 10) === seasonNum : false;
       });
     }
     renderEpisodesList(filtered);
@@ -17676,8 +17799,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const title = ep.metadata?.title || ep.filename || `Episode ${idx + 1}`;
       const seasonEpisode = ep.metadata?.seasonEpisode || '';
       const duration = ep.metadata?.cast?.duration || '';
-      const rating = ep.metadata?.cast?.rating ? `★ ${ep.metadata.cast.rating.toFixed(1)}` : '';
+      const rawRating = parseFloat(ep.metadata?.cast?.rating);
+      const rating = (!isNaN(rawRating) && rawRating > 0) ? `★ ${rawRating.toFixed(1)}` : '';
       const streamUrl = ep.filename || '';
+      const safeTitle = escapeHtml(title);
+      const safeUrl = escapeHtml(streamUrl);
 
       const isLocalEp = (ep.isXtream === false || (ep.filename && !ep.filename.startsWith('http://') && !ep.filename.startsWith('https://')));
 
@@ -17740,8 +17866,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const season = sel ? sel.value : 'all';
     let episodes = pulsecastCurrentSeriesEpisodes;
     if (season !== 'all') {
-      const prefix = season.toUpperCase();
-      episodes = pulsecastCurrentSeriesEpisodes.filter(ep => (ep.metadata?.seasonEpisode || '').toUpperCase().startsWith(prefix));
+      const seasonNum = parseInt(String(season).replace(/^S/i, ''), 10);
+      episodes = pulsecastCurrentSeriesEpisodes.filter(ep => {
+        const se = ep.metadata?.seasonEpisode || '';
+        const m = se.match(/^S(\\d+)/i);
+        return m ? parseInt(m[1], 10) === seasonNum : false;
+      });
     }
 
     if (!episodes || episodes.length === 0) {
@@ -18321,6 +18451,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let currentUserTranscriptEl = null;
   let pttStopTimer = null;
 
+  // Live Subraum Audio Stream (Host USB-Mikrofon)
+  let subspaceLiveAudioEl = null;
+  let subspaceAudioCtx = null;
+  let subspaceAudioSourceNode = null;
+  let subspaceAudioAnalyser = null;
+  let subspaceAudioAnimFrame = null;
+  let isSubspaceAudioStreaming = false;
+  let isSubspaceAudioMuted = false;
+  let subspaceAudioVolume = 0.8;
+
   // Cactus Execution Mode (Test vs Live)
   let cactusExecutionMode = 'test';
 
@@ -18428,6 +18568,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (gateView) gateView.style.display = 'block';
       if (activeContent) activeContent.style.display = 'none';
       if (geminiLiveChannelOpen) toggleGeminiLiveChannel();
+      if (typeof stopSubspaceLiveAudio === 'function') stopSubspaceLiveAudio();
       return;
     }
 
@@ -18444,6 +18585,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   function initGeminiMeterDOM() {
     const inMeter = document.getElementById('geminiInMeter');
     const outMeter = document.getElementById('geminiOutMeter');
+    const streamMeter = document.getElementById('subspaceStreamMeter');
     if (inMeter && !inMeter.children.length) {
       for (let i = 0; i < 12; i++) {
         const seg = document.createElement('div');
@@ -18460,6 +18602,246 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         outMeter.appendChild(seg);
       }
     }
+    if (streamMeter && !streamMeter.children.length) {
+      for (let i = 0; i < 12; i++) {
+        const seg = document.createElement('div');
+        seg.className = 'lcars-meter-seg';
+        seg.dataset.index = i;
+        streamMeter.appendChild(seg);
+      }
+    }
+  }
+
+  function setSubspaceStreamVolume(val) {
+    subspaceAudioVolume = parseFloat(val);
+    const txt = document.getElementById('subspaceStreamVolText');
+    if (txt) txt.textContent = Math.round(subspaceAudioVolume * 100) + '%';
+    const audioEl = subspaceLiveAudioEl || document.getElementById('subspaceLiveAudio');
+    if (audioEl) {
+      if (isSubspaceAudioMuted && subspaceAudioVolume > 0) {
+        isSubspaceAudioMuted = false;
+        const muteBtn = document.getElementById('btnSubspaceStreamMute');
+        if (muteBtn) {
+          muteBtn.textContent = '🔊 TON AN';
+          muteBtn.style.color = 'var(--c-secondary)';
+          muteBtn.style.borderColor = 'var(--c-secondary)';
+        }
+      }
+      audioEl.volume = isSubspaceAudioMuted ? 0 : subspaceAudioVolume;
+    }
+  }
+
+  function toggleSubspaceStreamMute() {
+    isSubspaceAudioMuted = !isSubspaceAudioMuted;
+    const muteBtn = document.getElementById('btnSubspaceStreamMute');
+    if (muteBtn) {
+      if (isSubspaceAudioMuted) {
+        muteBtn.textContent = '🔇 STUMM';
+        muteBtn.style.color = '#ff5566';
+        muteBtn.style.borderColor = '#ff5566';
+      } else {
+        muteBtn.textContent = '🔊 TON AN';
+        muteBtn.style.color = 'var(--c-secondary)';
+        muteBtn.style.borderColor = 'var(--c-secondary)';
+      }
+    }
+    const audioEl = subspaceLiveAudioEl || document.getElementById('subspaceLiveAudio');
+    if (audioEl) {
+      audioEl.volume = isSubspaceAudioMuted ? 0 : subspaceAudioVolume;
+    }
+  }
+
+  function renderSubspaceStreamMeter(level) {
+    const txt = document.getElementById('subspaceStreamMeterText');
+    if (txt) txt.textContent = level + '%';
+    const meter = document.getElementById('subspaceStreamMeter');
+    if (meter) {
+      const segs = meter.children;
+      const activeCount = Math.round((level / 100) * segs.length);
+      for (let i = 0; i < segs.length; i++) {
+        segs[i].className = 'lcars-meter-seg';
+        if (i < activeCount) {
+          if (i < 8) segs[i].classList.add('active-low');
+          else if (i < 10) segs[i].classList.add('active-mid');
+          else segs[i].classList.add('active-high');
+        }
+      }
+    }
+  }
+
+  function startSubspaceAnalyserLoop() {
+    if (subspaceAudioAnimFrame) cancelAnimationFrame(subspaceAudioAnimFrame);
+    const dataArray = subspaceAudioAnalyser ? new Uint8Array(subspaceAudioAnalyser.frequencyBinCount) : null;
+
+    function tick() {
+      if (!isSubspaceAudioStreaming) {
+        renderSubspaceStreamMeter(0);
+        return;
+      }
+      if (subspaceAudioAnalyser && dataArray) {
+        subspaceAudioAnalyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i];
+        }
+        const avg = sum / dataArray.length;
+        const level = Math.min(100, Math.round((avg / 128) * 100));
+        renderSubspaceStreamMeter(level);
+      }
+      subspaceAudioAnimFrame = requestAnimationFrame(tick);
+    }
+    tick();
+  }
+
+  function stopSubspaceLiveAudio() {
+    if (!isSubspaceAudioStreaming && (!subspaceLiveAudioEl || subspaceLiveAudioEl.paused)) return;
+    const playBtn = document.getElementById('btnSubspaceStreamPlay');
+    const badge = document.getElementById('subspaceAudioStreamStatus');
+    const audioEl = subspaceLiveAudioEl || document.getElementById('subspaceLiveAudio');
+
+    isSubspaceAudioStreaming = false;
+    if (subspaceAudioAnimFrame) {
+      cancelAnimationFrame(subspaceAudioAnimFrame);
+      subspaceAudioAnimFrame = null;
+    }
+
+    if (audioEl) {
+      try {
+        audioEl.pause();
+        audioEl.removeAttribute('src');
+        audioEl.load();
+      } catch (e) {}
+    }
+
+    if (playBtn) {
+      playBtn.textContent = '▶ STREAM STARTEN';
+      playBtn.style.color = '#44dd88';
+      playBtn.style.borderColor = '#44dd88';
+    }
+    if (badge) {
+      badge.textContent = 'STREAM: GETRENNT';
+      badge.style.background = 'rgba(255,255,255,0.08)';
+      badge.style.color = '#888';
+      badge.style.border = 'none';
+    }
+    renderSubspaceStreamMeter(0);
+  }
+
+  function toggleSubspaceLiveAudio() {
+    if (isSubspaceAudioStreaming) {
+      stopSubspaceLiveAudio();
+      return;
+    }
+
+    playLcarsBeep(1200, 1600);
+    const playBtn = document.getElementById('btnSubspaceStreamPlay');
+    const badge = document.getElementById('subspaceAudioStreamStatus');
+
+    if (playBtn) {
+      playBtn.textContent = '⏳ VERBINDE...';
+      playBtn.style.color = 'var(--c-gold)';
+      playBtn.style.borderColor = 'var(--c-gold)';
+    }
+    if (badge) {
+      badge.textContent = 'STREAM: VERBINDE...';
+      badge.style.background = 'rgba(255,184,51,0.15)';
+      badge.style.color = 'var(--c-gold)';
+      badge.style.border = '1px solid var(--c-gold)';
+    }
+
+    if (!subspaceLiveAudioEl) {
+      subspaceLiveAudioEl = document.getElementById('subspaceLiveAudio');
+      if (!subspaceLiveAudioEl) {
+        subspaceLiveAudioEl = document.createElement('audio');
+        subspaceLiveAudioEl.id = 'subspaceLiveAudio';
+        subspaceLiveAudioEl.preload = 'none';
+        subspaceLiveAudioEl.style.display = 'none';
+        document.body.appendChild(subspaceLiveAudioEl);
+      }
+
+      subspaceLiveAudioEl.crossOrigin = 'anonymous';
+
+      subspaceLiveAudioEl.addEventListener('playing', () => {
+        isSubspaceAudioStreaming = true;
+        if (playBtn) {
+          playBtn.textContent = '⏹ STREAM STOPPEN';
+          playBtn.style.color = '#ff5566';
+          playBtn.style.borderColor = '#ff5566';
+        }
+        if (badge) {
+          badge.textContent = 'STREAM: LIVE VERBUNDEN';
+          badge.style.background = 'var(--c-green, #44dd88)';
+          badge.style.color = '#000';
+          badge.style.border = 'none';
+        }
+        startSubspaceAnalyserLoop();
+      });
+
+      subspaceLiveAudioEl.addEventListener('error', (e) => {
+        if (!isSubspaceAudioStreaming || !subspaceLiveAudioEl.getAttribute('src')) return;
+        console.warn('[Subraum] Audio Stream Fehler:', e);
+        isSubspaceAudioStreaming = false;
+        if (subspaceAudioAnimFrame) cancelAnimationFrame(subspaceAudioAnimFrame);
+        if (playBtn) {
+          playBtn.textContent = '▶ STREAM STARTEN';
+          playBtn.style.color = '#44dd88';
+          playBtn.style.borderColor = '#44dd88';
+        }
+        if (badge) {
+          badge.textContent = 'STREAM: FEHLER';
+          badge.style.background = 'rgba(255,85,102,0.2)';
+          badge.style.color = '#ff5566';
+          badge.style.border = '1px solid #ff5566';
+        }
+        renderSubspaceStreamMeter(0);
+      });
+
+      subspaceLiveAudioEl.addEventListener('ended', () => {
+        stopSubspaceLiveAudio();
+      });
+    }
+
+    // Set volume
+    subspaceLiveAudioEl.volume = isSubspaceAudioMuted ? 0 : subspaceAudioVolume;
+
+    // Connect Web Audio API AnalyserNode if supported
+    try {
+      const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtxClass && !subspaceAudioCtx) {
+        subspaceAudioCtx = new AudioCtxClass();
+      }
+      if (subspaceAudioCtx && subspaceAudioCtx.state === 'suspended') {
+        subspaceAudioCtx.resume();
+      }
+      if (subspaceAudioCtx && !subspaceAudioSourceNode && subspaceLiveAudioEl) {
+        subspaceAudioSourceNode = subspaceAudioCtx.createMediaElementSource(subspaceLiveAudioEl);
+        subspaceAudioAnalyser = subspaceAudioCtx.createAnalyser();
+        subspaceAudioAnalyser.fftSize = 64;
+        subspaceAudioSourceNode.connect(subspaceAudioAnalyser);
+        subspaceAudioAnalyser.connect(subspaceAudioCtx.destination);
+      }
+    } catch (err) {
+      console.warn('[Subraum] Web Audio API Analyser nicht verfügbar oder bereits verbunden:', err);
+    }
+
+    const authCode = sessionStorage.getItem('lcars_auth_code') || '0901';
+    const streamUrl = `/api/voice/stream?code=${encodeURIComponent(authCode)}&format=mp3&t=${Date.now()}`;
+    subspaceLiveAudioEl.src = streamUrl;
+    subspaceLiveAudioEl.play().catch(err => {
+      console.warn('[Subraum] Audio Playback Startfehler:', err);
+      if (badge) {
+        badge.textContent = 'STREAM: FEHLER / BLOCKIERT';
+        badge.style.background = 'rgba(255,85,102,0.2)';
+        badge.style.color = '#ff5566';
+        badge.style.border = '1px solid #ff5566';
+      }
+      if (playBtn) {
+        playBtn.textContent = '▶ STREAM STARTEN';
+        playBtn.style.color = '#44dd88';
+        playBtn.style.borderColor = '#44dd88';
+      }
+      isSubspaceAudioStreaming = false;
+    });
   }
 
   function setGeminiLiveMode(mode) {
@@ -20484,6 +20866,18 @@ if USE_FLASK:
         }
         return _pulsecast_proxy("GET", "/api/media-library", params=params, timeout=20)
 
+    @app.route("/api/pulsecast/sync", methods=["POST"])
+    def api_pulsecast_sync():
+        data = request.get_json(silent=True) or {}
+        hours = data.get("xtreamSyncIntervalHours", 2)
+        try:
+            hours = int(hours)
+            if hours <= 0:
+                hours = 2
+        except (ValueError, TypeError):
+            hours = 2
+        return _pulsecast_proxy("POST", "/api/settings", json_data={"xtreamSyncIntervalHours": hours}, timeout=15)
+
     @app.route("/api/pulsecast/series-episodes", methods=["GET"])
     def api_pulsecast_series_episodes():
         series_id = request.args.get("seriesId")
@@ -21427,6 +21821,114 @@ if USE_FLASK:
             ],
             "locked": is_locked
         })
+
+    @app.route("/api/voice/stream", methods=["GET"])
+    @app.route("/api/audio/live", methods=["GET"])
+    def api_voice_stream():
+        code = request.headers.get("X-Command-Code") or request.headers.get("X-Auth-Code") or request.args.get("code")
+        if not _gemini_live_authorized(code):
+            return jsonify({"error": "LCARS Zugriff verweigert", "locked": True}), 403
+
+        source = request.args.get("source", "default").strip() or "default"
+        fmt = request.args.get("format", "mp3").strip().lower()
+
+        # Validate pulse source if specific source requested
+        if source != "default":
+            try:
+                res = subprocess.run(["pactl", "list", "sources", "short"], capture_output=True, text=True, timeout=2)
+                available_sources = [line.split()[1] for line in res.stdout.strip().splitlines() if len(line.split()) >= 2]
+                if source not in available_sources:
+                    return jsonify({"error": f"Audio-Quelle '{source}' nicht gefunden", "success": False}), 503
+            except Exception as e:
+                return jsonify({"error": f"Audio-Subsystem Prüffehler: {e}", "success": False}), 503
+
+        if fmt in ("ogg", "opus"):
+            content_type = "audio/ogg"
+            ffmpeg_fmt = ["-c:a", "libopus", "-b:a", "64k", "-page_duration", "200000", "-f", "ogg"]
+        else:
+            content_type = "audio/mpeg"
+            ffmpeg_fmt = ["-c:a", "libmp3lame", "-b:a", "128k", "-f", "mp3"]
+
+        resp_headers = {
+            "Content-Type": content_type,
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "close"
+        }
+        if request.method == "HEAD":
+            return Response(b"", headers=resp_headers)
+
+        cmd = [
+            "ffmpeg",
+            "-loglevel", "error",
+            "-f", "pulse",
+            "-i", source,
+            "-vn",
+        ] + ffmpeg_fmt + ["-flush_packets", "1", "pipe:1"]
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=10 * 1024
+            )
+        except Exception as e:
+            return jsonify({"error": f"FFmpeg Startfehler: {e}", "success": False}), 500
+
+        # Wait briefly to detect immediate exit
+        time.sleep(0.1)
+        if proc.poll() is not None:
+            err = proc.stderr.read().decode("utf-8", errors="ignore").strip() if proc.stderr else ""
+            if proc.stdout:
+                try: proc.stdout.close()
+                except Exception: pass
+            if proc.stderr:
+                try: proc.stderr.close()
+                except Exception: pass
+            return jsonify({"error": f"Audio-Quelle nicht verfügbar: {err or 'Unbekannter Fehler'}", "success": False}), 503
+
+        class AudioStreamer:
+            def __init__(self, p):
+                self.proc = p
+                self._closed = False
+            def __iter__(self):
+                try:
+                    while True:
+                        if not self.proc.stdout:
+                            break
+                        read_fn = getattr(self.proc.stdout, "read1", self.proc.stdout.read)
+                        chunk = read_fn(4096)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    self.close()
+            def close(self):
+                if self._closed:
+                    return
+                self._closed = True
+                try:
+                    if self.proc.poll() is None:
+                        self.proc.terminate()
+                        try:
+                            self.proc.wait(timeout=1.0)
+                        except subprocess.TimeoutExpired:
+                            self.proc.kill()
+                            self.proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+                if self.proc.stdout:
+                    try: self.proc.stdout.close()
+                    except Exception: pass
+                if self.proc.stderr:
+                    try: self.proc.stderr.close()
+                    except Exception: pass
+            def __del__(self):
+                self.close()
+
+        return Response(stream_with_context(iter(AudioStreamer(proc))), headers=resp_headers)
 
     if USE_SOCK and sock:
         @sock.route("/api/gemini-live/ws")
