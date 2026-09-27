@@ -5106,6 +5106,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="vital-badge-label">HAUS</span>
             <span class="vital-badge-num" id="topHouseVal">{{ stats.solar.house_power_str if stats.solar and stats.solar.house_power_str else '-- W' }}</span>
           </div>
+          <div class="top-vital-badge" id="topVitalAlarm" onclick="toggleMotionAlarm()" style="cursor:pointer;" title="HA Bewegungsmelder Alarm // Klicken zum Ein-/Ausschalten">
+            <span class="vital-badge-icon">🚨</span>
+            <span class="vital-badge-label">ALARM</span>
+            <input type="checkbox" id="alarmToggle" style="display:none;">
+            <span class="vital-badge-num" id="alarmStatus" style="font-weight:700;">OFF</span>
+          </div>
         </div>
       </div>
       <div class="bar-panel">
@@ -5339,6 +5345,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <div class="card-metric-sub">SYSTEM: <span id="sysHardwareModel">{{ stats.system_model }}</span></div>
               <div class="card-metric-sub">LAN IP: <span id="sysLanIp">{{ stats.lan_ip or '192.168.31.210' }}</span></div>
             </div>
+          </div>
+          <div style="margin-top: 1.5rem; display: flex; justify-content: flex-end;">
+            <button class="left-action-btn" onclick="openDevteamReportModal()" style="border-color:var(--c-red); color:var(--c-red); font-size:1rem; padding:0.6rem 1.2rem; font-weight:700;">
+              🚨 PROBLEM MELDEN / BUG REPORT
+            </button>
           </div>
         </section>
 
@@ -9876,6 +9887,63 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
               <div id="modalPinError" style="display:none; color:var(--c-red); font-family:var(--mono-family); font-size:0.85rem; margin-top:0.5rem;">
                 ZUGRIFF VERWEIGERT // CODE UNGÜLTIG
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- DEVTEAM PROBLEM REPORT MODAL -->
+        <div id="devteamReportModal" class="ha-modal-overlay" style="display:none;" onclick="if(event.target===this) closeDevteamReportModal()">
+          <div class="ha-modal-content" onclick="event.stopPropagation()" style="max-width:520px;">
+            <div class="ha-modal-header" style="background:var(--c-red); color:#000;">
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <span style="font-size:1.3rem;">🚨</span>
+                <div style="font-size:1.1rem; font-weight:700; text-transform:uppercase; font-family:var(--font-family);">
+                  PROBLEM MELDEN // BUG REPORT
+                </div>
+              </div>
+              <button class="ha-modal-close-btn" onclick="closeDevteamReportModal()">✕</button>
+            </div>
+            <div class="ha-modal-body" style="padding:1.25rem 1rem;">
+              <div style="display:flex; flex-direction:column; gap:0.75rem;">
+                <div>
+                  <label style="font-family:var(--mono-family); font-size:0.8rem; color:var(--c-gold); display:block; margin-bottom:0.25rem;">TITEL *</label>
+                  <input type="text" id="reportTitle" required placeholder="Kurze Beschreibung des Problems…" class="lcars-input" style="width:100%; box-sizing:border-box;">
+                </div>
+                <div>
+                  <label style="font-family:var(--mono-family); font-size:0.8rem; color:var(--c-gold); display:block; margin-bottom:0.25rem;">BESCHREIBUNG *</label>
+                  <textarea id="reportDescription" required placeholder="Detaillierte Beschreibung, Schritte zur Reproduktion…" class="lcars-input" style="width:100%; box-sizing:border-box; min-height:100px; resize:vertical;"></textarea>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+                  <div>
+                    <label style="font-family:var(--mono-family); font-size:0.8rem; color:var(--c-gold); display:block; margin-bottom:0.25rem;">KOMPONENTE</label>
+                    <select id="reportComponent" class="lcars-input" style="width:100%; box-sizing:border-box;">
+                      <option value="agydashboard">agydashboard</option>
+                      <option value="9router">9router</option>
+                      <option value="hermes">hermes</option>
+                      <option value="system">system</option>
+                      <option value="pulsecast">pulsecast</option>
+                      <option value="general">general</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style="font-family:var(--mono-family); font-size:0.8rem; color:var(--c-gold); display:block; margin-bottom:0.25rem;">DRINGLICHKEIT</label>
+                    <select id="reportUrgency" class="lcars-input" style="width:100%; box-sizing:border-box;">
+                      <option value="low">🟢 LOW</option>
+                      <option value="medium" selected>🟡 MEDIUM</option>
+                      <option value="high">🔴 HIGH</option>
+                    </select>
+                  </div>
+                </div>
+                <div id="reportFeedback" style="display:none; font-family:var(--mono-family); font-size:0.85rem; padding:0.5rem; border-radius:4px;"></div>
+                <div style="display:flex; justify-content:flex-end; gap:0.6rem; margin-top:0.5rem;">
+                  <button type="button" class="left-action-btn" onclick="closeDevteamReportModal()" style="border-color:var(--c-muted); color:var(--c-muted); padding:0.5rem 1rem;">
+                    ABBRECHEN
+                  </button>
+                  <button type="button" class="left-action-btn" onclick="submitDevteamReport()" style="border-color:var(--c-red); color:var(--c-red); font-weight:700; padding:0.5rem 1.2rem;">
+                    🚨 SENDEN
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -21907,6 +21975,134 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     bootDashboard();
   }
 </script>
+
+<audio id="alarmAudio" src="/static/audio/rogue_one_alarm.mp3" preload="auto"></audio>
+<script>
+  // ── MOTION ALARM ─────────────────────────────────────────────────────────
+  var _alarmEnabled = localStorage.getItem('haMotionAlarmEnabled') === 'true';
+
+  function _syncAlarmUI() {
+    var statusEl = document.getElementById('alarmStatus');
+    var badgeEl  = document.getElementById('topVitalAlarm');
+    var toggle   = document.getElementById('alarmToggle');
+    if (statusEl) {
+      statusEl.textContent = _alarmEnabled ? 'ON' : 'OFF';
+      statusEl.style.color = _alarmEnabled ? '#0f0' : '';
+    }
+    if (badgeEl) {
+      badgeEl.style.opacity = _alarmEnabled ? '1' : '0.45';
+      if (_alarmEnabled) {
+        badgeEl.classList.add('vital-alert');
+      } else {
+        badgeEl.classList.remove('vital-alert');
+      }
+    }
+    if (toggle) toggle.checked = _alarmEnabled;
+  }
+
+  function toggleMotionAlarm() {
+    _alarmEnabled = !_alarmEnabled;
+    localStorage.setItem('haMotionAlarmEnabled', _alarmEnabled.toString());
+    _syncAlarmUI();
+    if (typeof playLcarsBeep === 'function') playLcarsBeep(_alarmEnabled ? 880 : 440, _alarmEnabled ? 1760 : 880);
+  }
+
+  // Initialize alarm state on load
+  document.addEventListener('DOMContentLoaded', function() {
+    _syncAlarmUI();
+  });
+
+  // ── DEVTEAM REPORT MODAL ─────────────────────────────────────────────────
+  function openDevteamReportModal() {
+    var modal = document.getElementById('devteamReportModal');
+    if (!modal) return;
+    // Reset fields
+    var t = document.getElementById('reportTitle');
+    var d = document.getElementById('reportDescription');
+    var c = document.getElementById('reportComponent');
+    var u = document.getElementById('reportUrgency');
+    var f = document.getElementById('reportFeedback');
+    if (t) t.value = '';
+    if (d) d.value = '';
+    if (c) c.value = 'agydashboard';
+    if (u) u.value = 'medium';
+    if (f) { f.style.display = 'none'; f.textContent = ''; }
+    modal.style.display = 'flex';
+    if (typeof playLcarsBeep === 'function') playLcarsBeep(880, 1760);
+    setTimeout(function() { var t2 = document.getElementById('reportTitle'); if(t2) t2.focus(); }, 100);
+  }
+
+  function closeDevteamReportModal() {
+    var modal = document.getElementById('devteamReportModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  async function submitDevteamReport() {
+    var title       = (document.getElementById('reportTitle')?.value || '').trim();
+    var description = (document.getElementById('reportDescription')?.value || '').trim();
+    var component   = document.getElementById('reportComponent')?.value || 'general';
+    var urgency     = document.getElementById('reportUrgency')?.value || 'medium';
+    var feedback    = document.getElementById('reportFeedback');
+
+    if (!title) {
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = 'rgba(255,0,0,0.15)';
+        feedback.style.color = 'var(--c-red)';
+        feedback.textContent = '⚠ TITEL ist ein Pflichtfeld.';
+      }
+      document.getElementById('reportTitle')?.focus();
+      return;
+    }
+    if (!description) {
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = 'rgba(255,0,0,0.15)';
+        feedback.style.color = 'var(--c-red)';
+        feedback.textContent = '⚠ BESCHREIBUNG ist ein Pflichtfeld.';
+      }
+      document.getElementById('reportDescription')?.focus();
+      return;
+    }
+
+    if (feedback) {
+      feedback.style.display = 'block';
+      feedback.style.background = 'rgba(255,200,0,0.1)';
+      feedback.style.color = 'var(--c-gold)';
+      feedback.textContent = '⏳ Wird gesendet…';
+    }
+
+    try {
+      var resp = await fetch('/api/devteam/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title, body: description, component: component, urgency: urgency })
+      });
+      if (resp.ok) {
+        if (feedback) {
+          feedback.style.background = 'rgba(0,255,0,0.1)';
+          feedback.style.color = '#0f0';
+          feedback.textContent = '✅ Report erfolgreich gesendet!';
+        }
+        setTimeout(function() { closeDevteamReportModal(); }, 1500);
+      } else {
+        var errText = await resp.text().catch(function() { return resp.status; });
+        if (feedback) {
+          feedback.style.background = 'rgba(255,0,0,0.15)';
+          feedback.style.color = 'var(--c-red)';
+          feedback.textContent = '❌ Fehler: ' + errText;
+        }
+      }
+    } catch (err) {
+      if (feedback) {
+        feedback.style.background = 'rgba(255,0,0,0.15)';
+        feedback.style.color = 'var(--c-red)';
+        feedback.textContent = '❌ Netzwerkfehler: ' + err.message;
+      }
+    }
+  }
+</script>
+<script src="/static/js/motion_alarm.js"></script>
 
 </body>
 </html>
