@@ -9,8 +9,17 @@ class TestSubspaceAudioPlayerUI(unittest.TestCase):
         self.app = app_module.app
         self.client = self.app.test_client()
 
-        with open("app.py", "r", encoding="utf-8") as f:
-            self.content = f.read()
+        template_path = os.path.join(os.path.dirname(__file__), "templates", "index.html")
+        if os.path.exists(template_path):
+            with open(template_path, "r", encoding="utf-8") as f:
+                self.content = f.read()
+            js_path = os.path.join(os.path.dirname(__file__), "static", "js", "lcars_dashboard.js")
+            if os.path.exists(js_path):
+                with open(js_path, "r", encoding="utf-8") as f:
+                    self.content += "\n" + f.read()
+        else:
+            with open("app.py", "r", encoding="utf-8") as f:
+                self.content = f.read()
 
     def test_dom_elements_present_in_subspace_comm(self):
         """Verify that all required LCARS audio player elements are present in the HTML template."""
